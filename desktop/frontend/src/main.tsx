@@ -420,11 +420,14 @@ function App() {
 
   const switchMainTab = useCallback((tab: MainTab) => {
     setActiveTab(tab);
-    if (tab !== 'workspace') {
-      setSelectedTask(null);
-      setSplitTaskIDs([]);
+    setSelectedTask(null);
+    setSplitTaskIDs([]);
+    if (tab === 'workspace') {
+      setProject(null);
+      setTasks([]);
+      setViewMode(preferences.defaultTaskView);
     }
-  }, []);
+  }, [preferences.defaultTaskView]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
