@@ -1806,7 +1806,7 @@ button {
   width: min(560px, 100%);
   max-height: min(620px, calc(100vh - 40px));
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   gap: 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1828,6 +1828,11 @@ button {
   padding: 0 11px;
   font-size: 12px;
   font-weight: 800;
+}
+
+.quick-workspace-choice {
+  justify-self: start;
+  background: var(--surface-muted);
 }
 
 .quick-discord-choice input {

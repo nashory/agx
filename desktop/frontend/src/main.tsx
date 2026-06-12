@@ -2497,18 +2497,18 @@ function TaskView({
     }, `create ${attachToDiscord ? 'Discord ' : ''}${workspaceMode} task "${title.trim()}"${allMighty ? ' all-mighty' : ''}`);
   }
 
-  function createQuickTask(template: QuickTaskTemplate, agentName: string, discordAttached: boolean) {
+  function createQuickTask(template: QuickTaskTemplate, agentName: string, discordAttached: boolean, selectedWorkspaceMode: WorkspaceMode) {
     if (!project.accessGranted || (discordAttached && !discordConnected)) return;
     setQuickTemplate(null);
     onAction(async () => {
       const task = discordAttached
-        ? await api.CreateDiscordTask(project.id, template.title, template.prompt, agentName, allMighty, workspaceMode)
+        ? await api.CreateDiscordTask(project.id, template.title, template.prompt, agentName, allMighty, selectedWorkspaceMode)
         : template.prompt === ''
-        ? await api.CreateTaskNoPrompt(project.id, template.title, agentName, allMighty, workspaceMode)
-        : await api.CreateTask(project.id, template.title, template.prompt, agentName, allMighty, workspaceMode);
+        ? await api.CreateTaskNoPrompt(project.id, template.title, agentName, allMighty, selectedWorkspaceMode)
+        : await api.CreateTask(project.id, template.title, template.prompt, agentName, allMighty, selectedWorkspaceMode);
       setTaskFilter(discordAttached ? 'discord' : 'desktop');
       return { taskID: task.id, expectSession: !discordAttached };
-    }, `quick ${discordAttached ? 'Discord ' : ''}${workspaceMode} task "${template.title}"${agentName ? ` with ${agentName}` : ''}${allMighty ? ' all-mighty' : ''}`);
+    }, `quick ${discordAttached ? 'Discord ' : ''}${selectedWorkspaceMode} task "${template.title}"${agentName ? ` with ${agentName}` : ''}${allMighty ? ' all-mighty' : ''}`);
   }
 
   async function grantAccess() {
@@ -2633,10 +2633,11 @@ function TaskView({
           agents={agents}
           busy={busy}
           allMighty={allMighty}
+          initialWorkspaceMode={workspaceMode}
           initialAttachToDiscord={attachToDiscord}
           discordConnected={discordConnected}
           onCancel={() => setQuickTemplate(null)}
-          onCreate={(agentName, discordAttached) => createQuickTask(quickTemplate, agentName, discordAttached)}
+          onCreate={(agentName, discordAttached, selectedWorkspaceMode) => createQuickTask(quickTemplate, agentName, discordAttached, selectedWorkspaceMode)}
         />
       )}
       {!project.accessGranted && (
@@ -2713,6 +2714,7 @@ function QuickTaskModal({
   agents,
   busy,
   allMighty,
+  initialWorkspaceMode,
   initialAttachToDiscord,
   discordConnected,
   onCancel,
@@ -2722,12 +2724,14 @@ function QuickTaskModal({
   agents: Agent[];
   busy: boolean;
   allMighty: boolean;
+  initialWorkspaceMode: WorkspaceMode;
   initialAttachToDiscord: boolean;
   discordConnected: boolean;
   onCancel: () => void;
-  onCreate: (agentName: string, discordAttached: boolean) => void;
+  onCreate: (agentName: string, discordAttached: boolean, workspaceMode: WorkspaceMode) => void;
 }) {
   const availableAgents = agents.filter((agent) => agent.available);
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(initialWorkspaceMode);
   const [attachToDiscord, setAttachToDiscord] = useState(initialAttachToDiscord);
 
   useEffect(() => {
@@ -2763,19 +2767,31 @@ function QuickTaskModal({
           <MessageCircle size={16} />
           <span>Attach to Discord</span>
         </label>
+        <div className="quick-workspace-choice workspace-mode-toggle" role="group" aria-label="Workspace mode">
+          <button type="button" className={workspaceMode === 'worktree' ? 'active' : ''} onClick={() => setWorkspaceMode('worktree')} title="Run in an isolated task worktree">
+            <GitBranch size={15} />
+            <span>Worktree</span>
+          </button>
+          <button type="button" className={workspaceMode === 'project' ? 'active' : ''} onClick={() => setWorkspaceMode('project')} title="Run in the current project checkout. Only one project-mode task can be active.">
+            <FolderOpen size={15} />
+            <span>Project</span>
+          </button>
+        </div>
         <div className="quick-agent-list">
-          <button className="agent-choice-button" disabled={busy || (attachToDiscord && !discordConnected)} onClick={() => onCreate('', attachToDiscord)}>
+          <button className="agent-choice-button" disabled={busy || (attachToDiscord && !discordConnected)} onClick={() => onCreate('', attachToDiscord, workspaceMode)}>
             <span className="agent-choice-title">
               <strong>Default agent</strong>
+              <WorkspaceBadge mode={workspaceMode} />
               {allMighty && <AllMightyBadge />}
               {attachToDiscord && <DiscordBadge />}
             </span>
             <span className="agent-choice-detail">Use this project's configured default</span>
           </button>
           {availableAgents.map((agent) => (
-            <button className="agent-choice-button" key={agent.name} disabled={busy || (attachToDiscord && !discordConnected)} onClick={() => onCreate(agent.name, attachToDiscord)}>
+            <button className="agent-choice-button" key={agent.name} disabled={busy || (attachToDiscord && !discordConnected)} onClick={() => onCreate(agent.name, attachToDiscord, workspaceMode)}>
               <span className="agent-choice-title">
                 <strong>{agentLabel(agent.name)}</strong>
+                <WorkspaceBadge mode={workspaceMode} />
                 {allMighty && <AllMightyBadge />}
                 {attachToDiscord && <DiscordBadge />}
               </span>
