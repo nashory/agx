@@ -1,0 +1,17 @@
+# Internal docs (local only)
+internal_docs/
+
+# Reference repo (local only)
+agtx/
+
+# Local Go module cache used when ~/go is not writable
+.gopath/
+.agx-test-config/
+
+# Build output
+bin/
+dist/
+desktop/frontend/dist/
+
+# Frontend dependencies
+node_modules/

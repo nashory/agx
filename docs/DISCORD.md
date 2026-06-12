@@ -1,0 +1,66 @@
+# Discord Control
+
+AGX can mirror local projects and selected tasks into Discord so you can start,
+inspect, and control coding agents from a server.
+
+Discord support is optional. AGX still runs locally; Discord is a remote control
+surface for the same runtime used by Desktop and the CLI.
+
+Attachment and screenshot handling is designed separately in
+[Discord Attachment Handling Design](DISCORD_ATTACHMENTS_DESIGN.md).
+
+## Setup
+
+1. Create or choose a Discord server.
+2. Create a Discord bot and copy its token.
+3. Open AGX Desktop.
+4. Go to the Discord tab.
+5. Enter the bot token, server ID, and the single Discord user ID allowed to
+   control AGX.
+6. Click `Invite AGX Coding`.
+7. Run `Soft Sync`.
+
+The bot token is stored in AGX's local config with file permissions restricted
+to your user.
+
+## CLI Setup
+
+You can also configure Discord from the CLI:
+
+```bash
+agx chat connect \
+  --token "$DISCORD_BOT_TOKEN" \
+  --guild "$DISCORD_SERVER_ID" \
+  --allow-user "$YOUR_DISCORD_USER_ID"
+
+agx chat sync
+agx chat status
+```
+
+## Command Reference
+
+| Command | Purpose |
+| --- | --- |
+| `/ps` or `/task list` | List current tasks. |
+| `/project list` | List registered projects. |
+| `/soft-sync` | Sync AGX state and stale AGX channels in the configured AGX server. |
+| `/hard-sync` | Rebuild channels in the configured AGX server from current state. |
+| `/status task:<id>` | Show task status. |
+| `/logs` | Show a task log snapshot. |
+| `/interrupt task:<id>` | Interrupt a running task. |
+| `/stop task:<id>` | Stop a task. |
+| `/restart task:<id>` | Restart a task. |
+| `/delete task:<id>` | Delete a task. |
+| `/kill` | Delete the current task and remove its Discord task channel. |
+| `/heartbeat` | Check task or backend health. |
+
+Only the configured Discord user ID can control AGX.
+
+## Notes
+
+- Use a private Discord server for early testing.
+- Use a dedicated bot token for AGX.
+- Do not commit bot tokens, server IDs tied to private infrastructure, or task
+  transcripts containing sensitive content.
+- If Discord is connected from another AGX runtime, stop the old runtime or
+  bridge process before reconnecting.
