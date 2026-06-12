@@ -180,8 +180,10 @@ For Desktop changes, verify the relevant flow in `./bin/agx-desktop`:
 For Discord changes, test with a private Discord server and bot:
 
 ```bash
+read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
+export DISCORD_BOT_TOKEN
+
 ./bin/agx chat connect \
-  --token "$DISCORD_BOT_TOKEN" \
   --guild "$DISCORD_SERVER_ID" \
   --allow-user "$YOUR_DISCORD_USER_ID"
 

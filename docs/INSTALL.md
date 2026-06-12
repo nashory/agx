@@ -209,7 +209,8 @@ Discord is optional. To use it:
 6. Connect and run a Soft Sync.
 
 The bot token is stored in AGX's local config with file permissions restricted
-to your user.
+to your user. Disconnecting clears the stored bot token while keeping the server
+ID and allowed user ID locally for convenience.
 
 See [DISCORD.md](DISCORD.md) for Discord setup details and command reference.
 

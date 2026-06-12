@@ -220,6 +220,9 @@ func newRuntimeClientChatConnectCmd(client *agxruntime.Client) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := runtimeCLIContext(cmd)
 			defer cancel()
+			if strings.TrimSpace(token) == "" {
+				token = os.Getenv("DISCORD_BOT_TOKEN")
+			}
 			status, err := client.DiscordConnect(ctx, token, guild, firstConfiguredUser(allowedUsers))
 			if err != nil {
 				return err
@@ -228,7 +231,7 @@ func newRuntimeClientChatConnectCmd(client *agxruntime.Client) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&token, "token", "", "Discord bot token")
+	cmd.Flags().StringVar(&token, "token", "", "Discord bot token; prefer DISCORD_BOT_TOKEN to avoid shell history and process args")
 	cmd.Flags().StringVar(&guild, "guild", "", "Discord guild/server ID")
 	cmd.Flags().StringArrayVar(&allowedUsers, "allow-user", nil, "Discord user ID allowed to control AGX; only the first value is used")
 	return cmd

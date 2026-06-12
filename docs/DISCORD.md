@@ -23,19 +23,30 @@ Attachment and screenshot handling is designed separately in
 The bot token is stored in AGX's local config with file permissions restricted
 to your user.
 
+Disconnecting disables Discord and clears the stored bot token. The server ID
+and allowed user ID are kept in the same local config file for convenience, so a
+future reconnect on that machine only needs a fresh token. These values are not
+bundled into AGX release builds.
+
 ## CLI Setup
 
 You can also configure Discord from the CLI:
 
 ```bash
+read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
+export DISCORD_BOT_TOKEN
+
 agx chat connect \
-  --token "$DISCORD_BOT_TOKEN" \
   --guild "$DISCORD_SERVER_ID" \
   --allow-user "$YOUR_DISCORD_USER_ID"
 
 agx chat sync
 agx chat status
 ```
+
+`agx chat connect` reads `DISCORD_BOT_TOKEN` when `--token` is omitted. Prefer
+the environment variable path so the bot token does not appear in shell history
+or process arguments.
 
 ## Command Reference
 

@@ -11,14 +11,11 @@ import (
 )
 
 func TestCLIHelpers(t *testing.T) {
-	if got := maskedToken(""); got != "(not set)" {
-		t.Fatalf("maskedToken(empty) = %q", got)
+	if got := redactedSetting(""); got != "(not set)" {
+		t.Fatalf("redactedSetting(empty) = %q", got)
 	}
-	if got := maskedToken("abc"); got != "abc..." {
-		t.Fatalf("maskedToken(short) = %q", got)
-	}
-	if got := maskedToken("abcd-secret"); got != "abcd..." {
-		t.Fatalf("maskedToken(long) = %q", got)
+	if got := redactedSetting("secret"); got != "(set)" {
+		t.Fatalf("redactedSetting(value) = %q", got)
 	}
 	if got := emptyPlaceholder(""); got != "(not set)" {
 		t.Fatalf("emptyPlaceholder(empty) = %q", got)

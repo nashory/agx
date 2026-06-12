@@ -940,6 +940,7 @@ func (s *Service) handleDiscordDisconnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 	cfg.Discord.Enabled = false
+	cfg.Discord.BotToken = ""
 	if err := config.SaveDiscord(cfg.Discord); err != nil {
 		writeError(w, err)
 		return
@@ -992,7 +993,9 @@ func (s *Service) handleDiscordInviteURL(w http.ResponseWriter, r *http.Request)
 	token := strings.TrimSpace(req.Token)
 	if token == "" {
 		cfg, _ := config.LoadGlobal()
-		token = cfg.Discord.BotToken
+		if cfg.Discord.Enabled {
+			token = cfg.Discord.BotToken
+		}
 	}
 	clientID, err := agxdiscord.BotApplicationID(token)
 	if err != nil {
@@ -1009,7 +1012,7 @@ func (s *Service) handleDiscordInviteURL(w http.ResponseWriter, r *http.Request)
 
 func mergedDiscordConnectConfig(req discordConnectRequest, current config.DiscordConfig) config.DiscordConfig {
 	token := strings.TrimSpace(req.Token)
-	if token == "" {
+	if token == "" && current.Enabled {
 		token = strings.TrimSpace(current.BotToken)
 	}
 	guildID := strings.TrimSpace(req.GuildID)

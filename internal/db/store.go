@@ -28,8 +28,11 @@ func Open() (*Store, error) {
 
 // OpenPath opens or creates an AGX database at path and applies migrations.
 func OpenPath(path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
+	}
+	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+		return nil, fmt.Errorf("chmod db dir: %w", err)
 	}
 	database, err := sql.Open("sqlite", path)
 	if err != nil {

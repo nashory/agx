@@ -1163,6 +1163,8 @@ function DiscordView({
   const statusDetail = checkingConnection
     ? 'Checking Discord connection...'
     : status.error || (status.connected ? `Connected${status.guildName ? ` to ${status.guildName}` : ''}` : status.enabled ? 'Enabled but disconnected' : 'Not configured');
+  const canReuseStoredToken = hasStoredToken && status.enabled;
+  const missingRequiredToken = token.trim() === '' && !canReuseStoredToken;
   const tokenLocked = hasStoredToken && (checkingConnection || shouldShowDisconnect) && token.trim() === '';
   const connectionLocked = busy || checkingConnection;
   const syncLocked = connectionLocked || hardSyncRunning;
@@ -1308,15 +1310,15 @@ function DiscordView({
           </div>
           <div className="setting-row">
             <div>
-              <strong>Guild ID</strong>
-              <span>{status.guildName ? `Connected server: ${status.guildName}` : 'Discord server ID used by AGX.'}</span>
+              <strong>Server ID</strong>
+              <span>{status.guildName ? `Connected server: ${status.guildName}` : 'Saved locally after you connect; kept after disconnect for convenience.'}</span>
             </div>
             <input value={guildID} disabled={connectionLocked} onChange={(event) => setGuildID(event.target.value)} placeholder="1234567890123456789" />
           </div>
           <div className="setting-row">
             <div>
               <strong>Bot token</strong>
-              <span>{hasStoredToken ? 'Stored token is locked.' : 'Stored in AGX config with local file permissions.'}</span>
+              <span>{canReuseStoredToken ? 'Stored token is locked.' : 'Required to connect; disconnect clears the stored token.'}</span>
             </div>
             {tokenLocked ? (
               <div className="locked-token-field" title="Stored bot token">
@@ -1324,18 +1326,18 @@ function DiscordView({
                 <span>{status.maskedBotToken}</span>
               </div>
             ) : (
-              <input value={token} type="password" disabled={connectionLocked} onChange={(event) => setToken(event.target.value)} placeholder={status.enabled ? 'Leave blank to keep existing token' : 'Discord bot token'} />
+              <input value={token} type="password" disabled={connectionLocked} onChange={(event) => setToken(event.target.value)} placeholder={canReuseStoredToken ? 'Leave blank to retry with stored token' : 'Discord bot token'} />
             )}
           </div>
           <div className="setting-row">
             <div>
               <strong>Allowed user ID</strong>
-              <span>Single Discord user ID allowed to control AGX.</span>
+              <span>Single Discord user allowed to control AGX; saved locally after connect.</span>
             </div>
             <input value={allowedUserID} disabled={connectionLocked} onChange={(event) => setAllowedUserID(event.target.value)} placeholder="123456789012345678" />
           </div>
           <div className="setting-actions">
-            <button className="text-button" disabled={connectionLocked || (!hasStoredToken && token.trim() === '')} onClick={inviteBot} aria-busy={busyAction === 'invite'}>
+            <button className="text-button" disabled={connectionLocked || missingRequiredToken} onClick={inviteBot} aria-busy={busyAction === 'invite'}>
               {busyAction === 'invite' ? <span className="button-spinner" aria-hidden="true" /> : <ExternalLink size={16} aria-hidden="true" />}
               {busyAction === 'invite' ? 'Opening...' : 'Invite AGX Coding'}
             </button>
@@ -1345,7 +1347,7 @@ function DiscordView({
                 {busyAction === 'disconnect' ? 'Disconnecting...' : 'Disconnect'}
               </button>
             ) : (
-              <button className="primary-button" disabled={connectionLocked || !guildID.trim()} onClick={connect} aria-busy={busyAction === 'connect'}>
+              <button className="primary-button" disabled={connectionLocked || missingRequiredToken || !guildID.trim() || !allowedUserID.trim()} onClick={connect} aria-busy={busyAction === 'connect'}>
                 {busyAction === 'connect' && <span className="button-spinner" aria-hidden="true" />}
                 {busyAction === 'connect' ? 'Connecting...' : 'Connect'}
               </button>

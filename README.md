@@ -20,9 +20,11 @@ whenever terminal-level control is the better tool.
 
 <p>
   <a href="#quick-start">Quick Start</a> ·
+  <a href="#30-second-workflow">30-Second Workflow</a> ·
   <a href="#what-you-can-do">What You Can Do</a> ·
   <a href="#desktop">Desktop</a> ·
   <a href="#cli-and-tui">CLI and TUI</a> ·
+  <a href="#common-recipes">Recipes</a> ·
   <a href="#discord">Discord</a> ·
   <a href="#docs">Docs</a>
 </p>
@@ -49,6 +51,11 @@ worktrees, and chat threads, AGX puts the lifecycle in one place:
 AGX does not host your code or run a cloud backend. The runtime stores state in
 your local config directory, starts local agent CLI processes, and uses local
 Unix tools such as `tmux`, `git`, and SQLite.
+
+AGX is a good fit when you already use coding agents and want a stronger way to
+coordinate them across real repositories. It is less useful if you only run one
+short one-off prompt at a time and never need persistent sessions, worktrees,
+logs, or remote follow-up.
 
 ## Quick Start
 
@@ -81,6 +88,24 @@ agx runtime install-service
 
 See [docs/INSTALL.md](docs/INSTALL.md) for macOS, Linux, Docker, first-run
 setup, and troubleshooting.
+
+## 30-Second Workflow
+
+The fastest path is through Desktop:
+
+1. Open AGX and add a local git project.
+2. Grant project access so the runtime can validate writes and worktree setup.
+3. Create a task, or click a quick task such as `Coding Machine`.
+4. Pick an agent and choose `Worktree` or `Project` mode.
+5. Watch the live session output, open files, and send follow-up prompts.
+6. Split important sessions, attach from the CLI, or expose selected tasks to
+   Discord when you need remote control.
+
+The same task remains visible from every surface:
+
+```text
+Desktop task board <-> agx CLI <-> TUI dashboard <-> optional Discord channel
+```
 
 ## What You Can Do
 
@@ -121,6 +146,22 @@ AGX is built around the part that gets messy after the first prompt:
 | Remote follow-up is awkward | Discord-attached tasks can be controlled from a private server. |
 | CLI-only tools are hard to monitor | Desktop gives a visual task board and live terminal surfaces. |
 | Desktop-only tools are hard to automate | `agx` exposes project, task, runtime, logs, and chat commands. |
+
+## Operating Model
+
+AGX separates control surfaces from the runtime that owns work:
+
+| Layer | Responsibility |
+| --- | --- |
+| Desktop | Visual workspace, task board, live terminals, file browsing, settings. |
+| CLI | Automation, diagnostics, logs, service management, tmux attach. |
+| TUI | Lightweight terminal dashboard for runtime and task state. |
+| Discord | Optional remote control for selected tasks. |
+| Runtime | SQLite state, tmux sessions, agent processes, worktrees, recovery, sync. |
+
+That split is why you can start a task in Desktop, inspect it with `agx ps`,
+attach to its tmux window, and continue supervising it later without losing the
+runtime record.
 
 ## Desktop
 
@@ -198,6 +239,70 @@ task        manage tasks
 tui         open the terminal UI
 ```
 
+## Common Recipes
+
+### Start one local task from the CLI
+
+```bash
+cd /path/to/repo
+agx project init
+agx run "find the main entry points and summarize the architecture"
+```
+
+### Run parallel agents safely
+
+Use `Worktree` mode in Desktop, or enable worktrees in project config:
+
+```toml
+[worktree]
+enabled = true
+base_branch = "main"
+```
+
+Each task gets its own branch and working directory under `.agx/worktrees/`.
+
+### Follow up from a terminal
+
+```bash
+agx ps
+agx logs <task-id> --lines 100
+agx send <task-id> "now implement the smallest safe fix"
+```
+
+### Drop into the live session
+
+```bash
+agx attach <task-id>
+```
+
+This attaches directly to the task's tmux window, which is useful when you want
+full terminal control instead of Desktop input.
+
+### Check whether the machine is ready
+
+```bash
+agx doctor
+agx agent list
+agx runtime status
+```
+
+### Use AGX without macOS Desktop
+
+On Linux, use the CLI/runtime and TUI:
+
+```bash
+agx runtime install-service
+agx tui
+```
+
+In Docker, use the Ubuntu runtime environment:
+
+```bash
+make -C docker build
+make -C docker start
+make -C docker tui
+```
+
 ## Discord
 
 Discord integration is optional. When enabled, AGX mirrors local projects and
@@ -206,8 +311,10 @@ Discord-attached tasks into a server so you can control selected work remotely.
 Typical CLI setup:
 
 ```bash
+read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
+export DISCORD_BOT_TOKEN
+
 agx chat connect \
-  --token "$DISCORD_BOT_TOKEN" \
   --guild "$DISCORD_SERVER_ID" \
   --allow-user "$YOUR_DISCORD_USER_ID"
 
@@ -217,7 +324,10 @@ agx chat status
 
 Only the configured Discord user ID can control AGX. Use a private server and a
 dedicated bot token. The token and Discord config are stored locally under the
-AGX config directory.
+AGX config directory. Disconnecting clears the stored bot token; the server ID
+and allowed user ID remain on that machine so reconnecting only requires a fresh
+token. Prefer `DISCORD_BOT_TOKEN` over `--token` so the token does not appear in
+shell history or process arguments.
 
 Common Discord commands include:
 

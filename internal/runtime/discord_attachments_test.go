@@ -315,11 +315,14 @@ func TestBuildDiscordAttachmentPromptSupportsAttachmentOnly(t *testing.T) {
 		ContentType: "image/png",
 		SizeBytes:   12,
 		LocalPath:   "/tmp/screen.png",
-		SourceURL:   "https://cdn.discordapp.com/attachments/1/2/screen.png",
+		SourceURL:   "https://cdn.discordapp.com/attachments/1/2/screen.png?ex=secret#fragment",
 	}})
 	for _, want := range []string{"User sent 1 attachment.", "Attachments:", "saved: /tmp/screen.png", "source: https://cdn.discordapp.com"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt = %q, want %q", prompt, want)
 		}
+	}
+	if strings.Contains(prompt, "secret") || strings.Contains(prompt, "fragment") {
+		t.Fatalf("prompt = %q, want source URL query and fragment stripped", prompt)
 	}
 }

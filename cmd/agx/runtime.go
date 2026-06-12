@@ -67,7 +67,7 @@ func newRuntimeStatusCmd() *cobra.Command {
 			if discord, err := agxruntime.NewClient().DiscordStatus(ctx); err == nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "discord enabled: %t\n", discord.Enabled)
 				fmt.Fprintf(cmd.OutOrStdout(), "discord connected: %t\n", discord.Connected)
-				fmt.Fprintf(cmd.OutOrStdout(), "discord guild: %s\n", emptyPlaceholder(discord.GuildID))
+				fmt.Fprintf(cmd.OutOrStdout(), "discord guild: %s\n", redactedSetting(discord.GuildID))
 				if discord.Error != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "discord error: %s\n", discord.Error)
 				}

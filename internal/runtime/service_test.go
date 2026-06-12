@@ -501,6 +501,7 @@ func TestServiceGrantProjectAccess(t *testing.T) {
 
 func TestMergedDiscordConnectConfigUsesExistingValues(t *testing.T) {
 	next := mergedDiscordConnectConfig(discordConnectRequest{}, config.DiscordConfig{
+		Enabled:        true,
 		BotToken:       " token ",
 		GuildID:        " guild ",
 		AllowedUserIDs: []string{" ", "user-1"},
@@ -513,14 +514,55 @@ func TestMergedDiscordConnectConfigUsesExistingValues(t *testing.T) {
 	}
 }
 
+func TestMergedDiscordConnectConfigRequiresTokenWhenDisabled(t *testing.T) {
+	next := mergedDiscordConnectConfig(discordConnectRequest{}, config.DiscordConfig{
+		Enabled:        false,
+		BotToken:       " token ",
+		GuildID:        " guild ",
+		AllowedUserIDs: []string{"user-1"},
+	})
+	if next.BotToken != "" || next.GuildID != "guild" || len(next.AllowedUserIDs) != 1 || next.AllowedUserIDs[0] != "user-1" {
+		t.Fatalf("merged config = %#v, want disabled config to keep ids but require a fresh token", next)
+	}
+	if err := agxdiscord.ValidateConfig(next); err == nil || !strings.Contains(err.Error(), "discord bot token is required") {
+		t.Fatalf("ValidateConfig() error = %v, want missing token", err)
+	}
+}
+
 func TestMergedDiscordConnectConfigOverridesAllowedUser(t *testing.T) {
 	next := mergedDiscordConnectConfig(discordConnectRequest{AllowedUserID: " user-2 "}, config.DiscordConfig{
+		Enabled:        true,
 		BotToken:       "token",
 		GuildID:        "guild",
 		AllowedUserIDs: []string{"user-1"},
 	})
 	if len(next.AllowedUserIDs) != 1 || next.AllowedUserIDs[0] != "user-2" {
 		t.Fatalf("AllowedUserIDs = %#v, want override user-2", next.AllowedUserIDs)
+	}
+}
+
+func TestDiscordDisconnectClearsStoredTokenOnly(t *testing.T) {
+	configDir := shortTempDir(t)
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+	if err := config.SaveDiscord(config.DiscordConfig{
+		Enabled:        true,
+		BotToken:       "token",
+		GuildID:        "guild",
+		AllowedUserIDs: []string{"user-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test-version")
+	var status agxdiscord.Status
+	if code := runtimeAPIRequest(t, service, http.MethodPost, "/v1/discord/disconnect", nil, &status); code != http.StatusOK {
+		t.Fatalf("disconnect status = %d, want 200", code)
+	}
+	cfg, warnings := config.LoadGlobal()
+	if len(warnings) > 0 {
+		t.Fatal(warnings[0])
+	}
+	if cfg.Discord.Enabled || cfg.Discord.BotToken != "" || cfg.Discord.GuildID != "guild" || len(cfg.Discord.AllowedUserIDs) != 1 || cfg.Discord.AllowedUserIDs[0] != "user-1" {
+		t.Fatalf("discord config after disconnect = %#v, want disabled, token cleared, ids preserved", cfg.Discord)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,7 +173,7 @@ func (s *Service) prepareDiscordAttachments(ctx context.Context, task db.Task, m
 			ContentType:         downloaded.ContentType,
 			SizeBytes:           downloaded.SizeBytes,
 			LocalPath:           finalPath,
-			SourceURL:           incoming.URL,
+			SourceURL:           safeAttachmentSourceURL(incoming.URL),
 			SHA256:              downloaded.SHA256,
 		})
 		if err != nil {
@@ -232,11 +233,22 @@ func buildDiscordAttachmentPrompt(text string, attachments []db.TaskAttachment) 
 	for _, attachment := range attachments {
 		fmt.Fprintf(&b, "\n- %s %s %d bytes", attachment.Filename, attachment.ContentType, attachment.SizeBytes)
 		fmt.Fprintf(&b, "\n  saved: %s", attachment.LocalPath)
-		if strings.TrimSpace(attachment.SourceURL) != "" {
-			fmt.Fprintf(&b, "\n  source: %s", attachment.SourceURL)
+		if sourceURL := safeAttachmentSourceURL(attachment.SourceURL); sourceURL != "" {
+			fmt.Fprintf(&b, "\n  source: %s", sourceURL)
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func safeAttachmentSourceURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func uniqueAttachmentPath(root, taskID, discordMessageID, filename, discordAttachmentID string) (string, error) {

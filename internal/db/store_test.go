@@ -2,9 +2,27 @@ package db
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestOpenPathCreatesPrivateDatabaseDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "agx.db")
+	store, err := OpenPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	info, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("database directory mode = %s, want 0700", got)
+	}
+}
 
 func TestProjectAndTaskCRUD(t *testing.T) {
 	store, err := OpenMemory()

@@ -28,7 +28,7 @@ func newDoctorCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "socket: %s\n", status.SocketPath)
 				fmt.Fprintf(cmd.OutOrStdout(), "lock: %s\n", status.LockPath)
 				if discord, err := client.DiscordStatus(ctx); err == nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "runtime discord: enabled=%t connected=%t guild=%s\n", discord.Enabled, discord.Connected, emptyPlaceholder(discord.GuildID))
+					fmt.Fprintf(cmd.OutOrStdout(), "runtime discord: enabled=%t connected=%t guild=%s\n", discord.Enabled, discord.Connected, redactedSetting(discord.GuildID))
 					if discord.Error != "" {
 						fmt.Fprintf(cmd.OutOrStdout(), "runtime discord error: %s\n", discord.Error)
 					}
@@ -70,9 +70,9 @@ func newDoctorCmd() *cobra.Command {
 			}
 			discord := cfg.Discord
 			fmt.Fprintf(cmd.OutOrStdout(), "discord enabled: %t\n", discord.Enabled)
-			fmt.Fprintf(cmd.OutOrStdout(), "discord guild: %s\n", emptyPlaceholder(discord.GuildID))
-			fmt.Fprintf(cmd.OutOrStdout(), "discord allowed user: %s\n", emptyPlaceholder(firstConfiguredUser(discord.AllowedUserIDs)))
-			fmt.Fprintf(cmd.OutOrStdout(), "discord token: %s\n", maskedToken(discord.BotToken))
+			fmt.Fprintf(cmd.OutOrStdout(), "discord guild: %s\n", redactedSetting(discord.GuildID))
+			fmt.Fprintf(cmd.OutOrStdout(), "discord allowed user: %s\n", redactedSetting(firstConfiguredUser(discord.AllowedUserIDs)))
+			fmt.Fprintf(cmd.OutOrStdout(), "discord token: %s\n", redactedSetting(discord.BotToken))
 			fmt.Fprintf(cmd.OutOrStdout(), "PATH: %s\n", compactPath(os.Getenv("PATH")))
 			return nil
 		},

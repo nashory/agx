@@ -38,14 +38,11 @@ func exitCodeFor(err error) int {
 	}
 }
 
-func maskedToken(token string) string {
-	if token == "" {
+func redactedSetting(value string) string {
+	if strings.TrimSpace(value) == "" {
 		return "(not set)"
 	}
-	if len(token) <= 4 {
-		return token + "..."
-	}
-	return token[:4] + "..."
+	return "(set)"
 }
 
 func emptyPlaceholder(value string) string {

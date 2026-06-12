@@ -273,8 +273,10 @@ For Desktop changes, verify the affected path in `./bin/agx-desktop`:
 Use a private Discord test server and a dedicated bot token.
 
 ```bash
+read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
+export DISCORD_BOT_TOKEN
+
 ./bin/agx chat connect \
-  --token "$DISCORD_BOT_TOKEN" \
   --guild "$DISCORD_SERVER_ID" \
   --allow-user "$YOUR_DISCORD_USER_ID"
 
