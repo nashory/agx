@@ -33,6 +33,26 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install tmux
       - run: go test ./...
+      - name: Report Go coverage
+        if: runner.os == 'Linux'
+        run: |
+          go test ./... -covermode=atomic -coverprofile=coverage.out
+          go tool cover -func=coverage.out | tee coverage.txt
+          {
+            echo "## Go Coverage"
+            echo
+            echo '```text'
+            tail -n 20 coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Go coverage
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: |
+            coverage.out
+            coverage.txt
 
   linux-go:
     name: Linux Go
