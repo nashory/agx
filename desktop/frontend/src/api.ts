@@ -5,7 +5,7 @@ export type MonitorTask = Task & {
   projectPath: string;
 };
 
-type WailsApp = {
+export type WailsApp = {
   ListProjects(): Promise<Project[]>;
   SelectProjectDirectory(defaultDirectory: string): Promise<string>;
   ValidateProjectDirectory(path: string): Promise<ProjectCandidate>;

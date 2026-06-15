@@ -36,6 +36,8 @@ function createStorage(): Storage {
 
 beforeEach(() => {
   vi.stubGlobal('localStorage', createStorage());
+  window.go = undefined;
+  window.runtime = undefined;
 });
 
 afterEach(() => {
