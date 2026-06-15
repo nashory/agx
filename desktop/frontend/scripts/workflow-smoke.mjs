@@ -4,13 +4,14 @@ import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const app = readFileSync(resolve(root, 'src/App.tsx'), 'utf8');
+const appLogic = readFileSync(resolve(root, 'src/appLogic.ts'), 'utf8');
 const api = readFileSync(resolve(root, 'src/api.ts'), 'utf8');
 const types = readFileSync(resolve(root, 'src/types.ts'), 'utf8');
 
 const checks = [
   {
     name: 'project-mode conflict guidance',
-    source: app,
+    source: appLogic,
     needles: [
       'Another project-mode task is already active for this project.',
       'choose Worktree mode before creating a new task',
