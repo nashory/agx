@@ -238,7 +238,7 @@ func TestRuntimeDeleteTaskReturnsCleanupFailureAfterDeletingRow(t *testing.T) {
 	if status != http.StatusInternalServerError || !strings.Contains(payload.Error, "deleted, but cleanup failed") {
 		t.Fatalf("delete error = (%d, %#v), want cleanup failure", status, payload)
 	}
-	if payload.Code != errorCodeCleanupFailed || !payload.PartialSuccess {
+	if payload.Code != ErrorCodeCleanupFailed || !payload.PartialSuccess {
 		t.Fatalf("delete error payload = %#v, want cleanup code and partial success", payload)
 	}
 	if _, err := service.store.GetTask(task.ID); !errors.Is(err, db.ErrTaskNotFound) {
@@ -295,7 +295,7 @@ func TestRuntimeErrorResponseIncludesValidationCode(t *testing.T) {
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d, want bad request", status)
 	}
-	if payload.Code != errorCodeValidation || payload.Retryable || payload.PartialSuccess {
+	if payload.Code != ErrorCodeValidation || payload.Retryable || payload.PartialSuccess {
 		t.Fatalf("payload = %#v, want validation code without retry/partial flags", payload)
 	}
 }

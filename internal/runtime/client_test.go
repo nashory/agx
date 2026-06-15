@@ -32,7 +32,7 @@ func TestClientIncludesRuntimeErrorBody(t *testing.T) {
 	if !errors.As(err, &runtimeErr) {
 		t.Fatalf("client.do error type = %T, want RuntimeError", err)
 	}
-	if runtimeErr.Code != errorCodeValidation || runtimeErr.StatusCode != http.StatusBadRequest || runtimeErr.Retryable || runtimeErr.PartialSuccess {
+	if runtimeErr.Code != ErrorCodeValidation || runtimeErr.StatusCode != http.StatusBadRequest || runtimeErr.Retryable || runtimeErr.PartialSuccess {
 		t.Fatalf("RuntimeError = %#v, want structured validation details", runtimeErr)
 	}
 }

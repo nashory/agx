@@ -123,14 +123,14 @@ type Agent struct {
 }
 
 const (
-	errorCodeInternal       = "internal_error"
-	errorCodeValidation     = "validation_error"
-	errorCodeNotFound       = "not_found"
-	errorCodeConflict       = "conflict"
-	errorCodeTimeout        = "timeout"
-	errorCodeCleanupFailed  = "cleanup_failed"
-	errorCodePartialSuccess = "partial_success"
-	errorCodeSyncInProgress = "sync_in_progress"
+	ErrorCodeInternal       = "internal_error"
+	ErrorCodeValidation     = "validation_error"
+	ErrorCodeNotFound       = "not_found"
+	ErrorCodeConflict       = "conflict"
+	ErrorCodeTimeout        = "timeout"
+	ErrorCodeCleanupFailed  = "cleanup_failed"
+	ErrorCodePartialSuccess = "partial_success"
+	ErrorCodeSyncInProgress = "sync_in_progress"
 )
 
 type errorResponse struct {
@@ -1223,27 +1223,27 @@ func writeErrorStatus(w http.ResponseWriter, status int, err error) {
 func runtimeErrorResponse(status int, err error) errorResponse {
 	response := errorResponse{
 		Error: err.Error(),
-		Code:  errorCodeInternal,
+		Code:  ErrorCodeInternal,
 	}
 	switch {
 	case errors.As(err, new(session.TaskCleanupError)):
-		response.Code = errorCodeCleanupFailed
+		response.Code = ErrorCodeCleanupFailed
 		response.PartialSuccess = true
 	case isPartialSuccessRuntimeError(err):
-		response.Code = errorCodePartialSuccess
+		response.Code = ErrorCodePartialSuccess
 		response.PartialSuccess = true
 	case errors.Is(err, agxdiscord.ErrSyncInProgress):
-		response.Code = errorCodeSyncInProgress
+		response.Code = ErrorCodeSyncInProgress
 		response.Retryable = true
 	case errors.Is(err, context.DeadlineExceeded):
-		response.Code = errorCodeTimeout
+		response.Code = ErrorCodeTimeout
 		response.Retryable = true
 	case status == http.StatusBadRequest:
-		response.Code = errorCodeValidation
+		response.Code = ErrorCodeValidation
 	case status == http.StatusNotFound:
-		response.Code = errorCodeNotFound
+		response.Code = ErrorCodeNotFound
 	case status == http.StatusConflict:
-		response.Code = errorCodeConflict
+		response.Code = ErrorCodeConflict
 		response.Retryable = true
 	}
 	return response
