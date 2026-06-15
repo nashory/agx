@@ -25,6 +25,29 @@ type Client struct {
 	http    *http.Client
 }
 
+// RuntimeError preserves structured error details returned by the runtime API
+// while keeping the human-readable Error string used by existing callers.
+type RuntimeError struct {
+	Method         string
+	Path           string
+	Status         string
+	StatusCode     int
+	Message        string
+	Code           string
+	Retryable      bool
+	PartialSuccess bool
+}
+
+func (e *RuntimeError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.Message) == "" {
+		return fmt.Sprintf("runtime API %s %s failed: %s", e.Method, e.Path, e.Status)
+	}
+	return fmt.Sprintf("runtime API %s %s failed: %s: %s", e.Method, e.Path, e.Status, e.Message)
+}
+
 // NewClient returns a client configured for the default runtime socket.
 func NewClient() *Client {
 	paths := DefaultPaths()
@@ -81,8 +104,8 @@ func (c *Client) Events(ctx context.Context) (<-chan Event, error) {
 		return nil, runtimeTransportError(err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_ = resp.Body.Close()
-		return nil, fmt.Errorf("runtime API GET /v1/events failed: %s", resp.Status)
+		defer resp.Body.Close()
+		return nil, responseRuntimeError(http.MethodGet, "/v1/events", resp)
 	}
 	events := make(chan Event, 32)
 	go func() {
@@ -375,7 +398,7 @@ func (c *Client) TaskLogStream(ctx context.Context, taskID string, lines int) (<
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		return nil, fmt.Errorf("runtime API GET %s failed: %s", path, responseErrorMessage(resp))
+		return nil, responseRuntimeError(http.MethodGet, path, resp)
 	}
 	events := make(chan TaskLogEvent, 32)
 	go func() {
@@ -507,7 +530,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("runtime API %s %s failed: %s", method, path, responseErrorMessage(resp))
+		return responseRuntimeError(method, path, resp)
 	}
 	if out == nil {
 		return nil
@@ -526,20 +549,32 @@ func runtimeTransportError(err error) error {
 	return fmt.Errorf("agx runtime is not reachable: %w", err)
 }
 
-func responseErrorMessage(resp *http.Response) string {
+func responseRuntimeError(method, path string, resp *http.Response) error {
+	message, code, retryable, partialSuccess := responseErrorDetails(resp)
+	return &RuntimeError{
+		Method:         method,
+		Path:           path,
+		Status:         resp.Status,
+		StatusCode:     resp.StatusCode,
+		Message:        message,
+		Code:           code,
+		Retryable:      retryable,
+		PartialSuccess: partialSuccess,
+	}
+}
+
+func responseErrorDetails(resp *http.Response) (message, code string, retryable, partialSuccess bool) {
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
 	if err != nil || len(data) == 0 {
-		return resp.Status
+		return resp.Status, "", false, false
 	}
-	var body struct {
-		Error string `json:"error"`
-	}
+	var body errorResponse
 	if err := json.Unmarshal(data, &body); err == nil && strings.TrimSpace(body.Error) != "" {
-		return fmt.Sprintf("%s: %s", resp.Status, strings.TrimSpace(body.Error))
+		return strings.TrimSpace(body.Error), body.Code, body.Retryable, body.PartialSuccess
 	}
 	text := strings.TrimSpace(string(data))
 	if text == "" {
-		return resp.Status
+		return resp.Status, "", false, false
 	}
-	return fmt.Sprintf("%s: %s", resp.Status, text)
+	return text, "", false, false
 }

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +27,13 @@ func TestClientIncludesRuntimeErrorBody(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "400 Bad Request") || !strings.Contains(err.Error(), "task title is required") {
 		t.Fatalf("client.do error = %q, want status and response body", err.Error())
+	}
+	var runtimeErr *RuntimeError
+	if !errors.As(err, &runtimeErr) {
+		t.Fatalf("client.do error type = %T, want RuntimeError", err)
+	}
+	if runtimeErr.Code != errorCodeValidation || runtimeErr.StatusCode != http.StatusBadRequest || runtimeErr.Retryable || runtimeErr.PartialSuccess {
+		t.Fatalf("RuntimeError = %#v, want structured validation details", runtimeErr)
 	}
 }
 
