@@ -1199,8 +1199,9 @@ func (a *App) createDiscordTask(ctx context.Context, projectID, title, descripti
 		return Task{}, err
 	}
 	if _, err := a.DiscordSoftSync(); err != nil {
-		_ = a.DeleteTask(task.ID)
-		return Task{}, err
+		return Task{}, a.withDesktopCleanupError(err, "sync Discord task channel", func() error {
+			return deleteDesktopTaskForCleanup(a, task.ID)
+		})
 	}
 	if strings.TrimSpace(description) != "" {
 		dbTask, err := a.store.GetTask(task.ID)
@@ -1312,21 +1313,28 @@ func (a *App) createStructuredAgentTask(ctx context.Context, projectID, title, d
 	}
 	prepared, err := a.prepareTaskWorktree(project, task, workspaceMode)
 	if err != nil {
-		_ = a.store.DeleteTask(task.ID)
-		return Task{}, err
+		return Task{}, a.withDesktopCleanupError(err, "prepare structured desktop task worktree", func() error {
+			return deleteDesktopTaskRowForCleanup(a.store, task.ID)
+		})
 	}
 	if err := a.store.UpdateTaskRuntimeBase(task.ID, nil, db.StatusActive, prepared.Path, prepared.Branch, prepared.Base); err != nil {
-		_ = removePreparedDesktopWorktree(project, prepared)
-		_ = a.store.DeleteTask(task.ID)
-		return Task{}, err
+		return Task{}, a.withDesktopCleanupError(err, "update structured desktop task runtime", func() error {
+			return errors.Join(
+				removePreparedDesktopWorktreeForCleanup(project, prepared),
+				deleteDesktopTaskRowForCleanup(a.store, task.ID),
+			)
+		})
 	}
 	task.WorktreePath = prepared.Path
 	task.BranchName = prepared.Branch
 	task.BaseBranch = prepared.Base
 	if err := a.agentEvents.PrepareTask(ctx, task, project); err != nil {
-		_ = removePreparedDesktopWorktree(project, prepared)
-		_ = a.store.DeleteTask(task.ID)
-		return Task{}, err
+		return Task{}, a.withDesktopCleanupError(err, "prepare structured desktop task", func() error {
+			return errors.Join(
+				removePreparedDesktopWorktreeForCleanup(project, prepared),
+				deleteDesktopTaskRowForCleanup(a.store, task.ID),
+			)
+		})
 	}
 	a.emitMetadataEvent(projectID)
 	a.syncDiscordAsync()
@@ -2392,6 +2400,36 @@ func removePreparedDesktopWorktree(project db.Project, prepared worktree.Prepare
 		return nil
 	}
 	return worktree.Remove(project, prepared.Path, prepared.Branch, prepared.Base)
+}
+
+func (a *App) withDesktopCleanupError(primary error, operation string, cleanup func() error) error {
+	cleanupErr := cleanup()
+	if cleanupErr == nil {
+		return primary
+	}
+	log.Printf("%s cleanup failed: %v", operation, cleanupErr)
+	return errors.Join(primary, fmt.Errorf("%s cleanup failed: %w", operation, cleanupErr))
+}
+
+func removePreparedDesktopWorktreeForCleanup(project db.Project, prepared worktree.Prepared) error {
+	if err := removePreparedDesktopWorktree(project, prepared); err != nil {
+		return fmt.Errorf("remove prepared desktop worktree: %w", err)
+	}
+	return nil
+}
+
+func deleteDesktopTaskRowForCleanup(store *db.Store, taskID string) error {
+	if err := store.DeleteTask(taskID); err != nil {
+		return fmt.Errorf("delete desktop task row: %w", err)
+	}
+	return nil
+}
+
+func deleteDesktopTaskForCleanup(app *App, taskID string) error {
+	if err := app.DeleteTask(taskID); err != nil {
+		return fmt.Errorf("delete desktop task %s: %w", display.ShortID(taskID), err)
+	}
+	return nil
 }
 
 func parseDesktopWorkspaceMode(value string) db.WorkspaceMode {

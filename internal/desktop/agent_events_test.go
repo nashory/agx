@@ -2,7 +2,10 @@ package desktop
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,6 +23,8 @@ type fakeCodexRuntime struct {
 	interrupted  string
 	nextThreadID string
 	nextTurnID   string
+	threadErr    error
+	dirtyThread  bool
 }
 
 func newFakeCodexRuntime() *fakeCodexRuntime {
@@ -36,6 +41,14 @@ func (f *fakeCodexRuntime) Initialize(context.Context) (codexapp.InitializeRespo
 
 func (f *fakeCodexRuntime) ThreadStart(_ context.Context, cwd string, allMighty bool) (codexapp.ThreadStartResponse, error) {
 	f.startedCwd = cwd
+	if f.dirtyThread {
+		if err := os.WriteFile(filepath.Join(cwd, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+			return codexapp.ThreadStartResponse{}, err
+		}
+	}
+	if f.threadErr != nil {
+		return codexapp.ThreadStartResponse{}, f.threadErr
+	}
 	return codexapp.ThreadStartResponse{Thread: codexapp.Thread{ID: f.nextThreadID, Cwd: cwd}}, nil
 }
 
@@ -140,6 +153,38 @@ func TestAppDeleteTaskStopsStructuredRuntime(t *testing.T) {
 	}
 	if _, err := app.store.GetTask(task.ID); err != db.ErrTaskNotFound {
 		t.Fatalf("GetTask error = %v, want ErrTaskNotFound", err)
+	}
+}
+
+func TestCreateStructuredAgentTaskReportsCleanupFailure(t *testing.T) {
+	app, project := newTestApp(t)
+	fake := newFakeCodexRuntime()
+	fake.dirtyThread = true
+	fake.threadErr = errors.New("codex thread failed")
+	app.agentEvents.startCodex = func(context.Context) (codexRuntime, error) {
+		return fake, nil
+	}
+
+	_, err := app.createStructuredAgentTask(context.Background(), project.ID, "cleanup", "", "codex", true, db.WorkspaceModeWorktree)
+	if err == nil {
+		t.Fatal("createStructuredAgentTask succeeded, want cleanup failure")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "codex thread failed") || !strings.Contains(message, "prepare structured desktop task cleanup failed") || !strings.Contains(message, "remove prepared desktop worktree") {
+		t.Fatalf("error = %q, want primary and cleanup details", message)
+	}
+	tasks, err := app.store.ListTasks(project.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("tasks = %d, want cleanup to delete task row", len(tasks))
+	}
+	if fake.startedCwd == "" {
+		t.Fatal("started cwd is empty")
+	}
+	if _, err := os.Stat(fake.startedCwd); err != nil {
+		t.Fatalf("dirty worktree stat error = %v, want leftover worktree for cleanup warning", err)
 	}
 }
 
