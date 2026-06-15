@@ -115,6 +115,15 @@ make release-checksums
 shasum -a 256 -c dist/checksums.txt
 ```
 
+Run the lightweight artifact scan before publishing release assets:
+
+```bash
+make release-scan
+```
+
+The scan fails if package contents include local AGX state, config files,
+databases, private runbooks, or secret-like filenames.
+
 Packaging scripts should not remove artifacts created by another platform
 packager. They may clean their own build staging directories only.
 
