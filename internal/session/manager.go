@@ -426,7 +426,7 @@ func (m *Manager) DeleteTask(task db.Task) error {
 	}
 	if cleanupErr := errors.Join(cleanupErrs...); cleanupErr != nil {
 		err := TaskCleanupError{TaskID: task.ID, Err: cleanupErr}
-		log.Printf("task cleanup failed after delete: %v", err)
+		log.Printf("operation=%q task=%s error=%v", "delete_task_cleanup", display.ShortID(task.ID), err)
 		return err
 	}
 	return nil
@@ -471,7 +471,7 @@ func (m *Manager) withTaskStartupCleanupError(primary error, operation string, c
 	if cleanupErr == nil {
 		return primary
 	}
-	log.Printf("%s cleanup failed: %v", operation, cleanupErr)
+	log.Printf("operation=%q error=%v", operation, cleanupErr)
 	return errors.Join(primary, fmt.Errorf("%s cleanup failed: %w", operation, cleanupErr))
 }
 

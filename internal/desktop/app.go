@@ -2264,7 +2264,7 @@ func (a *App) syncDiscordAsync() {
 		for {
 			ctx, cancel := a.runtimeRequestContext(15 * time.Second)
 			if _, err := agxruntime.NewClient().DiscordSoftSync(ctx); err != nil {
-				log.Printf("desktop background Discord soft sync failed: %v", err)
+				log.Printf("operation=%q error=%v", "desktop_discord_soft_sync_background", err)
 			}
 			cancel()
 			a.emitDiscordStatusEvent()
@@ -2286,7 +2286,7 @@ func (a *App) deleteDiscordTaskChannelAsync(taskID string) {
 		ctx, cancel := a.runtimeRequestContext(15 * time.Second)
 		defer cancel()
 		if _, err := agxruntime.NewClient().DiscordSoftSync(ctx); err != nil {
-			log.Printf("desktop Discord task channel cleanup sync failed for task %s: %v", display.ShortID(taskID), err)
+			log.Printf("operation=%q task=%s error=%v", "desktop_discord_task_cleanup_sync", display.ShortID(taskID), err)
 		}
 		a.emitDiscordStatusEvent()
 	}()
@@ -2407,7 +2407,7 @@ func (a *App) withDesktopCleanupError(primary error, operation string, cleanup f
 	if cleanupErr == nil {
 		return primary
 	}
-	log.Printf("%s cleanup failed: %v", operation, cleanupErr)
+	log.Printf("operation=%q error=%v", operation, cleanupErr)
 	return errors.Join(primary, fmt.Errorf("%s cleanup failed: %w", operation, cleanupErr))
 }
 

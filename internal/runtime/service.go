@@ -164,7 +164,7 @@ func (s *Service) Start(ctx context.Context) error {
 			startCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			if err := s.discord.Start(startCtx, "runtime"); err != nil {
-				log.Printf("discord startup failed: %v", err)
+				log.Printf("operation=%q error=%v", "discord_startup", err)
 			}
 			s.bus.Publish("discord.status", s.discord.Status())
 		}()
@@ -409,7 +409,7 @@ func (s *Service) syncDiscordAsync() {
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			if err := s.discord.SoftSync(ctx); err != nil {
-				log.Printf("background Discord soft sync failed: %v", err)
+				log.Printf("operation=%q error=%v", "discord_soft_sync_background", err)
 			}
 			cancel()
 			s.bus.Publish("discord.status", s.discord.Status())
@@ -443,7 +443,7 @@ func (s *Service) syncDiscordTaskNow(taskID string) error {
 // queues a retry if Discord is slow or temporarily rejects the channel update.
 func (s *Service) syncDiscordTaskBestEffort(taskID string) {
 	if err := s.syncDiscordTaskNow(taskID); err != nil {
-		log.Printf("foreground Discord task sync failed for task %s: %v", display.ShortID(taskID), err)
+		log.Printf("operation=%q task=%s error=%v", "discord_task_sync_foreground", display.ShortID(taskID), err)
 		if s.discord != nil && s.discord.Status().Connected {
 			s.discord.RefreshTaskStreams(context.Background())
 		}
@@ -459,7 +459,7 @@ func (s *Service) syncDiscordTaskAsync(taskID string) {
 	}
 	go func() {
 		if err := s.syncDiscordTaskNow(taskID); err != nil {
-			log.Printf("background Discord task sync failed for task %s: %v", display.ShortID(taskID), err)
+			log.Printf("operation=%q task=%s error=%v", "discord_task_sync_background", display.ShortID(taskID), err)
 		}
 	}()
 }

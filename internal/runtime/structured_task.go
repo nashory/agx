@@ -127,7 +127,7 @@ func (s *Service) withStructuredCleanupError(primary error, operation string, cl
 	if cleanupErr == nil {
 		return primary
 	}
-	log.Printf("%s cleanup failed: %v", operation, cleanupErr)
+	log.Printf("operation=%q error=%v", operation, cleanupErr)
 	return errors.Join(primary, fmt.Errorf("%s cleanup failed: %w", operation, cleanupErr))
 }
 

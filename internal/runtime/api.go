@@ -1286,7 +1286,7 @@ func (s *Service) deleteDiscordChannelForTaskAsync(task db.Task, fallbackChannel
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := s.discord.DeleteTaskChannelWithFallback(ctx, taskID, fallbackChannelID); err != nil {
-			log.Printf("discord task channel cleanup failed for task %s: %v", display.ShortID(taskID), err)
+			log.Printf("operation=%q task=%s error=%v", "discord_task_channel_cleanup", display.ShortID(taskID), err)
 		}
 		s.bus.Publish("discord.status", s.discord.Status())
 	}()
