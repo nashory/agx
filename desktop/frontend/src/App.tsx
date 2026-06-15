@@ -38,6 +38,7 @@ import '@xterm/xterm/css/xterm.css';
 import { api, type LogEvent, type MetadataEvent, type MonitorTask } from './api';
 import { ActionLogConsole } from './actionLog';
 import { CodePreview, isMarkdownPreviewPath, renderMarkdown } from './codePreview';
+import { AgentBadge, AllMightyBadge, DiscordBadge, WorkspaceBadge } from './components/badges';
 import { FilePanel } from './filePanel';
 import { DiscordView } from './features/discord/DiscordView';
 import { addUniquePaths, appendPromptPaths, pathsFromDrop } from './pathDrag';
@@ -925,42 +926,6 @@ function MetricCard({ label, value, detail }: { label: string; value: number; de
       <strong>{value}</strong>
       <small>{detail}</small>
     </article>
-  );
-}
-
-function AllMightyBadge() {
-  return (
-    <span className="all-mighty-badge" title="Runs without approval prompts or sandbox restrictions where supported">
-      <ShieldCheck size={13} />
-      All-mighty
-    </span>
-  );
-}
-
-function AgentBadge({ agent }: { agent: string }) {
-  return (
-    <span className={`agent-badge agent-${agent.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`} title={agent || 'Default agent'}>
-      {agentLabel(agent)}
-    </span>
-  );
-}
-
-function DiscordBadge() {
-  return (
-    <span className="discord-task-badge" title="Controlled from Discord">
-      <MessageCircle size={13} />
-      Discord
-    </span>
-  );
-}
-
-function WorkspaceBadge({ mode }: { mode?: WorkspaceMode }) {
-  const projectMode = mode === 'project';
-  return (
-    <span className={`workspace-task-badge ${projectMode ? 'project' : 'worktree'}`} title={projectMode ? 'Runs in the current project checkout' : 'Runs in an isolated task worktree'}>
-      {projectMode ? <FolderOpen size={13} /> : <GitBranch size={13} />}
-      {projectMode ? 'Project' : 'Worktree'}
-    </span>
   );
 }
 
