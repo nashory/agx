@@ -1077,11 +1077,15 @@ func (s *Service) handleDiscordTaskSync(w http.ResponseWriter, r *http.Request) 
 		writeErrorStatus(w, http.StatusBadRequest, fmt.Errorf("task %s is not a Discord task", taskID))
 		return
 	}
-	if err := s.ensureDiscordStarted(r.Context(), false); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), discordTaskManualSyncTimeout)
+	defer cancel()
+	if err := s.ensureDiscordStarted(ctx, false); err != nil {
 		writeError(w, err)
 		return
 	}
-	if err := s.discord.SyncTaskChannel(r.Context(), taskID); err != nil {
+	started := time.Now()
+	if err := s.discord.SyncTaskChannel(ctx, taskID); err != nil {
+		log.Printf("operation=%q task=%s elapsed_ms=%d error=%v", "discord_task_sync_manual", display.ShortID(taskID), time.Since(started).Milliseconds(), err)
 		if errors.Is(err, agxdiscord.ErrSyncInProgress) {
 			writeErrorStatus(w, http.StatusConflict, err)
 			return
@@ -1089,6 +1093,7 @@ func (s *Service) handleDiscordTaskSync(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
+	log.Printf("operation=%q task=%s elapsed_ms=%d", "discord_task_sync_manual", display.ShortID(taskID), time.Since(started).Milliseconds())
 	status := s.discord.Status()
 	s.bus.Publish("discord.status", status)
 	s.bus.Publish("task.changed", s.taskDTO(task))

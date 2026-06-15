@@ -245,6 +245,7 @@ const maxContextFiles = 50
 const maxContextBytes = 256 * 1024
 const maxProjectCandidates = 24
 const discordConnectTimeout = 30 * time.Second
+const discordTaskSyncTimeout = 2 * time.Minute
 const discordHardSyncTimeout = 10 * time.Minute
 const runtimeClientTimeout = 30 * time.Second
 
@@ -968,7 +969,7 @@ func (a *App) DiscordHardSync() (DiscordStatusInfo, error) {
 }
 
 func (a *App) DiscordTaskSync(taskID string) (DiscordStatusInfo, error) {
-	ctx, cancel := a.runtimeRequestContext(discordConnectTimeout)
+	ctx, cancel := a.runtimeRequestContext(discordTaskSyncTimeout)
 	defer cancel()
 	status, err := agxruntime.NewClient().DiscordTaskSync(ctx, strings.TrimSpace(taskID))
 	if err != nil {

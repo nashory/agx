@@ -96,7 +96,10 @@ type runtimeTaskState struct {
 	lastActivity time.Time
 }
 
-const discordTaskSyncTimeout = 8 * time.Second
+const (
+	discordTaskSyncTimeout       = 8 * time.Second
+	discordTaskManualSyncTimeout = 2 * time.Minute
+)
 
 // Start acquires the daemon lock, opens the runtime database, recovers persisted
 // task state, and serves the Unix-socket API until ctx is canceled or Shutdown
