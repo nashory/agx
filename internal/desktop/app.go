@@ -251,6 +251,52 @@ const runtimeClientTimeout = 30 * time.Second
 
 var streamFileMu sync.Mutex
 
+type runtimeClient interface {
+	Status(context.Context) (agxruntime.Status, error)
+	Shutdown(context.Context) error
+	Config(context.Context) (agxruntime.RuntimeConfig, error)
+	UpdateDefaultAgent(context.Context, string) (agxruntime.RuntimeConfig, error)
+	Events(context.Context) (<-chan agxruntime.Event, error)
+	ListAgents(context.Context, string) ([]agxruntime.Agent, error)
+	ListProjects(context.Context) ([]agxruntime.Project, error)
+	CreateProject(context.Context, string, string, *string, *string) (agxruntime.Project, error)
+	GetProject(context.Context, string) (agxruntime.Project, error)
+	UpdateProjectDetails(context.Context, string, string, *string) (agxruntime.Project, error)
+	GrantProjectAccess(context.Context, string) (agxruntime.Project, error)
+	DeleteProject(context.Context, string) error
+	ListTasks(context.Context, string) ([]agxruntime.Task, error)
+	MonitorTasks(context.Context) ([]agxruntime.MonitorTask, error)
+	RunNewTaskWithInitialPromptWorkspace(context.Context, string, string, *string, string, bool, *string, db.WorkspaceMode) (agxruntime.Task, error)
+	RunNewDiscordTaskWithWorkspace(context.Context, string, string, *string, string, bool, db.WorkspaceMode) (agxruntime.Task, error)
+	GetTask(context.Context, string) (agxruntime.Task, error)
+	UpdateTaskTitle(context.Context, string, string) (agxruntime.Task, error)
+	RunTask(context.Context, string) (agxruntime.Task, error)
+	StopTask(context.Context, string) (agxruntime.Task, error)
+	DeleteTask(context.Context, string) error
+	SendTaskMessage(context.Context, string, string) (agxruntime.Task, error)
+	RecordTaskInput(context.Context, string, string) (agxruntime.Task, error)
+	SendTaskInput(context.Context, string, string) error
+	ResizeTaskTerminal(context.Context, string, int, int) error
+	TaskLogs(context.Context, string, int) (string, error)
+	TaskLogStream(context.Context, string, int) (<-chan agxruntime.TaskLogEvent, error)
+	TaskTranscript(context.Context, string, int) ([]agxruntime.TaskTranscriptMessage, error)
+	DiscordStatus(context.Context) (agxdiscord.Status, error)
+	DiscordConnect(context.Context, string, string, string) (agxdiscord.Status, error)
+	DiscordDisconnect(context.Context) (agxdiscord.Status, error)
+	DiscordSoftSync(context.Context) (agxdiscord.Status, error)
+	DiscordHardSync(context.Context) (agxdiscord.Status, error)
+	DiscordTaskSync(context.Context, string) (agxdiscord.Status, error)
+	DiscordInviteURL(context.Context, string) (string, error)
+}
+
+var newRuntimeClient = func() runtimeClient {
+	return agxruntime.NewClient()
+}
+
+func (a *App) runtimeClient() runtimeClient {
+	return newRuntimeClient()
+}
+
 // NewApp constructs the desktop app without opening the runtime database. The
 // runtime daemon owns durable state in normal desktop operation.
 func NewApp() (*App, error) {
@@ -321,7 +367,7 @@ func (a *App) ListProjects() ([]Project, error) {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	client := agxruntime.NewClient()
+	client := a.runtimeClient()
 	projects, err := client.ListProjects(ctx)
 	if err != nil {
 		return nil, err
@@ -467,7 +513,7 @@ func (a *App) GrantProjectAccess(projectID string) (Project, error) {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	client := agxruntime.NewClient()
+	client := a.runtimeClient()
 	project, err := client.GrantProjectAccess(ctx, projectID)
 	if err != nil {
 		refreshed, getErr := client.GetProject(ctx, projectID)
@@ -539,7 +585,7 @@ func (a *App) RegisterProject(path, name, description string) (Project, error) {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	client := agxruntime.NewClient()
+	client := a.runtimeClient()
 	project, err := client.CreateProject(ctx, path, name, display.PtrString(description), nil)
 	if err != nil {
 		return Project{}, err
@@ -591,7 +637,7 @@ func (a *App) registeredProjectByPath(path string) (Project, bool) {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	projects, err := agxruntime.NewClient().ListProjects(ctx)
+	projects, err := a.runtimeClient().ListProjects(ctx)
 	if err != nil {
 		return Project{}, false
 	}
@@ -609,7 +655,7 @@ func (a *App) UpdateProject(projectID, name, description string) (Project, error
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	client := agxruntime.NewClient()
+	client := a.runtimeClient()
 	project, err := client.UpdateProjectDetails(ctx, projectID, name, display.PtrString(description))
 	if err != nil {
 		return Project{}, err
@@ -628,7 +674,7 @@ func (a *App) GetProject(id string) (Project, error) {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	client := agxruntime.NewClient()
+	client := a.runtimeClient()
 	project, err := client.GetProject(ctx, id)
 	if err != nil {
 		return Project{}, err
@@ -646,7 +692,7 @@ func (a *App) DeleteProject(projectID string) error {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	if err := agxruntime.NewClient().DeleteProject(ctx, projectID); err != nil {
+	if err := a.runtimeClient().DeleteProject(ctx, projectID); err != nil {
 		return err
 	}
 	a.emitMetadataEvent(projectID)
@@ -729,7 +775,7 @@ func (a *App) RuntimeStatus() RuntimeStatusInfo {
 	paths := agxruntime.DefaultPaths()
 	ctx, cancel := a.runtimeRequestContext(3 * time.Second)
 	defer cancel()
-	status, err := agxruntime.NewClient().Status(ctx)
+	status, err := a.runtimeClient().Status(ctx)
 	if err != nil {
 		return RuntimeStatusInfo{
 			Running:    false,
@@ -745,7 +791,7 @@ func (a *App) RuntimeConfig() (RuntimeConfigInfo, error) {
 	if !a.directMode {
 		ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 		defer cancel()
-		cfg, err := agxruntime.NewClient().Config(ctx)
+		cfg, err := a.runtimeClient().Config(ctx)
 		if err != nil {
 			return RuntimeConfigInfo{}, err
 		}
@@ -762,7 +808,7 @@ func (a *App) UpdateDefaultAgent(agentName string) (RuntimeConfigInfo, error) {
 	if !a.directMode {
 		ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 		defer cancel()
-		cfg, err := agxruntime.NewClient().UpdateDefaultAgent(ctx, agentName)
+		cfg, err := a.runtimeClient().UpdateDefaultAgent(ctx, agentName)
 		if err != nil {
 			return RuntimeConfigInfo{}, err
 		}
@@ -865,7 +911,7 @@ func executableSiblingCLI(executable string) (string, bool) {
 func (a *App) RuntimeStop() (RuntimeStatusInfo, error) {
 	ctx, cancel := a.runtimeRequestContext(3 * time.Second)
 	defer cancel()
-	if err := agxruntime.NewClient().Shutdown(ctx); err != nil {
+	if err := a.runtimeClient().Shutdown(ctx); err != nil {
 		return a.RuntimeStatus(), err
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -898,7 +944,7 @@ func (a *App) waitForRuntimeStart(timeout time.Duration) (RuntimeStatusInfo, err
 func (a *App) DiscordStatus() DiscordStatusInfo {
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	status, err := agxruntime.NewClient().DiscordStatus(ctx)
+	status, err := a.runtimeClient().DiscordStatus(ctx)
 	if err != nil {
 		return a.discordStatusDTO(agxdiscord.Status{
 			Error: err.Error(),
@@ -910,7 +956,7 @@ func (a *App) DiscordStatus() DiscordStatusInfo {
 func (a *App) DiscordConnect(token, guildID, allowedUserID string) (DiscordStatusInfo, error) {
 	ctx, cancel := a.runtimeRequestContext(discordConnectTimeout)
 	defer cancel()
-	status, err := agxruntime.NewClient().DiscordConnect(ctx, strings.TrimSpace(token), strings.TrimSpace(guildID), strings.TrimSpace(allowedUserID))
+	status, err := a.runtimeClient().DiscordConnect(ctx, strings.TrimSpace(token), strings.TrimSpace(guildID), strings.TrimSpace(allowedUserID))
 	if err != nil {
 		a.emitDiscordStatusEvent()
 		return a.DiscordStatus(), err
@@ -922,7 +968,7 @@ func (a *App) DiscordConnect(token, guildID, allowedUserID string) (DiscordStatu
 func (a *App) OpenDiscordInvite(token string) error {
 	ctx, cancel := a.runtimeRequestContext(discordConnectTimeout)
 	defer cancel()
-	inviteURL, err := agxruntime.NewClient().DiscordInviteURL(ctx, token)
+	inviteURL, err := a.runtimeClient().DiscordInviteURL(ctx, token)
 	if err != nil {
 		return err
 	}
@@ -940,7 +986,7 @@ func (a *App) DiscordSync() (DiscordStatusInfo, error) {
 func (a *App) DiscordSoftSync() (DiscordStatusInfo, error) {
 	ctx, cancel := a.runtimeRequestContext(discordConnectTimeout)
 	defer cancel()
-	status, err := agxruntime.NewClient().DiscordSoftSync(ctx)
+	status, err := a.runtimeClient().DiscordSoftSync(ctx)
 	if err != nil {
 		a.emitDiscordStatusEvent()
 		return a.DiscordStatus(), err
@@ -957,7 +1003,7 @@ func (a *App) DiscordHardSync() (DiscordStatusInfo, error) {
 	if !a.directMode {
 		ctx, cancel := a.runtimeRequestContext(discordConnectTimeout)
 		defer cancel()
-		status, err := agxruntime.NewClient().DiscordHardSync(ctx)
+		status, err := a.runtimeClient().DiscordHardSync(ctx)
 		if err != nil {
 			a.emitDiscordStatusEvent()
 			return a.DiscordStatus(), err
@@ -971,7 +1017,7 @@ func (a *App) DiscordHardSync() (DiscordStatusInfo, error) {
 func (a *App) DiscordTaskSync(taskID string) (DiscordStatusInfo, error) {
 	ctx, cancel := a.runtimeRequestContext(discordTaskSyncTimeout)
 	defer cancel()
-	status, err := agxruntime.NewClient().DiscordTaskSync(ctx, strings.TrimSpace(taskID))
+	status, err := a.runtimeClient().DiscordTaskSync(ctx, strings.TrimSpace(taskID))
 	if err != nil {
 		a.emitDiscordStatusEvent()
 		return a.DiscordStatus(), err
@@ -1026,7 +1072,7 @@ func (a *App) discordHardSyncBlocking(baseCtx context.Context, preserveControlCh
 	}
 	ctx, cancel := context.WithTimeout(ctx, discordHardSyncTimeout)
 	defer cancel()
-	status, err := agxruntime.NewClient().DiscordHardSync(ctx)
+	status, err := a.runtimeClient().DiscordHardSync(ctx)
 	if err != nil {
 		a.emitDiscordStatusEvent()
 		return a.DiscordStatus(), err
@@ -1038,7 +1084,7 @@ func (a *App) discordHardSyncBlocking(baseCtx context.Context, preserveControlCh
 func (a *App) DiscordDisconnect() (DiscordStatusInfo, error) {
 	ctx, cancel := a.runtimeRequestContext(discordConnectTimeout)
 	defer cancel()
-	status, err := agxruntime.NewClient().DiscordDisconnect(ctx)
+	status, err := a.runtimeClient().DiscordDisconnect(ctx)
 	if err != nil {
 		a.emitDiscordStatusEvent()
 		return a.DiscordStatus(), err
@@ -1061,7 +1107,7 @@ func (a *App) ListTasks(projectID string) ([]Task, error) {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	tasks, err := agxruntime.NewClient().ListTasks(ctx, projectID)
+	tasks, err := a.runtimeClient().ListTasks(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -1091,7 +1137,7 @@ func (a *App) ListMonitorTasks() ([]MonitorTask, error) {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	tasks, err := agxruntime.NewClient().MonitorTasks(ctx)
+	tasks, err := a.runtimeClient().MonitorTasks(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1138,7 +1184,7 @@ func (a *App) ListTaskTranscript(taskID string, limit int) ([]TaskTranscriptMess
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	messages, err := agxruntime.NewClient().TaskTranscript(ctx, taskID, limit)
+	messages, err := a.runtimeClient().TaskTranscript(ctx, taskID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1185,7 +1231,7 @@ func (a *App) createDiscordTask(ctx context.Context, projectID, title, descripti
 		}
 		requestCtx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 		defer cancel()
-		task, err := agxruntime.NewClient().RunNewDiscordTaskWithWorkspace(requestCtx, projectID, title, descriptionPtr, agentName, allMighty, workspaceMode)
+		task, err := a.runtimeClient().RunNewDiscordTaskWithWorkspace(requestCtx, projectID, title, descriptionPtr, agentName, allMighty, workspaceMode)
 		if err != nil {
 			return Task{}, err
 		}
@@ -1248,7 +1294,7 @@ func (a *App) createTask(projectID, title, description, agentName string, allMig
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	task, err := agxruntime.NewClient().RunNewTaskWithInitialPromptWorkspace(ctx, projectID, title, descriptionPtr, agentName, allMighty, initialPrompt, workspaceMode)
+	task, err := a.runtimeClient().RunNewTaskWithInitialPromptWorkspace(ctx, projectID, title, descriptionPtr, agentName, allMighty, initialPrompt, workspaceMode)
 	if err != nil {
 		return Task{}, err
 	}
@@ -1276,7 +1322,7 @@ func (a *App) UpdateTaskTitle(taskID, title string) (Task, error) {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	updated, err := agxruntime.NewClient().UpdateTaskTitle(ctx, taskID, title)
+	updated, err := a.runtimeClient().UpdateTaskTitle(ctx, taskID, title)
 	if err != nil {
 		return Task{}, err
 	}
@@ -1363,14 +1409,14 @@ func (a *App) RunTask(taskID string) error {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	task, err := agxruntime.NewClient().GetTask(ctx, taskID)
+	task, err := a.runtimeClient().GetTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
 	if task.Interface == string(db.TaskInterfaceDiscord) {
 		return fmt.Errorf("task is controlled by Discord")
 	}
-	if _, err := agxruntime.NewClient().RunTask(ctx, task.ID); err != nil {
+	if _, err := a.runtimeClient().RunTask(ctx, task.ID); err != nil {
 		return err
 	}
 	a.emitMetadataEvent(task.ProjectID)
@@ -1384,7 +1430,7 @@ func (a *App) StopTask(taskID string) error {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	task, err := agxruntime.NewClient().StopTask(ctx, taskID)
+	task, err := a.runtimeClient().StopTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
@@ -1400,11 +1446,11 @@ func (a *App) DeleteTask(taskID string) error {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	task, err := agxruntime.NewClient().GetTask(ctx, taskID)
+	task, err := a.runtimeClient().GetTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
-	if err := agxruntime.NewClient().DeleteTask(ctx, task.ID); err != nil {
+	if err := a.runtimeClient().DeleteTask(ctx, task.ID); err != nil {
 		return err
 	}
 	a.StopLogStream(task.ID)
@@ -1419,14 +1465,14 @@ func (a *App) SendMessage(taskID, message string) error {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	task, err := agxruntime.NewClient().GetTask(ctx, taskID)
+	task, err := a.runtimeClient().GetTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
 	if task.Interface == string(db.TaskInterfaceDiscord) {
 		return fmt.Errorf("task is controlled by Discord")
 	}
-	_, err = agxruntime.NewClient().SendTaskMessage(ctx, task.ID, message)
+	_, err = a.runtimeClient().SendTaskMessage(ctx, task.ID, message)
 	return err
 }
 
@@ -1436,7 +1482,7 @@ func (a *App) RecordTaskInput(taskID, message string) error {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	task, err := agxruntime.NewClient().RecordTaskInput(ctx, taskID, message)
+	task, err := a.runtimeClient().RecordTaskInput(ctx, taskID, message)
 	if err != nil {
 		return err
 	}
@@ -1450,14 +1496,14 @@ func (a *App) SendInput(taskID, data string) error {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	task, err := agxruntime.NewClient().GetTask(ctx, taskID)
+	task, err := a.runtimeClient().GetTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
 	if task.Interface == string(db.TaskInterfaceDiscord) {
 		return fmt.Errorf("task is controlled by Discord")
 	}
-	return agxruntime.NewClient().SendTaskInput(ctx, task.ID, data)
+	return a.runtimeClient().SendTaskInput(ctx, task.ID, data)
 }
 
 func (a *App) ResizeTaskTerminal(taskID string, cols, rows int) error {
@@ -1466,7 +1512,7 @@ func (a *App) ResizeTaskTerminal(taskID string, cols, rows int) error {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	return agxruntime.NewClient().ResizeTaskTerminal(ctx, taskID, cols, rows)
+	return a.runtimeClient().ResizeTaskTerminal(ctx, taskID, cols, rows)
 }
 
 func (a *App) GetLogs(taskID string, lines int) (string, error) {
@@ -1475,7 +1521,7 @@ func (a *App) GetLogs(taskID string, lines int) (string, error) {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	return agxruntime.NewClient().TaskLogs(ctx, taskID, lines)
+	return a.runtimeClient().TaskLogs(ctx, taskID, lines)
 }
 
 func (a *App) StartLogStream(taskID string, lines int) error {
@@ -1507,7 +1553,7 @@ func (a *App) GetTaskStatus(taskID string) (string, error) {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	task, err := agxruntime.NewClient().GetTask(ctx, taskID)
+	task, err := a.runtimeClient().GetTask(ctx, taskID)
 	if err != nil {
 		return string(db.StatusOffline), err
 	}
@@ -1542,7 +1588,7 @@ func (a *App) ListAvailableAgents(projectID string) ([]Agent, error) {
 	if !a.directMode {
 		ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 		defer cancel()
-		agents, err := agxruntime.NewClient().ListAgents(ctx, projectID)
+		agents, err := a.runtimeClient().ListAgents(ctx, projectID)
 		if err != nil {
 			return nil, err
 		}
@@ -1754,7 +1800,7 @@ func (a *App) taskFileRoot(taskID string) (string, error) {
 	if !a.directMode {
 		ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 		defer cancel()
-		client := agxruntime.NewClient()
+		client := a.runtimeClient()
 		task, err := client.GetTask(ctx, taskID)
 		if err != nil {
 			return "", err
@@ -2097,7 +2143,7 @@ func (a *App) followLogFile(ctx context.Context, taskID, path string, offset int
 }
 
 func (a *App) forwardRuntimeLogStream(ctx context.Context, taskID string, lines int) {
-	events, err := agxruntime.NewClient().TaskLogStream(ctx, taskID, lines)
+	events, err := a.runtimeClient().TaskLogStream(ctx, taskID, lines)
 	if err != nil {
 		a.emitLogEvent(taskID, LogEvent{TaskID: taskID, Error: err.Error()})
 		return
@@ -2221,7 +2267,7 @@ func (a *App) forwardRuntimeEvents(ctx context.Context) {
 		return
 	}
 	for {
-		events, err := agxruntime.NewClient().Events(ctx)
+		events, err := a.runtimeClient().Events(ctx)
 		if err != nil {
 			a.emitRuntimeStatusEvent(a.RuntimeStatus())
 			select {
@@ -2275,7 +2321,7 @@ func (a *App) syncDiscordAsync() {
 	go func() {
 		for {
 			ctx, cancel := a.runtimeRequestContext(15 * time.Second)
-			if _, err := agxruntime.NewClient().DiscordSoftSync(ctx); err != nil {
+			if _, err := a.runtimeClient().DiscordSoftSync(ctx); err != nil {
 				log.Printf("operation=%q error=%v", "desktop_discord_soft_sync_background", err)
 			}
 			cancel()
@@ -2297,7 +2343,7 @@ func (a *App) deleteDiscordTaskChannelAsync(taskID string) {
 	go func() {
 		ctx, cancel := a.runtimeRequestContext(15 * time.Second)
 		defer cancel()
-		if _, err := agxruntime.NewClient().DiscordSoftSync(ctx); err != nil {
+		if _, err := a.runtimeClient().DiscordSoftSync(ctx); err != nil {
 			log.Printf("operation=%q task=%s error=%v", "desktop_discord_task_cleanup_sync", display.ShortID(taskID), err)
 		}
 		a.emitDiscordStatusEvent()
@@ -2691,7 +2737,7 @@ func (a *App) projectPath(projectID string) (string, error) {
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
-	project, err := agxruntime.NewClient().GetProject(ctx, projectID)
+	project, err := a.runtimeClient().GetProject(ctx, projectID)
 	if err != nil {
 		return "", err
 	}

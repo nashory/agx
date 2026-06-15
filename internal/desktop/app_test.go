@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,6 +116,130 @@ func TestNewAppDoesNotOpenRuntimeDatabase(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(configDir, "agx.db")); !os.IsNotExist(err) {
 		t.Fatalf("agx.db exists after NewApp: %v", err)
+	}
+}
+
+func TestRuntimeConfigUsesRuntimeClient(t *testing.T) {
+	app := NewAppWithStore(nil)
+	client := &fakeRuntimeClient{
+		configFunc: func(context.Context) (agxruntime.RuntimeConfig, error) {
+			return agxruntime.RuntimeConfig{DefaultAgent: "gemini"}, nil
+		},
+	}
+	withFakeRuntimeClient(t, client)
+
+	cfg, err := app.RuntimeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultAgent != "gemini" {
+		t.Fatalf("DefaultAgent = %q, want gemini", cfg.DefaultAgent)
+	}
+}
+
+func TestUpdateDefaultAgentUsesRuntimeClient(t *testing.T) {
+	app := NewAppWithStore(nil)
+	var gotAgent string
+	client := &fakeRuntimeClient{
+		updateDefaultAgentFunc: func(_ context.Context, agentName string) (agxruntime.RuntimeConfig, error) {
+			gotAgent = agentName
+			return agxruntime.RuntimeConfig{DefaultAgent: agentName}, nil
+		},
+	}
+	withFakeRuntimeClient(t, client)
+
+	cfg, err := app.UpdateDefaultAgent("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAgent != "codex" || cfg.DefaultAgent != "codex" {
+		t.Fatalf("UpdateDefaultAgent = (%q, %#v), want codex", gotAgent, cfg)
+	}
+}
+
+func TestDiscordConnectTrimsInputsAndReturnsStatusOnError(t *testing.T) {
+	app := NewAppWithStore(nil)
+	var token, guildID, allowedUserID string
+	client := &fakeRuntimeClient{
+		discordStatusFunc: func(context.Context) (agxdiscord.Status, error) {
+			return agxdiscord.Status{Enabled: false, Connected: false, Error: "missing token"}, nil
+		},
+		discordConnectFunc: func(_ context.Context, nextToken, nextGuildID, nextAllowedUserID string) (agxdiscord.Status, error) {
+			token = nextToken
+			guildID = nextGuildID
+			allowedUserID = nextAllowedUserID
+			return agxdiscord.Status{}, errors.New("discord bot token is required")
+		},
+	}
+	withFakeRuntimeClient(t, client)
+
+	status, err := app.DiscordConnect(" token ", " guild ", " user ")
+	if err == nil {
+		t.Fatal("DiscordConnect() error = nil, want runtime error")
+	}
+	if token != "token" || guildID != "guild" || allowedUserID != "user" {
+		t.Fatalf("connect args = (%q, %q, %q), want trimmed values", token, guildID, allowedUserID)
+	}
+	if status.Connected || status.Error != "missing token" {
+		t.Fatalf("status = %#v, want fallback DiscordStatus on connect error", status)
+	}
+}
+
+func TestCreateTaskNoPromptPassesWorkspaceModeToRuntime(t *testing.T) {
+	app := NewAppWithStore(nil)
+	var gotInitialPrompt *string
+	var gotWorkspaceMode db.WorkspaceMode
+	client := &fakeRuntimeClient{
+		runNewTaskWithInitialPromptWorkspaceFunc: func(_ context.Context, projectID, title string, description *string, agentName string, allMighty bool, initialPrompt *string, workspaceMode db.WorkspaceMode) (agxruntime.Task, error) {
+			gotInitialPrompt = initialPrompt
+			gotWorkspaceMode = workspaceMode
+			return agxruntime.Task{
+				ID:            "task-1",
+				ProjectID:     projectID,
+				Title:         title,
+				Agent:         agentName,
+				AllMighty:     allMighty,
+				WorkspaceMode: string(workspaceMode),
+				Status:        db.StatusOffline,
+				CreatedAt:     time.Now(),
+				UpdatedAt:     time.Now(),
+			}, nil
+		},
+	}
+	withFakeRuntimeClient(t, client)
+
+	task, err := app.CreateTaskNoPrompt("project-1", "  task title  ", "codex", true, string(db.WorkspaceModeProject))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotInitialPrompt == nil || *gotInitialPrompt != "" {
+		t.Fatalf("initial prompt = %#v, want explicit empty prompt", gotInitialPrompt)
+	}
+	if gotWorkspaceMode != db.WorkspaceModeProject || task.WorkspaceMode != string(db.WorkspaceModeProject) {
+		t.Fatalf("workspace mode = (%q, %q), want project", gotWorkspaceMode, task.WorkspaceMode)
+	}
+}
+
+func TestDiscordTaskSyncTrimsTaskID(t *testing.T) {
+	app := NewAppWithStore(nil)
+	var gotTaskID string
+	client := &fakeRuntimeClient{
+		discordTaskSyncFunc: func(_ context.Context, taskID string) (agxdiscord.Status, error) {
+			gotTaskID = taskID
+			return agxdiscord.Status{Enabled: true, Connected: true, GuildID: "guild"}, nil
+		},
+	}
+	withFakeRuntimeClient(t, client)
+
+	status, err := app.DiscordTaskSync(" task-1 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotTaskID != "task-1" {
+		t.Fatalf("taskID = %q, want trimmed task-1", gotTaskID)
+	}
+	if !status.Connected || status.GuildID != "guild" {
+		t.Fatalf("status = %#v, want synced Discord status", status)
 	}
 }
 
@@ -1008,4 +1133,178 @@ func entryNames(entries []FileEntry) []string {
 		names = append(names, entry.Name)
 	}
 	return names
+}
+
+type fakeRuntimeClient struct {
+	configFunc                               func(context.Context) (agxruntime.RuntimeConfig, error)
+	updateDefaultAgentFunc                   func(context.Context, string) (agxruntime.RuntimeConfig, error)
+	discordStatusFunc                        func(context.Context) (agxdiscord.Status, error)
+	discordConnectFunc                       func(context.Context, string, string, string) (agxdiscord.Status, error)
+	discordTaskSyncFunc                      func(context.Context, string) (agxdiscord.Status, error)
+	runNewTaskWithInitialPromptWorkspaceFunc func(context.Context, string, string, *string, string, bool, *string, db.WorkspaceMode) (agxruntime.Task, error)
+}
+
+func withFakeRuntimeClient(t *testing.T, client runtimeClient) {
+	t.Helper()
+	previous := newRuntimeClient
+	newRuntimeClient = func() runtimeClient { return client }
+	t.Cleanup(func() { newRuntimeClient = previous })
+}
+
+func (f *fakeRuntimeClient) Status(context.Context) (agxruntime.Status, error) {
+	return agxruntime.Status{}, nil
+}
+
+func (f *fakeRuntimeClient) Shutdown(context.Context) error {
+	return nil
+}
+
+func (f *fakeRuntimeClient) Config(ctx context.Context) (agxruntime.RuntimeConfig, error) {
+	if f.configFunc != nil {
+		return f.configFunc(ctx)
+	}
+	return agxruntime.RuntimeConfig{}, nil
+}
+
+func (f *fakeRuntimeClient) UpdateDefaultAgent(ctx context.Context, agentName string) (agxruntime.RuntimeConfig, error) {
+	if f.updateDefaultAgentFunc != nil {
+		return f.updateDefaultAgentFunc(ctx, agentName)
+	}
+	return agxruntime.RuntimeConfig{}, nil
+}
+
+func (f *fakeRuntimeClient) Events(context.Context) (<-chan agxruntime.Event, error) {
+	return make(chan agxruntime.Event), nil
+}
+
+func (f *fakeRuntimeClient) ListAgents(context.Context, string) ([]agxruntime.Agent, error) {
+	return nil, nil
+}
+
+func (f *fakeRuntimeClient) ListProjects(context.Context) ([]agxruntime.Project, error) {
+	return nil, nil
+}
+
+func (f *fakeRuntimeClient) CreateProject(context.Context, string, string, *string, *string) (agxruntime.Project, error) {
+	return agxruntime.Project{}, nil
+}
+
+func (f *fakeRuntimeClient) GetProject(context.Context, string) (agxruntime.Project, error) {
+	return agxruntime.Project{}, nil
+}
+
+func (f *fakeRuntimeClient) UpdateProjectDetails(context.Context, string, string, *string) (agxruntime.Project, error) {
+	return agxruntime.Project{}, nil
+}
+
+func (f *fakeRuntimeClient) GrantProjectAccess(context.Context, string) (agxruntime.Project, error) {
+	return agxruntime.Project{}, nil
+}
+
+func (f *fakeRuntimeClient) DeleteProject(context.Context, string) error {
+	return nil
+}
+
+func (f *fakeRuntimeClient) ListTasks(context.Context, string) ([]agxruntime.Task, error) {
+	return nil, nil
+}
+
+func (f *fakeRuntimeClient) MonitorTasks(context.Context) ([]agxruntime.MonitorTask, error) {
+	return nil, nil
+}
+
+func (f *fakeRuntimeClient) RunNewTaskWithInitialPromptWorkspace(ctx context.Context, projectID, title string, description *string, agentName string, allMighty bool, initialPrompt *string, workspaceMode db.WorkspaceMode) (agxruntime.Task, error) {
+	if f.runNewTaskWithInitialPromptWorkspaceFunc != nil {
+		return f.runNewTaskWithInitialPromptWorkspaceFunc(ctx, projectID, title, description, agentName, allMighty, initialPrompt, workspaceMode)
+	}
+	return agxruntime.Task{}, nil
+}
+
+func (f *fakeRuntimeClient) RunNewDiscordTaskWithWorkspace(context.Context, string, string, *string, string, bool, db.WorkspaceMode) (agxruntime.Task, error) {
+	return agxruntime.Task{}, nil
+}
+
+func (f *fakeRuntimeClient) GetTask(context.Context, string) (agxruntime.Task, error) {
+	return agxruntime.Task{}, nil
+}
+
+func (f *fakeRuntimeClient) UpdateTaskTitle(context.Context, string, string) (agxruntime.Task, error) {
+	return agxruntime.Task{}, nil
+}
+
+func (f *fakeRuntimeClient) RunTask(context.Context, string) (agxruntime.Task, error) {
+	return agxruntime.Task{}, nil
+}
+
+func (f *fakeRuntimeClient) StopTask(context.Context, string) (agxruntime.Task, error) {
+	return agxruntime.Task{}, nil
+}
+
+func (f *fakeRuntimeClient) DeleteTask(context.Context, string) error {
+	return nil
+}
+
+func (f *fakeRuntimeClient) SendTaskMessage(context.Context, string, string) (agxruntime.Task, error) {
+	return agxruntime.Task{}, nil
+}
+
+func (f *fakeRuntimeClient) RecordTaskInput(context.Context, string, string) (agxruntime.Task, error) {
+	return agxruntime.Task{}, nil
+}
+
+func (f *fakeRuntimeClient) SendTaskInput(context.Context, string, string) error {
+	return nil
+}
+
+func (f *fakeRuntimeClient) ResizeTaskTerminal(context.Context, string, int, int) error {
+	return nil
+}
+
+func (f *fakeRuntimeClient) TaskLogs(context.Context, string, int) (string, error) {
+	return "", nil
+}
+
+func (f *fakeRuntimeClient) TaskLogStream(context.Context, string, int) (<-chan agxruntime.TaskLogEvent, error) {
+	return make(chan agxruntime.TaskLogEvent), nil
+}
+
+func (f *fakeRuntimeClient) TaskTranscript(context.Context, string, int) ([]agxruntime.TaskTranscriptMessage, error) {
+	return nil, nil
+}
+
+func (f *fakeRuntimeClient) DiscordStatus(ctx context.Context) (agxdiscord.Status, error) {
+	if f.discordStatusFunc != nil {
+		return f.discordStatusFunc(ctx)
+	}
+	return agxdiscord.Status{}, nil
+}
+
+func (f *fakeRuntimeClient) DiscordConnect(ctx context.Context, token, guildID, allowedUserID string) (agxdiscord.Status, error) {
+	if f.discordConnectFunc != nil {
+		return f.discordConnectFunc(ctx, token, guildID, allowedUserID)
+	}
+	return agxdiscord.Status{}, nil
+}
+
+func (f *fakeRuntimeClient) DiscordDisconnect(context.Context) (agxdiscord.Status, error) {
+	return agxdiscord.Status{}, nil
+}
+
+func (f *fakeRuntimeClient) DiscordSoftSync(context.Context) (agxdiscord.Status, error) {
+	return agxdiscord.Status{}, nil
+}
+
+func (f *fakeRuntimeClient) DiscordHardSync(context.Context) (agxdiscord.Status, error) {
+	return agxdiscord.Status{}, nil
+}
+
+func (f *fakeRuntimeClient) DiscordTaskSync(ctx context.Context, taskID string) (agxdiscord.Status, error) {
+	if f.discordTaskSyncFunc != nil {
+		return f.discordTaskSyncFunc(ctx, taskID)
+	}
+	return agxdiscord.Status{}, nil
+}
+
+func (f *fakeRuntimeClient) DiscordInviteURL(context.Context, string) (string, error) {
+	return "", nil
 }
