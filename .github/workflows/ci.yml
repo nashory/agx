@@ -43,7 +43,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: sudo apt-get update && sudo apt-get install -y tmux pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
       - run: go build -o bin/agx ./cmd/agx
       - run: VERSION=ci make package-linux
       - run: make release-scan
@@ -83,7 +83,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/frontend/package-lock.json
-      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: sudo apt-get update && sudo apt-get install -y tmux pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
       - run: npm --prefix desktop/frontend ci
       - run: make release-verify
 

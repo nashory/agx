@@ -12,11 +12,16 @@ run() {
 
 cd "${ROOT}"
 
+desktop_tags="${AGX_DESKTOP_TAGS:-desktop,production}"
+if [ -z "${AGX_DESKTOP_TAGS:-}" ] && [ "$(uname -s)" = "Linux" ] && pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+  desktop_tags="${desktop_tags},webkit2_41"
+fi
+
 run go test ./...
 run npm --prefix desktop/frontend test
 run npm --prefix desktop/frontend run build
 run go build -ldflags "${AGX_RELEASE_LDFLAGS:-}" -o bin/agx ./cmd/agx
-run go build -tags "${AGX_DESKTOP_TAGS:-desktop,production}" -o bin/agx-desktop ./desktop
+run go build -tags "${desktop_tags}" -o bin/agx-desktop ./desktop
 
 run ./bin/agx --help
 run ./bin/agx --version
