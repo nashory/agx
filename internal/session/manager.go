@@ -99,46 +99,59 @@ func (m *Manager) RunNewTaskWithOptions(project db.Project, title string, descri
 	}
 	task, err := m.store.CreateTaskRuntimeModeInterfaceWorkspace(taskID, project.ID, title, description, agentName, options.AllMighty, db.TaskInterfaceLocal, workspaceMode, db.StatusActive, &windowName, prepared.Path, prepared.Branch)
 	if err != nil {
-		_ = removePreparedWorktree(project, prepared)
 		script.RemoveCommandScript(command)
-		return db.Task{}, err
+		return db.Task{}, m.withTaskStartupCleanupError(err, "create task row", func() error {
+			return removePreparedWorktreeForCleanup(project, prepared)
+		})
 	}
 	if prepared.Base != nil {
 		if err := m.store.UpdateTaskRuntimeBase(task.ID, task.SessionName, task.Status, task.WorktreePath, task.BranchName, prepared.Base); err != nil {
-			_ = removePreparedWorktree(project, prepared)
 			script.RemoveCommandScript(command)
-			_ = m.store.DeleteTask(taskID)
-			return db.Task{}, err
+			return db.Task{}, m.withTaskStartupCleanupError(err, "update task runtime", func() error {
+				return errors.Join(
+					removePreparedWorktreeForCleanup(project, prepared),
+					deleteTaskRowForCleanup(m.store, taskID),
+				)
+			})
 		}
 		task.BaseBranch = prepared.Base
 	}
 	target := tmux.Target(sessionName, windowName)
 	if err := m.ensureSession(sessionName, prepared.WorkingDir); err != nil {
-		_ = removePreparedWorktree(project, prepared)
 		script.RemoveCommandScript(command)
-		_ = m.store.DeleteTask(taskID)
-		return db.Task{}, err
+		return db.Task{}, m.withTaskStartupCleanupError(err, "create task session", func() error {
+			return errors.Join(
+				removePreparedWorktreeForCleanup(project, prepared),
+				deleteTaskRowForCleanup(m.store, taskID),
+			)
+		})
 	}
 	if err := m.createTaskWindow(sessionName, windowName, prepared.WorkingDir, command); err != nil {
-		_ = removePreparedWorktree(project, prepared)
 		script.RemoveCommandScript(command)
-		_ = m.tmux.KillWindow(target)
-		_ = m.store.DeleteTask(taskID)
-		return db.Task{}, err
+		return db.Task{}, m.withTaskStartupCleanupError(err, "create task window", func() error {
+			return errors.Join(
+				removePreparedWorktreeForCleanup(project, prepared),
+				killTaskWindowForCleanup(m.tmux, target),
+				deleteTaskRowForCleanup(m.store, taskID),
+			)
+		})
 	}
 	if err := m.verifyTaskWindowStarted(task, target, ag.ShouldInjectInitialPrompt()); err != nil {
-		_ = m.StopTask(task)
-		return db.Task{}, err
+		return db.Task{}, m.withTaskStartupCleanupError(err, "verify task window", func() error {
+			return stopTaskForCleanup(m, task)
+		})
 	}
 	if ag.ShouldInjectInitialPrompt() {
 		if err := m.prepareInjectedPromptSession(target, prompt); err != nil {
-			_ = m.StopTask(task)
-			return db.Task{}, err
+			return db.Task{}, m.withTaskStartupCleanupError(err, "prepare injected prompt", func() error {
+				return stopTaskForCleanup(m, task)
+			})
 		}
 		if prompt != "" {
 			if err := m.verifyTaskWindowStarted(task, target, true); err != nil {
-				_ = m.StopTask(task)
-				return db.Task{}, err
+				return db.Task{}, m.withTaskStartupCleanupError(err, "verify injected prompt", func() error {
+					return stopTaskForCleanup(m, task)
+				})
 			}
 		}
 	}
@@ -434,6 +447,43 @@ func (m *Manager) StopProject(project db.Project) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (m *Manager) withTaskStartupCleanupError(primary error, operation string, cleanup func() error) error {
+	cleanupErr := cleanup()
+	if cleanupErr == nil {
+		return primary
+	}
+	log.Printf("%s cleanup failed: %v", operation, cleanupErr)
+	return errors.Join(primary, fmt.Errorf("%s cleanup failed: %w", operation, cleanupErr))
+}
+
+func removePreparedWorktreeForCleanup(project db.Project, prepared worktree.Prepared) error {
+	if err := removePreparedWorktree(project, prepared); err != nil {
+		return fmt.Errorf("remove prepared worktree: %w", err)
+	}
+	return nil
+}
+
+func deleteTaskRowForCleanup(store *db.Store, taskID string) error {
+	if err := store.DeleteTask(taskID); err != nil {
+		return fmt.Errorf("delete task row: %w", err)
+	}
+	return nil
+}
+
+func killTaskWindowForCleanup(ctrl *tmux.Controller, target string) error {
+	if err := ctrl.KillWindow(target); err != nil {
+		return fmt.Errorf("kill task window %s: %w", target, err)
+	}
+	return nil
+}
+
+func stopTaskForCleanup(m *Manager, task db.Task) error {
+	if err := m.StopTask(task); err != nil {
+		return fmt.Errorf("stop task %s: %w", display.ShortID(task.ID), err)
+	}
+	return nil
 }
 
 func (m *Manager) taskTarget(task db.Task) (string, error) {
