@@ -28,6 +28,7 @@ type fakeCommandService struct {
 	channel       map[string]string
 	sendErr       error
 	interruptErr  error
+	killErr       error
 }
 
 func (f *fakeCommandService) ListTasks(context.Context) ([]TaskSummary, error) {
@@ -81,7 +82,7 @@ func (f *fakeCommandService) InterruptTask(ctx context.Context, taskID string) e
 func (f *fakeCommandService) KillTask(ctx context.Context, taskID, channelID string) error {
 	f.deleted = taskID
 	f.killedChannel = channelID
-	return nil
+	return f.killErr
 }
 
 func (f *fakeCommandService) TaskLogs(ctx context.Context, taskID string, lines int) (string, error) {
@@ -667,6 +668,25 @@ func TestCommandRouterPlainKillDeletesTask(t *testing.T) {
 	}
 }
 
+func TestCommandRouterPlainKillReportsPartialCleanupFailure(t *testing.T) {
+	service := &fakeCommandService{
+		channel: map[string]string{"channel-1": "task-1"},
+		killErr: partialSuccessTestError{message: "task task-1 deleted, but cleanup failed: remove task worktree"},
+	}
+	router := NewCommandRouter(config.DiscordConfig{AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.HandlePlainMessage(context.Background(), CommandInput{ChannelID: "channel-1", UserID: "user"}, "/kill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(response.Content, "deleted, but cleanup failed") {
+		t.Fatalf("response = %q, want partial cleanup warning", response.Content)
+	}
+	if service.deleted != "task-1" || service.killedChannel != "channel-1" {
+		t.Fatalf("deleted = %q channel = %q, want task-1/channel-1", service.deleted, service.killedChannel)
+	}
+}
+
 func TestCommandRouterSlashKillPassesCurrentChannel(t *testing.T) {
 	service := &fakeCommandService{
 		channel: map[string]string{"channel-1": "task-1"},
@@ -690,6 +710,18 @@ func TestCommandRouterSlashKillPassesCurrentChannel(t *testing.T) {
 	if !strings.Contains(response.Content, "deleting this task channel") {
 		t.Fatalf("response = %q, want channel deletion note", response.Content)
 	}
+}
+
+type partialSuccessTestError struct {
+	message string
+}
+
+func (e partialSuccessTestError) Error() string {
+	return e.message
+}
+
+func (e partialSuccessTestError) PartialSuccess() bool {
+	return true
 }
 
 func TestCommandRouterPlainMessageReportsUnlinkedChannel(t *testing.T) {

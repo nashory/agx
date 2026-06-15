@@ -8,6 +8,7 @@ import (
 
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
+	"github.com/nashory/agx/internal/session"
 )
 
 type discordCommandService struct {
@@ -123,6 +124,11 @@ func (s discordCommandService) deleteTask(ctx context.Context, taskID, fallbackC
 		return err
 	}
 	if err := s.runtime.managerForProject(project).DeleteTask(task); err != nil {
+		var cleanupErr session.TaskCleanupError
+		if errors.As(err, &cleanupErr) {
+			s.runtime.deleteDiscordChannelForTaskAsync(task, fallbackChannelID)
+			return cleanupErr
+		}
 		return err
 	}
 	s.runtime.deleteDiscordChannelForTaskAsync(task, fallbackChannelID)

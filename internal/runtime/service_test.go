@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -214,6 +215,25 @@ func TestDiscordTaskSyncRejectsLocalTask(t *testing.T) {
 	status, message := runtimeAPIError(t, service, http.MethodPost, "/v1/discord/tasks/"+task.ID+"/sync", nil)
 	if status != http.StatusBadRequest || !strings.Contains(message, "is not a Discord task") {
 		t.Fatalf("task sync error = (%d, %q), want non-Discord task bad request", status, message)
+	}
+}
+
+func TestRuntimeDeleteTaskReturnsCleanupFailureAfterDeletingRow(t *testing.T) {
+	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
+	service, project := newRuntimeAPITestService(t)
+	escapedWorktreePath := t.TempDir()
+	branchName := "agx/task-cleanup"
+	task, err := service.store.CreateTaskRuntime(db.NewTaskID(), project.ID, "cleanup failure", nil, "claude", db.StatusActive, nil, &escapedWorktreePath, &branchName)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, message := runtimeAPIError(t, service, http.MethodDelete, "/v1/tasks/"+task.ID, nil)
+	if status != http.StatusInternalServerError || !strings.Contains(message, "deleted, but cleanup failed") {
+		t.Fatalf("delete error = (%d, %q), want cleanup failure", status, message)
+	}
+	if _, err := service.store.GetTask(task.ID); !errors.Is(err, db.ErrTaskNotFound) {
+		t.Fatalf("GetTask after cleanup failure = %v, want ErrTaskNotFound", err)
 	}
 }
 

@@ -718,6 +718,13 @@ func (s *Service) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.managerForProject(project).DeleteTask(task); err != nil {
+		var cleanupErr session.TaskCleanupError
+		if errors.As(err, &cleanupErr) {
+			s.bus.Publish("task.deleted", map[string]string{"id": task.ID, "projectId": task.ProjectID})
+			s.deleteDiscordChannelForTaskAsync(task, "")
+			writeErrorStatus(w, http.StatusInternalServerError, cleanupErr)
+			return
+		}
 		writeError(w, err)
 		return
 	}

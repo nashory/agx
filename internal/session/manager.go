@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,28 @@ type Manager struct {
 	tmux           *tmux.Controller
 	registry       *agent.Registry
 	forceWorktrees bool
+}
+
+// TaskCleanupError reports that the task row was removed but generated runtime
+// resources such as the tmux window or worktree could not be fully cleaned up.
+type TaskCleanupError struct {
+	TaskID string
+	Err    error
+}
+
+func (e TaskCleanupError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("task %s deleted, but cleanup failed", display.ShortID(e.TaskID))
+	}
+	return fmt.Sprintf("task %s deleted, but cleanup failed: %v", display.ShortID(e.TaskID), e.Err)
+}
+
+func (e TaskCleanupError) Unwrap() error {
+	return e.Err
+}
+
+func (e TaskCleanupError) PartialSuccess() bool {
+	return true
 }
 
 // RunOptions controls how a new task is started in tmux.
@@ -370,6 +393,11 @@ func (m *Manager) DeleteTask(task db.Task) error {
 	}
 	if err := m.store.DeleteTask(task.ID); err != nil {
 		return errors.Join(append(cleanupErrs, err)...)
+	}
+	if cleanupErr := errors.Join(cleanupErrs...); cleanupErr != nil {
+		err := TaskCleanupError{TaskID: task.ID, Err: cleanupErr}
+		log.Printf("task cleanup failed after delete: %v", err)
+		return err
 	}
 	return nil
 }

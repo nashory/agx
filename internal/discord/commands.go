@@ -312,6 +312,9 @@ func (r *CommandRouter) HandlePlainMessage(ctx context.Context, input CommandInp
 	}
 	if isPlainKillMessage(message) {
 		if err := r.service.KillTask(ctx, taskID, input.ChannelID); err != nil {
+			if isPartialSuccessError(err) {
+				return CommandResponse{Content: err.Error()}, nil
+			}
 			return CommandResponse{}, err
 		}
 		return CommandResponse{Content: fmt.Sprintf("Task `%s` killed; deleting this task channel.", shortID(taskID))}, nil
@@ -350,9 +353,17 @@ func (r *CommandRouter) killTask(ctx context.Context, input CommandInput) (Comma
 		return CommandResponse{}, err
 	}
 	if err := r.service.KillTask(ctx, taskID, input.ChannelID); err != nil {
+		if isPartialSuccessError(err) {
+			return CommandResponse{Content: err.Error()}, nil
+		}
 		return CommandResponse{}, err
 	}
 	return CommandResponse{Content: fmt.Sprintf("Task `%s` killed; deleting this task channel.", shortID(taskID))}, nil
+}
+
+func isPartialSuccessError(err error) bool {
+	var partial interface{ PartialSuccess() bool }
+	return errors.As(err, &partial) && partial.PartialSuccess()
 }
 
 func (r *CommandRouter) clearTaskContext(ctx context.Context, input CommandInput) (CommandResponse, error) {

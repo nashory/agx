@@ -396,6 +396,35 @@ esac
 	}
 }
 
+func TestManagerDeleteTaskReportsCleanupFailureAfterDeletingRow(t *testing.T) {
+	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escapedWorktreePath := t.TempDir()
+	branchName := "agx/task-cleanup"
+	task, err := store.CreateTaskRuntime(db.NewTaskID(), project.ID, "cleanup failure", nil, "claude", db.StatusActive, nil, &escapedWorktreePath, &branchName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(store, tmux.NewController(), agent.NewRegistry("claude"))
+
+	err = manager.DeleteTask(task)
+	var cleanupErr TaskCleanupError
+	if !errors.As(err, &cleanupErr) {
+		t.Fatalf("DeleteTask() error = %v, want TaskCleanupError", err)
+	}
+	if _, err := store.GetTask(task.ID); !errors.Is(err, db.ErrTaskNotFound) {
+		t.Fatalf("GetTask after partial cleanup error = %v, want ErrTaskNotFound", err)
+	}
+}
+
 func newSessionStoreWithLiveTask(t *testing.T) (*db.Store, db.Project, db.Task) {
 	t.Helper()
 	store, err := db.OpenMemory()
