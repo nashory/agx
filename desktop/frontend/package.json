@@ -17,7 +17,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "test": "node scripts/workflow-smoke.mjs",
+    "test": "vitest run && node scripts/workflow-smoke.mjs",
+    "test:unit": "vitest run",
+    "test:smoke": "node scripts/workflow-smoke.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview --host 127.0.0.1"
   },
@@ -34,7 +36,12 @@
     "vite": "^6.0.6"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5"
+    "@types/react-dom": "^18.3.5",
+    "jsdom": "^29.1.1",
+    "vitest": "^4.1.9"
   }
 }
