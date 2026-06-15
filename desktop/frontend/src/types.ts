@@ -46,7 +46,18 @@ export type Task = {
   branchName?: string;
   agentThreadId?: string;
   agentStreamKind?: string;
+  discordSync?: TaskDiscordSync;
   createdAt: string;
+  updatedAt: string;
+};
+
+export type TaskDiscordSync = {
+  status: 'pending' | 'synced' | 'failed';
+  attempts: number;
+  discordChannelId?: string;
+  lastSuccessAt?: string;
+  lastFailureAt?: string;
+  lastError?: string;
   updatedAt: string;
 };
 

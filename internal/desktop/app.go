@@ -94,24 +94,35 @@ type Project struct {
 // Task is the desktop DTO for a task. It intentionally mirrors runtime fields so
 // the UI can show both legacy tmux tasks and structured agent stream tasks.
 type Task struct {
-	ID               string    `json:"id"`
-	ProjectID        string    `json:"projectId"`
-	Title            string    `json:"title"`
-	Description      *string   `json:"description,omitempty"`
-	LastUserPrompt   *string   `json:"lastUserPrompt,omitempty"`
-	Interface        string    `json:"interface"`
-	Status           string    `json:"status"`
-	Agent            string    `json:"agent"`
-	AllMighty        bool      `json:"allMighty"`
-	WorkspaceMode    string    `json:"workspaceMode"`
-	SessionName      *string   `json:"sessionName,omitempty"`
-	WorktreePath     *string   `json:"worktreePath,omitempty"`
-	BranchName       *string   `json:"branchName,omitempty"`
-	AgentThreadID    *string   `json:"agentThreadId,omitempty"`
-	AgentEventCursor *string   `json:"agentEventCursor,omitempty"`
-	AgentStreamKind  *string   `json:"agentStreamKind,omitempty"`
-	CreatedAt        time.Time `json:"createdAt"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	ID               string           `json:"id"`
+	ProjectID        string           `json:"projectId"`
+	Title            string           `json:"title"`
+	Description      *string          `json:"description,omitempty"`
+	LastUserPrompt   *string          `json:"lastUserPrompt,omitempty"`
+	Interface        string           `json:"interface"`
+	Status           string           `json:"status"`
+	Agent            string           `json:"agent"`
+	AllMighty        bool             `json:"allMighty"`
+	WorkspaceMode    string           `json:"workspaceMode"`
+	SessionName      *string          `json:"sessionName,omitempty"`
+	WorktreePath     *string          `json:"worktreePath,omitempty"`
+	BranchName       *string          `json:"branchName,omitempty"`
+	AgentThreadID    *string          `json:"agentThreadId,omitempty"`
+	AgentEventCursor *string          `json:"agentEventCursor,omitempty"`
+	AgentStreamKind  *string          `json:"agentStreamKind,omitempty"`
+	DiscordSync      *TaskDiscordSync `json:"discordSync,omitempty"`
+	CreatedAt        time.Time        `json:"createdAt"`
+	UpdatedAt        time.Time        `json:"updatedAt"`
+}
+
+type TaskDiscordSync struct {
+	Status           string     `json:"status"`
+	Attempts         int        `json:"attempts"`
+	DiscordChannelID *string    `json:"discordChannelId,omitempty"`
+	LastSuccessAt    *time.Time `json:"lastSuccessAt,omitempty"`
+	LastFailureAt    *time.Time `json:"lastFailureAt,omitempty"`
+	LastError        *string    `json:"lastError,omitempty"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
 }
 
 // MonitorTask augments a task with project context for monitor views.
@@ -2501,6 +2512,21 @@ func (a *App) taskDTO(task db.Task) Task {
 	}
 }
 
+func desktopDiscordSyncDTO(sync *agxruntime.DiscordSync) *TaskDiscordSync {
+	if sync == nil {
+		return nil
+	}
+	return &TaskDiscordSync{
+		Status:           sync.Status,
+		Attempts:         sync.Attempts,
+		DiscordChannelID: sync.DiscordChannelID,
+		LastSuccessAt:    sync.LastSuccessAt,
+		LastFailureAt:    sync.LastFailureAt,
+		LastError:        sync.LastError,
+		UpdatedAt:        sync.UpdatedAt,
+	}
+}
+
 func runtimeTaskDTO(task agxruntime.Task) Task {
 	return Task{
 		ID:               task.ID,
@@ -2519,6 +2545,7 @@ func runtimeTaskDTO(task agxruntime.Task) Task {
 		AgentThreadID:    task.AgentThreadID,
 		AgentEventCursor: task.AgentEventCursor,
 		AgentStreamKind:  task.AgentStreamKind,
+		DiscordSync:      desktopDiscordSyncDTO(task.DiscordSync),
 		CreatedAt:        task.CreatedAt,
 		UpdatedAt:        task.UpdatedAt,
 	}

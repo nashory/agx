@@ -243,7 +243,7 @@ func (s *Service) detectAndStoreStatus(task db.Task) db.TaskStatus {
 			_ = s.store.UpdateTaskStatus(task.ID, db.StatusOffline)
 			updated := task
 			updated.Status = db.StatusOffline
-			s.bus.Publish("task.changed", taskDTO(updated))
+			s.bus.Publish("task.changed", s.taskDTO(updated))
 			return db.StatusOffline
 		}
 		return task.Status
@@ -281,7 +281,7 @@ func (s *Service) detectAndStoreStatus(task db.Task) db.TaskStatus {
 		if err := s.store.UpdateTaskStatus(task.ID, status); err == nil {
 			updated := task
 			updated.Status = status
-			s.bus.Publish("task.changed", taskDTO(updated))
+			s.bus.Publish("task.changed", s.taskDTO(updated))
 		}
 	}
 	return status

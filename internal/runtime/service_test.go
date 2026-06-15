@@ -300,6 +300,26 @@ func TestRuntimeErrorResponseIncludesValidationCode(t *testing.T) {
 	}
 }
 
+func TestRuntimeTaskDTOIncludesDiscordSyncState(t *testing.T) {
+	service, project := newRuntimeAPITestService(t)
+	task, err := service.store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "discord task", nil, "codex", false, db.TaskInterfaceDiscord, db.StatusWaiting, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.store.MarkDiscordTaskSyncFailure(task.ID, errors.New("discord timeout")); err != nil {
+		t.Fatal(err)
+	}
+
+	var dto Task
+	status := runtimeAPIRequest(t, service, http.MethodGet, "/v1/tasks/"+task.ID, nil, &dto)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want OK", status)
+	}
+	if dto.DiscordSync == nil || dto.DiscordSync.Status != string(db.DiscordTaskSyncFailed) || dto.DiscordSync.LastError == nil || *dto.DiscordSync.LastError != "discord timeout" {
+		t.Fatalf("DiscordSync = %#v, want failed timeout state", dto.DiscordSync)
+	}
+}
+
 func TestRuntimePatchTaskMetadata(t *testing.T) {
 	service, project := newRuntimeAPITestService(t)
 	description := "original"

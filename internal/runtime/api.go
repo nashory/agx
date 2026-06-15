@@ -92,8 +92,19 @@ type Task struct {
 	AgentThreadID    *string       `json:"agentThreadId,omitempty"`
 	AgentEventCursor *string       `json:"agentEventCursor,omitempty"`
 	AgentStreamKind  *string       `json:"agentStreamKind,omitempty"`
+	DiscordSync      *DiscordSync  `json:"discordSync,omitempty"`
 	CreatedAt        time.Time     `json:"createdAt"`
 	UpdatedAt        time.Time     `json:"updatedAt"`
+}
+
+type DiscordSync struct {
+	Status           string     `json:"status"`
+	Attempts         int        `json:"attempts"`
+	DiscordChannelID *string    `json:"discordChannelId,omitempty"`
+	LastSuccessAt    *time.Time `json:"lastSuccessAt,omitempty"`
+	LastFailureAt    *time.Time `json:"lastFailureAt,omitempty"`
+	LastError        *string    `json:"lastError,omitempty"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
 }
 
 // MonitorTask augments a live task with project context for monitor clients.
@@ -448,7 +459,7 @@ func (s *Service) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]Task, 0, len(tasks))
 	for _, task := range tasks {
-		out = append(out, taskDTO(task))
+		out = append(out, s.taskDTO(task))
 	}
 	writeJSON(w, out)
 }
@@ -466,7 +477,7 @@ func (s *Service) handleMonitorTasks(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		out = append(out, MonitorTask{
-			Task:        taskDTO(refreshed),
+			Task:        s.taskDTO(refreshed),
 			ProjectName: task.ProjectName,
 			ProjectPath: task.ProjectPath,
 		})
@@ -523,7 +534,7 @@ func (s *Service) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 				writeError(w, err)
 				return
 			}
-			dto := taskDTO(task)
+			dto := s.taskDTO(task)
 			s.bus.Publish("task.changed", dto)
 			writeJSON(w, dto)
 			return
@@ -550,7 +561,7 @@ func (s *Service) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		dto := taskDTO(task)
+		dto := s.taskDTO(task)
 		s.bus.Publish("task.changed", dto)
 		writeJSON(w, dto)
 		return
@@ -575,7 +586,7 @@ func (s *Service) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	dto := taskDTO(task)
+	dto := s.taskDTO(task)
 	s.bus.Publish("task.changed", dto)
 	writeJSON(w, dto)
 }
@@ -591,7 +602,7 @@ func (s *Service) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		task = refreshed
 	}
-	writeJSON(w, taskDTO(task))
+	writeJSON(w, s.taskDTO(task))
 }
 
 func (s *Service) handlePatchTask(w http.ResponseWriter, r *http.Request) {
@@ -627,7 +638,7 @@ func (s *Service) handlePatchTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	dto := taskDTO(updated)
+	dto := s.taskDTO(updated)
 	s.bus.Publish("task.changed", dto)
 	writeJSON(w, dto)
 }
@@ -650,7 +661,7 @@ func (s *Service) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	dto := taskDTO(refreshed)
+	dto := s.taskDTO(refreshed)
 	s.bus.Publish("task.changed", dto)
 	writeJSON(w, dto)
 }
@@ -684,7 +695,7 @@ func (s *Service) handleStopTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	dto := taskDTO(refreshed)
+	dto := s.taskDTO(refreshed)
 	s.bus.Publish("task.changed", dto)
 	s.deleteDiscordChannelForTaskAsync(task, "")
 	writeJSON(w, dto)
@@ -715,7 +726,7 @@ func (s *Service) handleInterruptTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	dto := taskDTO(task)
+	dto := s.taskDTO(task)
 	s.bus.Publish("task.changed", dto)
 	writeJSON(w, dto)
 }
@@ -787,7 +798,7 @@ func (s *Service) handleSendTaskMessage(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	dto := taskDTO(refreshed)
+	dto := s.taskDTO(refreshed)
 	s.bus.Publish("task.changed", dto)
 	writeJSON(w, dto)
 }
@@ -971,7 +982,7 @@ func (s *Service) handleRecordTaskInput(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	dto := taskDTO(updated)
+	dto := s.taskDTO(updated)
 	s.bus.Publish("task.changed", dto)
 	writeJSON(w, dto)
 }
@@ -1080,7 +1091,7 @@ func (s *Service) handleDiscordTaskSync(w http.ResponseWriter, r *http.Request) 
 	}
 	status := s.discord.Status()
 	s.bus.Publish("discord.status", status)
-	s.bus.Publish("task.changed", taskDTO(task))
+	s.bus.Publish("task.changed", s.taskDTO(task))
 	writeJSON(w, status)
 }
 
@@ -1325,7 +1336,28 @@ func (s *Service) projectDTO(project db.Project) Project {
 	return dto
 }
 
-func taskDTO(task db.Task) Task {
+func (s *Service) taskDTO(task db.Task) Task {
+	dto := baseTaskDTO(task)
+	if task.Interface != db.TaskInterfaceDiscord {
+		return dto
+	}
+	state, err := s.store.GetDiscordTaskSyncState(task.ID)
+	if err != nil {
+		return dto
+	}
+	dto.DiscordSync = &DiscordSync{
+		Status:           string(state.Status),
+		Attempts:         state.Attempts,
+		DiscordChannelID: state.DiscordChannelID,
+		LastSuccessAt:    state.LastSuccessAt,
+		LastFailureAt:    state.LastFailureAt,
+		LastError:        state.LastError,
+		UpdatedAt:        state.UpdatedAt,
+	}
+	return dto
+}
+
+func baseTaskDTO(task db.Task) Task {
 	return Task{
 		ID:               task.ID,
 		ProjectID:        task.ProjectID,
