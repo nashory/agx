@@ -413,7 +413,7 @@ func TestSyncTaskChannelRecordsFailureState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != db.DiscordTaskSyncFailed || state.Attempts != 2 || state.LastError == nil || !strings.Contains(*state.LastError, "discord timeout") {
+	if state.Status != db.DiscordTaskSyncFailed || state.Attempts != 1 || state.LastError == nil || !strings.Contains(*state.LastError, "discord timeout") {
 		t.Fatalf("sync state = %#v, want failed timeout state", state)
 	}
 }

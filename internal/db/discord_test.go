@@ -114,8 +114,8 @@ func TestDiscordTaskSyncStateTracksAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if failed.Status != DiscordTaskSyncFailed || failed.Attempts != 2 || failed.LastError == nil || *failed.LastError != "timeout" {
-		t.Fatalf("failed state = %#v, want failed attempt 2 with error", failed)
+	if failed.Status != DiscordTaskSyncFailed || failed.Attempts != 1 || failed.LastError == nil || *failed.LastError != "timeout" {
+		t.Fatalf("failed state = %#v, want failed attempt 1 with error", failed)
 	}
 	synced, err := store.MarkDiscordTaskSyncSuccess(task.ID, "channel-1")
 	if err != nil {

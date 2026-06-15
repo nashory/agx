@@ -174,7 +174,10 @@ INSERT INTO discord_task_sync_state (task_id, status, attempts, last_failure_at,
 VALUES (?, ?, 1, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)
 ON CONFLICT(task_id) DO UPDATE SET
 	status = excluded.status,
-	attempts = discord_task_sync_state.attempts + 1,
+	attempts = CASE
+		WHEN discord_task_sync_state.status = 'pending' THEN discord_task_sync_state.attempts
+		ELSE discord_task_sync_state.attempts + 1
+	END,
 	last_failure_at = CURRENT_TIMESTAMP,
 	last_error = excluded.last_error,
 	updated_at = CURRENT_TIMESTAMP
