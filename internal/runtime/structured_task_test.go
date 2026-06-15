@@ -2,10 +2,12 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nashory/agx/internal/codexapp"
@@ -20,6 +22,8 @@ type fakeCodexRuntime struct {
 	interrupted  string
 	nextThreadID string
 	nextTurnID   string
+	threadErr    error
+	dirtyThread  bool
 }
 
 func newFakeCodexRuntime() *fakeCodexRuntime {
@@ -36,6 +40,14 @@ func (f *fakeCodexRuntime) Initialize(context.Context) (codexapp.InitializeRespo
 
 func (f *fakeCodexRuntime) ThreadStart(_ context.Context, cwd string, allMighty bool) (codexapp.ThreadStartResponse, error) {
 	f.threadCwd = cwd
+	if f.dirtyThread {
+		if err := os.WriteFile(filepath.Join(cwd, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+			return codexapp.ThreadStartResponse{}, err
+		}
+	}
+	if f.threadErr != nil {
+		return codexapp.ThreadStartResponse{}, f.threadErr
+	}
 	return codexapp.ThreadStartResponse{Thread: codexapp.Thread{ID: f.nextThreadID, Cwd: cwd}}, nil
 }
 
@@ -203,6 +215,58 @@ func TestCreateStructuredDiscordTaskCanUseProjectWorkspace(t *testing.T) {
 	}
 	if fake.turnCwd != "" {
 		t.Fatalf("structured project task started unexpected turn cwd=%q", fake.turnCwd)
+	}
+}
+
+func TestCreateStructuredDiscordTaskReportsRollbackCleanupFailure(t *testing.T) {
+	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
+	addExecutableToPath(t, "codex")
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	projectRoot := initRuntimeGitRepo(t)
+	project, err := store.EnsureProject(projectRoot, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	fake := newFakeCodexRuntime()
+	fake.dirtyThread = true
+	fake.threadErr = errors.New("codex thread failed")
+	service.agents.startCodex = func(context.Context) (codexRuntime, error) {
+		return fake, nil
+	}
+
+	_, err = service.createStructuredDiscordTask(context.Background(), project, createTaskRequest{
+		ProjectID:      project.ID,
+		Title:          "rollback",
+		Agent:          "codex",
+		AllMighty:      true,
+		RunImmediately: true,
+		Discord:        true,
+	}, "codex")
+	if err == nil {
+		t.Fatal("createStructuredDiscordTask succeeded, want rollback cleanup error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "codex thread failed") || !strings.Contains(message, "rollback structured Discord task") || !strings.Contains(message, "remove structured worktree") {
+		t.Fatalf("error = %q, want primary and cleanup details", message)
+	}
+	tasks, err := store.ListTasks(project.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("tasks = %d, want rollback to delete task row", len(tasks))
+	}
+	if fake.threadCwd == "" {
+		t.Fatal("thread cwd is empty")
+	}
+	if _, err := os.Stat(fake.threadCwd); err != nil {
+		t.Fatalf("dirty worktree stat error = %v, want leftover worktree for cleanup warning", err)
 	}
 }
 

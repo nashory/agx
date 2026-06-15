@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/nashory/agx/internal/config"
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
+	"github.com/nashory/agx/internal/display"
 	"github.com/nashory/agx/internal/session"
 )
 
@@ -1231,7 +1233,9 @@ func (s *Service) deleteDiscordChannelForTaskAsync(task db.Task, fallbackChannel
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_ = s.discord.DeleteTaskChannelWithFallback(ctx, taskID, fallbackChannelID)
+		if err := s.discord.DeleteTaskChannelWithFallback(ctx, taskID, fallbackChannelID); err != nil {
+			log.Printf("discord task channel cleanup failed for task %s: %v", display.ShortID(taskID), err)
+		}
 		s.bus.Publish("discord.status", s.discord.Status())
 	}()
 }
