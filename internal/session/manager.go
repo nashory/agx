@@ -200,21 +200,29 @@ func (m *Manager) restartTask(task db.Task, promptOverride *string) error {
 		return err
 	}
 	if err := m.store.UpdateTaskRuntimeBase(task.ID, &windowName, db.StatusActive, prepared.Path, prepared.Branch, prepared.Base); err != nil {
-		_ = removePreparedWorktree(project, prepared)
 		script.RemoveCommandScript(command)
-		return err
+		return m.withTaskStartupCleanupError(err, "restart task runtime update", func() error {
+			return removePreparedWorktreeForCleanup(project, prepared)
+		})
 	}
 	if err := m.ensureSession(sessionName, prepared.WorkingDir); err != nil {
-		_ = removePreparedWorktree(project, prepared)
 		script.RemoveCommandScript(command)
-		_ = m.store.UpdateTaskRuntimeBase(task.ID, task.SessionName, task.Status, task.WorktreePath, task.BranchName, task.BaseBranch)
-		return err
+		return m.withTaskStartupCleanupError(err, "restart task session", func() error {
+			return errors.Join(
+				removePreparedWorktreeForCleanup(project, prepared),
+				restoreTaskRuntimeForCleanup(m.store, task),
+			)
+		})
 	}
 	if err := m.createTaskWindow(sessionName, windowName, prepared.WorkingDir, command); err != nil {
-		_ = removePreparedWorktree(project, prepared)
 		script.RemoveCommandScript(command)
-		_ = m.store.UpdateTaskRuntimeBase(task.ID, task.SessionName, task.Status, task.WorktreePath, task.BranchName, task.BaseBranch)
-		return err
+		return m.withTaskStartupCleanupError(err, "restart task window", func() error {
+			return errors.Join(
+				removePreparedWorktreeForCleanup(project, prepared),
+				killTaskWindowForCleanup(m.tmux, target),
+				restoreTaskRuntimeForCleanup(m.store, task),
+			)
+		})
 	}
 	refreshed := task
 	refreshed.SessionName = &windowName
@@ -223,21 +231,30 @@ func (m *Manager) restartTask(task db.Task, promptOverride *string) error {
 	refreshed.BranchName = prepared.Branch
 	refreshed.BaseBranch = prepared.Base
 	if err := m.verifyTaskWindowStarted(refreshed, target, ag.ShouldInjectInitialPrompt()); err != nil {
-		_ = m.StopTask(refreshed)
-		_ = m.store.UpdateTaskRuntimeBase(task.ID, task.SessionName, task.Status, task.WorktreePath, task.BranchName, task.BaseBranch)
-		return err
+		return m.withTaskStartupCleanupError(err, "verify restarted task window", func() error {
+			return errors.Join(
+				stopTaskForCleanup(m, refreshed),
+				restoreTaskRuntimeForCleanup(m.store, task),
+			)
+		})
 	}
 	if ag.ShouldInjectInitialPrompt() {
 		if err := m.prepareInjectedPromptSession(target, prompt); err != nil {
-			_ = m.StopTask(task)
-			_ = m.store.UpdateTaskRuntimeBase(task.ID, task.SessionName, task.Status, task.WorktreePath, task.BranchName, task.BaseBranch)
-			return err
+			return m.withTaskStartupCleanupError(err, "prepare restarted task injected prompt", func() error {
+				return errors.Join(
+					stopTaskForCleanup(m, refreshed),
+					restoreTaskRuntimeForCleanup(m.store, task),
+				)
+			})
 		}
 		if prompt != "" {
 			if err := m.verifyTaskWindowStarted(refreshed, target, true); err != nil {
-				_ = m.StopTask(refreshed)
-				_ = m.store.UpdateTaskRuntimeBase(task.ID, task.SessionName, task.Status, task.WorktreePath, task.BranchName, task.BaseBranch)
-				return err
+				return m.withTaskStartupCleanupError(err, "verify restarted task injected prompt", func() error {
+					return errors.Join(
+						stopTaskForCleanup(m, refreshed),
+						restoreTaskRuntimeForCleanup(m.store, task),
+					)
+				})
 			}
 		}
 	}
@@ -473,6 +490,9 @@ func deleteTaskRowForCleanup(store *db.Store, taskID string) error {
 }
 
 func killTaskWindowForCleanup(ctrl *tmux.Controller, target string) error {
+	if !ctrl.WindowExists(target) {
+		return nil
+	}
 	if err := ctrl.KillWindow(target); err != nil {
 		return fmt.Errorf("kill task window %s: %w", target, err)
 	}
@@ -482,6 +502,13 @@ func killTaskWindowForCleanup(ctrl *tmux.Controller, target string) error {
 func stopTaskForCleanup(m *Manager, task db.Task) error {
 	if err := m.StopTask(task); err != nil {
 		return fmt.Errorf("stop task %s: %w", display.ShortID(task.ID), err)
+	}
+	return nil
+}
+
+func restoreTaskRuntimeForCleanup(store *db.Store, task db.Task) error {
+	if err := store.UpdateTaskRuntimeBase(task.ID, task.SessionName, task.Status, task.WorktreePath, task.BranchName, task.BaseBranch); err != nil {
+		return fmt.Errorf("restore task runtime %s: %w", display.ShortID(task.ID), err)
 	}
 	return nil
 }

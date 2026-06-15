@@ -189,6 +189,78 @@ exit 0
 	}
 }
 
+func TestRunTaskReportsRestartCleanupFailureAndRestoresRuntime(t *testing.T) {
+	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
+	root := t.TempDir()
+	initSessionGitRepo(t, root)
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterfaceWorkspace(db.NewTaskID(), project.ID, "restart", nil, "test", false, db.TaskInterfaceLocal, db.WorkspaceModeWorktree, db.StatusOffline, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	agentPath := filepath.Join(binDir, "test-agent")
+	if err := os.WriteFile(agentPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dirtyPathFile := filepath.Join(t.TempDir(), "dirty-path")
+	t.Setenv("AGX_DIRTY_PATH", dirtyPathFile)
+	installSessionFakeTmux(t, `#!/bin/sh
+printf '%s\n' "$*" >> "$AGX_TMUX_LOG"
+case "$*" in
+  *"has-session"*) exit 1 ;;
+  *"new-window"*)
+    previous=""
+    cwd=""
+    for arg in "$@"; do
+      if [ "$previous" = "-c" ]; then
+        cwd="$arg"
+      fi
+      previous="$arg"
+    done
+    printf '%s\n' "$cwd" > "$AGX_DIRTY_PATH"
+    printf dirty > "$cwd/dirty.txt"
+    printf 'restart window failed\n' >&2
+    exit 1
+    ;;
+esac
+exit 0
+`)
+	manager := NewManager(store, tmux.NewController(), agent.NewRegistry("test", agent.Agent{Name: "test", Command: "test-agent"})).ForceTaskWorktrees()
+
+	err = manager.RunTask(task)
+	if err == nil {
+		t.Fatal("RunTask succeeded, want restart cleanup error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "restart window failed") || !strings.Contains(message, "restart task window cleanup failed") || !strings.Contains(message, "remove prepared worktree") {
+		t.Fatalf("error = %q, want primary and cleanup details", message)
+	}
+	refreshed, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Status != db.StatusOffline || refreshed.SessionName != nil || refreshed.WorktreePath != nil || refreshed.BranchName != nil || refreshed.BaseBranch != nil {
+		t.Fatalf("task after failed restart = %#v, want original offline runtime state", refreshed)
+	}
+	dirtyPath, err := os.ReadFile(dirtyPathFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(strings.TrimSpace(string(dirtyPath))); err != nil {
+		t.Fatalf("dirty worktree stat error = %v, want leftover worktree for cleanup warning", err)
+	}
+}
+
 func TestRecoverLiveTasksMarksLegacyTasksOfflineAndPreservesStructuredTasks(t *testing.T) {
 	store, err := db.OpenMemory()
 	if err != nil {
