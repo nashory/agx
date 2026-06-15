@@ -215,6 +215,27 @@ make smoke
 make smoke-desktop
 ```
 
+Run the release verification gate:
+
+```bash
+make release-verify
+```
+
+After packaging release assets, require artifact scanning:
+
+```bash
+AGX_REQUIRE_RELEASE_ARTIFACTS=1 make release-verify
+```
+
+Package-level ownership of release checks:
+
+- `internal/db`: migrations, compatibility, and persistent state tests.
+- `internal/runtime`: runtime API, lifecycle, restart, and smoke behavior.
+- `internal/discord`: Discord sync, auth, command, and failure handling.
+- `internal/desktop` and `desktop/frontend`: Desktop API bridge, UI build, and
+  user-visible workflow behavior.
+- `scripts`: packaging, checksums, and artifact safety checks.
+
 Run the doctor:
 
 ```bash

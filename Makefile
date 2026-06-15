@@ -9,7 +9,7 @@ LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DA
 
 export GOPATH
 
-.PHONY: build desktop app frontend-install frontend-build frontend-check-dist package-macos package-linux release-checksums release-scan docker-image install clean distclean run test fmt smoke smoke-desktop runtime-start runtime-stop runtime-status runtime-bg desktop-run dev service-install service-uninstall doctor
+.PHONY: build desktop app frontend-install frontend-build frontend-check-dist package-macos package-linux release-checksums release-scan release-verify docker-image install clean distclean run test fmt smoke smoke-desktop runtime-start runtime-stop runtime-status runtime-bg desktop-run dev service-install service-uninstall doctor
 
 build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o bin/agx ./cmd/agx
@@ -40,6 +40,9 @@ release-checksums:
 
 release-scan:
 	./scripts/scan-release-artifacts.sh
+
+release-verify:
+	./scripts/release-verify.sh
 
 docker-image:
 	$(MAKE) -C docker build VERSION=$(VERSION)
