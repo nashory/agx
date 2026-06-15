@@ -101,28 +101,42 @@ func (s *Syncer) SyncTaskChannel(ctx context.Context, taskID string) error {
 	if !shouldMirrorTask(task) {
 		return s.DeleteTaskChannel(ctx, taskID)
 	}
+	if _, err := s.store.UpsertDiscordTaskSyncPending(task.ID); err != nil {
+		return err
+	}
 	project, err := s.store.GetProject(task.ProjectID)
 	if err != nil {
-		return err
+		return s.recordTaskSyncFailure(task.ID, err)
 	}
 	controlChannelID, err := s.client.EnsureControlChannel(ctx, s.guild, controlChannelName)
 	if err != nil {
-		return err
+		return s.recordTaskSyncFailure(task.ID, err)
 	}
 	if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXControl, db.DiscordControlAGXID, db.DiscordTypeChannel, controlChannelID); err != nil {
-		return err
+		return s.recordTaskSyncFailure(task.ID, err)
 	}
 	categoryID, err := s.ensureProjectCategory(ctx, project)
 	if err != nil {
-		return err
+		return s.recordTaskSyncFailure(task.ID, err)
 	}
-	if _, err := s.ensureTaskChannel(ctx, project, task, categoryID); err != nil {
+	channelID, err := s.ensureTaskChannel(ctx, project, task, categoryID)
+	if err != nil {
+		return s.recordTaskSyncFailure(task.ID, err)
+	}
+	if _, err := s.store.MarkDiscordTaskSyncSuccess(task.ID, channelID); err != nil {
 		return err
 	}
 	if permissions, ok := s.client.(CommandPermissionClient); ok {
 		_ = permissions.ConfigureCommandPermissions(ctx, s.guild, controlChannelID, s.mappedTaskChannelIDs())
 	}
 	return nil
+}
+
+func (s *Syncer) recordTaskSyncFailure(taskID string, syncErr error) error {
+	if _, err := s.store.MarkDiscordTaskSyncFailure(taskID, syncErr); err != nil {
+		return errors.Join(syncErr, fmt.Errorf("record Discord task sync failure: %w", err))
+	}
+	return syncErr
 }
 
 // SyncActiveTasks mirrors all active/waiting Discord tasks without deleting

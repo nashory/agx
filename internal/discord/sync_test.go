@@ -24,6 +24,7 @@ type fakeSyncClient struct {
 	createTextCalls     int
 	permissionControl   string
 	permissionTasks     []string
+	ensureTextErr       error
 }
 
 func newFakeSyncClient() *fakeSyncClient {
@@ -52,6 +53,9 @@ func (f *fakeSyncClient) EnsureCategory(ctx context.Context, guildID, name strin
 
 func (f *fakeSyncClient) EnsureTextChannel(ctx context.Context, guildID, categoryID, name, topic string) (string, error) {
 	f.ensureTextCalls++
+	if f.ensureTextErr != nil {
+		return "", f.ensureTextErr
+	}
 	return f.createTextChannel(categoryID, name, topic, "channel-")
 }
 
@@ -368,11 +372,49 @@ func TestSyncTaskChannelCreatesOnlyRequestedTaskChannel(t *testing.T) {
 	if _, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID); err != nil {
 		t.Fatalf("requested task mapping error = %v", err)
 	}
+	state, err := store.GetDiscordTaskSyncState(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != db.DiscordTaskSyncSynced || state.DiscordChannelID == nil {
+		t.Fatalf("sync state = %#v, want synced channel", state)
+	}
 	if client.control != controlChannelName {
 		t.Fatalf("control = %q, want %q", client.control, controlChannelName)
 	}
 	if len(client.names) != 1 {
 		t.Fatalf("created channels = %#v, want requested task channel only", client.names)
+	}
+}
+
+func TestSyncTaskChannelRecordsFailureState(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "active task", nil, "claude", false, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := newFakeSyncClient()
+	client.ensureTextErr = errors.New("discord timeout")
+
+	err = NewSyncer(store, client, "guild-1").SyncTaskChannel(context.Background(), task.ID)
+	if err == nil || !strings.Contains(err.Error(), "discord timeout") {
+		t.Fatalf("SyncTaskChannel error = %v, want discord timeout", err)
+	}
+	state, err := store.GetDiscordTaskSyncState(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != db.DiscordTaskSyncFailed || state.Attempts != 2 || state.LastError == nil || !strings.Contains(*state.LastError, "discord timeout") {
+		t.Fatalf("sync state = %#v, want failed timeout state", state)
 	}
 }
 
