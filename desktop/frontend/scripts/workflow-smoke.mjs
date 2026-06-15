@@ -3,14 +3,14 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
-const main = readFileSync(resolve(root, 'src/main.tsx'), 'utf8');
+const app = readFileSync(resolve(root, 'src/App.tsx'), 'utf8');
 const api = readFileSync(resolve(root, 'src/api.ts'), 'utf8');
 const types = readFileSync(resolve(root, 'src/types.ts'), 'utf8');
 
 const checks = [
   {
     name: 'project-mode conflict guidance',
-    source: main,
+    source: app,
     needles: [
       'Another project-mode task is already active for this project.',
       'choose Worktree mode before creating a new task',
@@ -18,7 +18,7 @@ const checks = [
   },
   {
     name: 'default agent setting',
-    source: main,
+    source: app,
     needles: [
       '<strong>Default agent</strong>',
       'UpdateDefaultAgent',
@@ -26,7 +26,7 @@ const checks = [
   },
   {
     name: 'Discord hard sync button',
-    source: main,
+    source: app,
     needles: [
       'Sync with Discord',
       'api.DiscordTaskSync(task.id)',
@@ -34,7 +34,7 @@ const checks = [
   },
   {
     name: 'Discord disconnect requires fresh token',
-    source: main,
+    source: app,
     needles: [
       'Discord bot token is required',
       'disconnect clears the stored token',
