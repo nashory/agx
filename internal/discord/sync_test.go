@@ -25,6 +25,7 @@ type fakeSyncClient struct {
 	permissionControl   string
 	permissionTasks     []string
 	ensureTextErr       error
+	deleteErrs          map[string]error
 }
 
 func newFakeSyncClient() *fakeSyncClient {
@@ -99,6 +100,11 @@ func (f *fakeSyncClient) UpdateTextChannel(ctx context.Context, channelID, name,
 }
 
 func (f *fakeSyncClient) DeleteChannel(ctx context.Context, channelID string) error {
+	if f.deleteErrs != nil {
+		if err := f.deleteErrs[channelID]; err != nil {
+			return err
+		}
+	}
 	f.deleted = append(f.deleted, channelID)
 	for name, id := range f.category {
 		if id == channelID {
@@ -418,6 +424,62 @@ func TestSyncTaskChannelRecordsFailureState(t *testing.T) {
 	}
 }
 
+func TestSyncTaskChannelRetriesAfterFailureAndReusesSingleChannel(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "active task", nil, "claude", false, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := newFakeSyncClient()
+	client.ensureTextErr = errors.New("discord timeout")
+	syncer := NewSyncer(store, client, "guild-1")
+
+	if err := syncer.SyncTaskChannel(context.Background(), task.ID); err == nil || !strings.Contains(err.Error(), "discord timeout") {
+		t.Fatalf("first SyncTaskChannel error = %v, want discord timeout", err)
+	}
+	failed, err := store.GetDiscordTaskSyncState(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != db.DiscordTaskSyncFailed || failed.Attempts != 1 {
+		t.Fatalf("failed sync state = %#v, want failed attempt 1", failed)
+	}
+
+	client.ensureTextErr = nil
+	if err := syncer.SyncTaskChannel(context.Background(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	synced, err := store.GetDiscordTaskSyncState(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if synced.Status != db.DiscordTaskSyncSynced || synced.Attempts != 2 || synced.LastError != nil || synced.DiscordChannelID == nil {
+		t.Fatalf("synced state = %#v, want recovered sync with cleared error and two attempts", synced)
+	}
+	if client.ensureTextCalls != 2 {
+		t.Fatalf("ensure text calls = %d, want one failed call and one retry", client.ensureTextCalls)
+	}
+	if len(client.names) != 1 {
+		t.Fatalf("created channels = %#v, want exactly one recovered task channel", client.names)
+	}
+	mapping, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mapping.DiscordID != *synced.DiscordChannelID {
+		t.Fatalf("mapping channel = %q, sync state channel = %q", mapping.DiscordID, *synced.DiscordChannelID)
+	}
+}
+
 func TestSyncTaskChannelDeletesChannelForUnmirroredTask(t *testing.T) {
 	store, err := db.OpenMemory()
 	if err != nil {
@@ -535,6 +597,40 @@ func TestSyncActiveTasksWithCleanupDeletesUnmirroredTaskChannels(t *testing.T) {
 	}
 	if _, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID); !errors.Is(err, db.ErrDiscordMappingNotFound) {
 		t.Fatalf("task mapping error = %v, want ErrDiscordMappingNotFound", err)
+	}
+}
+
+func TestSyncActiveTasksWithCleanupPreservesMappingWhenDeleteFails(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "complete task", nil, "claude", db.StatusComplete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertDiscordMapping(db.DiscordAGXTask, task.ID, db.DiscordTypeChannel, "channel-stale"); err != nil {
+		t.Fatal(err)
+	}
+	deleteErr := errors.New("discord permission denied")
+	client := newFakeSyncClient()
+	client.deleteErrs = map[string]error{"channel-stale": deleteErr}
+
+	err = NewSyncer(store, client, "guild-1").SyncActiveTasksWithCleanup(context.Background(), true)
+	if !errors.Is(err, deleteErr) {
+		t.Fatalf("cleanup error = %v, want delete error", err)
+	}
+	if _, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID); err != nil {
+		t.Fatalf("task mapping error = %v, want mapping preserved after delete failure", err)
+	}
+	if len(client.deleted) != 0 {
+		t.Fatalf("deleted = %#v, want failed delete to stop before recording success", client.deleted)
 	}
 }
 
