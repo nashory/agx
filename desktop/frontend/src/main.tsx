@@ -45,7 +45,7 @@ import { ActionLogConsole } from './actionLog';
 import { CodePreview, isMarkdownPreviewPath, renderMarkdown } from './codePreview';
 import { FilePanel } from './filePanel';
 import { addUniquePaths, appendPromptPaths, pathsFromDrop } from './pathDrag';
-import type { Agent, DiscordStatusInfo, LanguageStat, Project, ProjectCandidate, RuntimeStatusInfo, Task, TaskStatus, TaskTranscriptMessage, ViewMode, WorkspaceMode } from './types';
+import type { Agent, DiscordStatusInfo, LanguageStat, Project, ProjectCandidate, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskStatus, TaskTranscriptMessage, ViewMode, WorkspaceMode } from './types';
 import './styles.css';
 
 type ThemeMode = 'dark' | 'light';
@@ -57,7 +57,7 @@ type DesktopActionResult = {
   taskID?: string;
   expectSession?: boolean;
 };
-type DesktopAction = (action: () => Promise<DesktopActionResult | void>, label?: string) => void;
+type DesktopAction = (action: () => Promise<DesktopActionResult | void>, label?: string) => Promise<boolean>;
 
 type UserPreferences = {
   showActionLog: boolean;
@@ -211,7 +211,16 @@ function projectGridColumns(grid: HTMLElement | null): number {
 }
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return humanizeErrorMessage(err instanceof Error ? err.message : String(err));
+}
+
+function humanizeErrorMessage(message: string): string {
+  const cleaned = message.replace(/^runtime API [A-Z]+ [^ ]+ failed: \d{3} [^:]+: /, '').trim();
+  const activeProjectTask = cleaned.match(/another project-mode task is already active for this project: ([\w-]+)/i);
+  if (activeProjectTask) {
+    return `Another project-mode task is already active for this project. Stop task ${activeProjectTask[1]} or choose Worktree mode before creating a new task.`;
+  }
+  return cleaned || message;
 }
 
 function isAgentContextClearCommand(message: string): boolean {
@@ -368,6 +377,8 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [monitorTasks, setMonitorTasks] = useState<MonitorTask[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusInfo>({ running: false, uptimeSeconds: 0, socketPath: '', lockPath: '', recovery: {} });
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigInfo>({ defaultAgent: 'codex' });
+  const [globalAgents, setGlobalAgents] = useState<Agent[]>([]);
   const [runtimeChecked, setRuntimeChecked] = useState(false);
   const [discordStatus, setDiscordStatus] = useState<DiscordStatusInfo>({ enabled: false, connected: false, uptimeSeconds: 0, sync: { running: false } });
   const [discordStatusLoading, setDiscordStatusLoading] = useState(true);
@@ -377,6 +388,7 @@ function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem('agx-theme') === 'light' ? 'light' : 'dark'));
   const [zoomLevel, setZoomLevel] = useState(() => loadZoomLevel());
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState<{ title: string; message: string } | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const trackedRuntimeTaskIDsKey = useMemo(
@@ -541,6 +553,41 @@ function App() {
     }
   }, [appendLog]);
 
+  const loadRuntimeConfig = useCallback(async () => {
+    try {
+      setRuntimeConfig(await api.RuntimeConfig());
+    } catch (err) {
+      appendLog(`[error] runtime config: ${errorMessage(err)}`);
+    }
+  }, [appendLog]);
+
+  const loadGlobalAgents = useCallback(async () => {
+    try {
+      setGlobalAgents(await api.ListAvailableAgents(''));
+    } catch (err) {
+      appendLog(`[error] list agents: ${errorMessage(err)}`);
+      setGlobalAgents([]);
+    }
+  }, [appendLog]);
+
+  const updateDefaultAgent = useCallback(async (agentName: string) => {
+    setBusy(true);
+    setError('');
+    appendLog(`$ set default agent ${agentLabel(agentName)}`);
+    try {
+      const cfg = await api.UpdateDefaultAgent(agentName);
+      setRuntimeConfig(cfg);
+      appendLog(`[ok] default agent ${agentLabel(cfg.defaultAgent)}`);
+    } catch (err) {
+      const message = errorMessage(err);
+      setError(message);
+      appendLog(`[error] default agent: ${message}`);
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  }, [appendLog]);
+
   const runRuntimeAction = useCallback(async (action: () => Promise<RuntimeStatusInfo>, label: string) => {
     setBusy(true);
     setError('');
@@ -563,14 +610,22 @@ function App() {
 
   useEffect(() => {
     void loadRuntimeStatus();
+    void loadRuntimeConfig();
+    void loadGlobalAgents();
     void loadProjects();
     void loadDiscordStatus();
-  }, [loadProjects, loadDiscordStatus, loadRuntimeStatus]);
+  }, [loadProjects, loadDiscordStatus, loadRuntimeConfig, loadGlobalAgents, loadRuntimeStatus]);
 
   useEffect(() => {
     const timer = window.setInterval(() => void loadRuntimeStatus(), 5000);
     return () => window.clearInterval(timer);
   }, [loadRuntimeStatus]);
+
+  useEffect(() => {
+    if (activeTab !== 'settings') return;
+    void loadRuntimeConfig();
+    void loadGlobalAgents();
+  }, [activeTab, loadGlobalAgents, loadRuntimeConfig]);
 
   useEffect(() => {
     const unsubscribe = window.runtime?.EventsOn?.('discord:status', (payload) => {
@@ -677,6 +732,7 @@ function App() {
   async function runAction(action: () => Promise<DesktopActionResult | void>, label = 'Action') {
     setBusy(true);
     setError('');
+    setActionError(null);
     appendLog(`$ ${label}`);
     try {
       const result = await action();
@@ -695,14 +751,17 @@ function App() {
           appendLog(`[warn] ${label}: task has no active session after action (status=${task.status})`);
         }
       }
+      return true;
     } catch (err) {
       const message = errorMessage(err);
       setError(message);
+      setActionError({ title: label, message });
       appendLog(`[error] ${label}: ${message}`);
       if (project) {
         void loadTasks(project.id);
         void loadProjects();
       }
+      return false;
     } finally {
       setBusy(false);
     }
@@ -745,6 +804,9 @@ function App() {
         onToggleTheme={toggleTheme}
         onResetDatabase={resetDatabase}
         runtimeStatus={runtimeStatus}
+        runtimeConfig={runtimeConfig}
+        agents={globalAgents}
+        onDefaultAgentChange={updateDefaultAgent}
         onRefreshRuntime={loadRuntimeStatus}
         onStartRuntime={() => runRuntimeAction(api.RuntimeStart, 'start runtime')}
         onInstallRuntimeService={() => runRuntimeAction(api.RuntimeInstallService, 'install runtime service')}
@@ -898,6 +960,7 @@ function App() {
       >
         {content}
       </AppFrame>
+      {actionError && <ActionErrorDialog title={actionError.title} message={actionError.message} onClose={() => setActionError(null)} />}
       {preferences.showActionLog && <ActionLogConsole logs={logs} />}
     </>
   );
@@ -1186,6 +1249,19 @@ function DiscordView({
   }, [status.sync?.stage, status.sync?.error]);
 
   async function connect() {
+    if (missingRequiredToken) {
+      onError('Discord bot token is required');
+      setEvents((value) => [`${timestamp()} Bot token is required`, ...value].slice(0, 20));
+      return;
+    }
+    if (!guildID.trim()) {
+      onError('Discord server ID is required');
+      return;
+    }
+    if (!allowedUserID.trim()) {
+      onError('Allowed Discord user ID is required');
+      return;
+    }
     setBusyAction('connect');
     onError('');
     onLog('$ discord connect');
@@ -1685,6 +1761,9 @@ function SettingsView({
   onToggleTheme,
   onResetDatabase,
   runtimeStatus,
+  runtimeConfig,
+  agents,
+  onDefaultAgentChange,
   onRefreshRuntime,
   onStartRuntime,
   onInstallRuntimeService,
@@ -1698,6 +1777,9 @@ function SettingsView({
   onToggleTheme: () => void;
   onResetDatabase: () => Promise<void>;
   runtimeStatus: RuntimeStatusInfo;
+  runtimeConfig: RuntimeConfigInfo;
+  agents: Agent[];
+  onDefaultAgentChange: (agentName: string) => Promise<void>;
   onRefreshRuntime: () => Promise<void>;
   onStartRuntime: () => Promise<RuntimeStatusInfo>;
   onInstallRuntimeService: () => Promise<RuntimeStatusInfo>;
@@ -1705,9 +1787,23 @@ function SettingsView({
   busy: boolean;
 }) {
   const [confirmingReset, setConfirmingReset] = useState(false);
+  const [savingDefaultAgent, setSavingDefaultAgent] = useState(false);
+  const defaultAgentName = runtimeConfig.defaultAgent || 'codex';
+  const defaultAgentOptions = agents.some((agent) => agent.name === defaultAgentName)
+    ? agents
+    : [{ name: defaultAgentName, command: defaultAgentName, description: '', available: false }, ...agents];
 
   function update<K extends keyof UserPreferences>(key: K, value: UserPreferences[K]) {
     onPreferencesChange({ ...preferences, [key]: value });
+  }
+
+  async function saveDefaultAgent(agentName: string) {
+    setSavingDefaultAgent(true);
+    try {
+      await onDefaultAgentChange(agentName);
+    } finally {
+      setSavingDefaultAgent(false);
+    }
   }
 
   async function resetDatabase() {
@@ -1796,6 +1892,19 @@ function SettingsView({
         </section>
         <section className="settings-panel">
           <h2>Workspace</h2>
+          <div className="setting-row">
+            <div>
+              <strong>Default agent</strong>
+              <span>Used when a task or project does not choose a specific agent.</span>
+            </div>
+            <select value={defaultAgentName} disabled={busy || savingDefaultAgent} onChange={(event) => void saveDefaultAgent(event.target.value)}>
+              {defaultAgentOptions.map((agent) => (
+                <option key={agent.name} value={agent.name}>
+                  {agentLabel(agent.name)}{agent.available ? '' : ' (not installed)'}
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="setting-row">
             <div>
               <strong>Default task view</strong>
@@ -2502,10 +2611,9 @@ function TaskView({
     }, `create ${attachToDiscord ? 'Discord ' : ''}${workspaceMode} task "${title.trim()}"${allMighty ? ' all-mighty' : ''}`);
   }
 
-  function createQuickTask(template: QuickTaskTemplate, agentName: string, discordAttached: boolean, selectedWorkspaceMode: WorkspaceMode) {
+  async function createQuickTask(template: QuickTaskTemplate, agentName: string, discordAttached: boolean, selectedWorkspaceMode: WorkspaceMode) {
     if (!project.accessGranted || (discordAttached && !discordConnected)) return;
-    setQuickTemplate(null);
-    onAction(async () => {
+    const created = await onAction(async () => {
       const task = discordAttached
         ? await api.CreateDiscordTask(project.id, template.title, template.prompt, agentName, allMighty, selectedWorkspaceMode)
         : template.prompt === ''
@@ -2514,6 +2622,9 @@ function TaskView({
       setTaskFilter(discordAttached ? 'discord' : 'desktop');
       return { taskID: task.id, expectSession: !discordAttached };
     }, `quick ${discordAttached ? 'Discord ' : ''}${selectedWorkspaceMode} task "${template.title}"${agentName ? ` with ${agentName}` : ''}${allMighty ? ' all-mighty' : ''}`);
+    if (created) {
+      setQuickTemplate(null);
+    }
   }
 
   async function grantAccess() {
@@ -2642,7 +2753,7 @@ function TaskView({
           initialAttachToDiscord={attachToDiscord}
           discordConnected={discordConnected}
           onCancel={() => setQuickTemplate(null)}
-          onCreate={(agentName, discordAttached, selectedWorkspaceMode) => createQuickTask(quickTemplate, agentName, discordAttached, selectedWorkspaceMode)}
+          onCreate={(agentName, discordAttached, selectedWorkspaceMode) => void createQuickTask(quickTemplate, agentName, discordAttached, selectedWorkspaceMode)}
         />
       )}
       {!project.accessGranted && (
@@ -2708,6 +2819,40 @@ function GrantAccessModal({
           <button className="primary-button" disabled={granting} onClick={onGrant}>
             {granting ? 'Granting...' : 'Grant Access'}
           </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function ActionErrorDialog({ title, message, onClose }: { title: string; message: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop blurred" onMouseDown={onClose}>
+      <section className="action-error-modal" role="alertdialog" aria-modal="true" aria-labelledby="action-error-title" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="modal-header">
+          <div>
+            <h2 id="action-error-title">Action Failed</h2>
+            <p>{title}</p>
+          </div>
+          <IconButton label="Close" onClick={onClose}>
+            <X size={18} />
+          </IconButton>
+        </header>
+        <div className="modal-error">
+          <span>{message}</span>
+        </div>
+        <footer className="wizard-actions">
+          <button className="primary-button" onClick={onClose}>OK</button>
         </footer>
       </section>
     </div>
@@ -3309,6 +3454,9 @@ function SessionView({
         project={project}
         task={task}
         onBack={onBack}
+        onError={onError}
+        onLog={onLog}
+        onChanged={onChanged}
         error={error}
         theme={theme}
         onToggleTheme={onToggleTheme}
@@ -3474,6 +3622,9 @@ function DiscordTaskDetail({
   project,
   task,
   onBack,
+  onError,
+  onLog,
+  onChanged,
   error,
   theme,
   onToggleTheme,
@@ -3481,11 +3632,15 @@ function DiscordTaskDetail({
   project: Project;
   task: Task;
   onBack: () => void;
+  onError: (error: string) => void;
+  onLog: (message: string) => void;
+  onChanged: () => Promise<void> | void;
   error: string;
   theme: ThemeMode;
   onToggleTheme: () => void;
 }) {
   const [messages, setMessages] = useState<TaskTranscriptMessage[]>([]);
+  const [syncingDiscord, setSyncingDiscord] = useState(false);
   const [scrollState, setScrollState] = useState({ canScrollUp: false, canScrollDown: false, newBelow: 0 });
   const [showFilePanel, setShowFilePanel] = useState(true);
   const [filePanelWidth, setFilePanelWidth] = useState(280);
@@ -3613,6 +3768,24 @@ function DiscordTaskDetail({
     updateScrollState();
   }, [updateScrollState]);
 
+  async function syncWithDiscord() {
+    if (syncingDiscord) return;
+    setSyncingDiscord(true);
+    onError('');
+    onLog(`$ sync Discord task "${task.title}"`);
+    try {
+      await api.DiscordTaskSync(task.id);
+      onLog(`[ok] sync Discord task "${task.title}"`);
+      await onChanged();
+    } catch (err) {
+      const message = errorMessage(err);
+      onError(message);
+      onLog(`[error] sync Discord task "${task.title}": ${message}`);
+    } finally {
+      setSyncingDiscord(false);
+    }
+  }
+
   return (
     <main className="session-shell discord-task-detail-shell">
       <Header
@@ -3622,6 +3795,10 @@ function DiscordTaskDetail({
         theme={theme}
         onToggleTheme={onToggleTheme}
       >
+        <button className="text-button" disabled={syncingDiscord} onClick={() => void syncWithDiscord()}>
+          <RefreshCw size={15} />
+          {syncingDiscord ? 'Syncing...' : 'Sync with Discord'}
+        </button>
         <IconButton label={showFilePanel ? 'Hide file tree' : 'Show file tree'} onClick={() => setShowFilePanel((value) => !value)}>
           {showFilePanel ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
         </IconButton>

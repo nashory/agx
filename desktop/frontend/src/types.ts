@@ -106,6 +106,10 @@ export type RuntimeStatusInfo = {
   error?: string;
 };
 
+export type RuntimeConfigInfo = {
+  defaultAgent: string;
+};
+
 export type FileEntry = {
   name: string;
   path: string;

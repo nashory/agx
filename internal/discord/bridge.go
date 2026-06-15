@@ -52,6 +52,8 @@ type taskStream struct {
 	cancel    context.CancelFunc
 }
 
+var ErrSyncInProgress = errors.New("discord sync is already running")
+
 // NewBridge constructs a disconnected bridge with cfg. Dependencies such as the
 // store and command service can be attached before Start.
 func NewBridge(cfg config.DiscordConfig) *Bridge {
@@ -89,6 +91,17 @@ func (b *Bridge) SetStore(store *db.Store) {
 // Task-channel sync can involve many Discord REST calls, so it runs after the
 // bridge is marked connected instead of blocking the connect/status path.
 func (b *Bridge) Start(ctx context.Context, mode string) error {
+	return b.start(ctx, mode, true)
+}
+
+// StartWithoutInitialSync opens the bot without launching the background full
+// channel sync. It is used by foreground sync operations that already know the
+// exact sync work they need to perform.
+func (b *Bridge) StartWithoutInitialSync(ctx context.Context, mode string) error {
+	return b.start(ctx, mode, false)
+}
+
+func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error {
 	b.lifecycle.Lock()
 	defer b.lifecycle.Unlock()
 
@@ -146,7 +159,7 @@ func (b *Bridge) Start(ctx context.Context, mode string) error {
 	b.connected = true
 	b.lastErr = ""
 	b.mu.Unlock()
-	if store != nil {
+	if store != nil && initialSync {
 		go b.syncActiveTasksAfterStart(store, bot, cfg.GuildID)
 	} else {
 		b.syncTaskStreams(context.Background())
@@ -155,7 +168,9 @@ func (b *Bridge) Start(ctx context.Context, mode string) error {
 }
 
 func (b *Bridge) syncActiveTasksAfterStart(store *db.Store, bot *Bot, guildID string) {
-	b.syncMu.Lock()
+	if !b.syncMu.TryLock() {
+		return
+	}
 	defer b.syncMu.Unlock()
 	err := NewSyncer(store, bot, guildID).SyncActiveTasks(context.Background())
 	if err != nil {
@@ -266,7 +281,9 @@ func maskedSecretPrefix(value string) string {
 // orphaned mapped task channels. It preserves expected channels and avoids the
 // full destructive rebuild performed by HardSync.
 func (b *Bridge) SoftSync(ctx context.Context) error {
-	b.syncMu.Lock()
+	if !b.syncMu.TryLock() {
+		return ErrSyncInProgress
+	}
 	defer b.syncMu.Unlock()
 
 	b.mu.Lock()
@@ -307,7 +324,9 @@ func (b *Bridge) SyncTaskChannel(ctx context.Context, taskID string) error {
 	if !connected || bot == nil || store == nil {
 		return nil
 	}
-	b.syncMu.Lock()
+	if !b.syncMu.TryLock() {
+		return ErrSyncInProgress
+	}
 	defer b.syncMu.Unlock()
 	if err := NewSyncer(store, bot, cfg.GuildID).SyncTaskChannel(ctx, taskID); err != nil {
 		b.setError(err)
@@ -316,6 +335,12 @@ func (b *Bridge) SyncTaskChannel(ctx context.Context, taskID string) error {
 	b.setError(nil)
 	b.syncTaskStreams(ctx)
 	return nil
+}
+
+// RefreshTaskStreams starts or refreshes semantic event forwarders for already
+// mapped structured tasks without performing Discord channel REST sync.
+func (b *Bridge) RefreshTaskStreams(ctx context.Context) {
+	b.syncTaskStreams(ctx)
 }
 
 // DeleteTaskChannel stops any live event stream for taskID and deletes its

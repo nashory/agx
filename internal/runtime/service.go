@@ -437,6 +437,9 @@ func (s *Service) syncDiscordTaskNow(taskID string) error {
 // queues a retry if Discord is slow or temporarily rejects the channel update.
 func (s *Service) syncDiscordTaskBestEffort(taskID string) {
 	if err := s.syncDiscordTaskNow(taskID); err != nil {
+		if s.discord != nil && s.discord.Status().Connected {
+			s.discord.RefreshTaskStreams(context.Background())
+		}
 		s.syncDiscordTaskAsync(taskID)
 	}
 }

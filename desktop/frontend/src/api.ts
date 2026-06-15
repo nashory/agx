@@ -1,4 +1,4 @@
-import type { Agent, DirectoryEntry, DiscordStatusInfo, FileEntry, Project, ProjectCandidate, RuntimeStatusInfo, Task, TaskTranscriptMessage, WorkspaceMode } from './types';
+import type { Agent, DirectoryEntry, DiscordStatusInfo, FileEntry, Project, ProjectCandidate, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskTranscriptMessage, WorkspaceMode } from './types';
 
 export type MonitorTask = Task & {
   projectName: string;
@@ -19,6 +19,8 @@ type WailsApp = {
   DeleteProject(projectID: string): Promise<void>;
   ResetDatabase(): Promise<void>;
   RuntimeStatus(): Promise<RuntimeStatusInfo>;
+  RuntimeConfig(): Promise<RuntimeConfigInfo>;
+  UpdateDefaultAgent(agentName: string): Promise<RuntimeConfigInfo>;
   RuntimeStart(): Promise<RuntimeStatusInfo>;
   RuntimeInstallService(): Promise<RuntimeStatusInfo>;
   RuntimeStop(): Promise<RuntimeStatusInfo>;
@@ -27,6 +29,7 @@ type WailsApp = {
   DiscordSync(): Promise<DiscordStatusInfo>;
   DiscordSoftSync(): Promise<DiscordStatusInfo>;
   DiscordHardSync(): Promise<DiscordStatusInfo>;
+  DiscordTaskSync(taskID: string): Promise<DiscordStatusInfo>;
   DiscordResetManagedChannels(): Promise<DiscordStatusInfo>;
   DiscordDisconnect(): Promise<DiscordStatusInfo>;
   OpenDiscordInvite(token: string): Promise<void>;
@@ -193,6 +196,12 @@ export const api: WailsApp = {
       error: 'Wails runtime is not connected',
     };
   },
+  async RuntimeConfig() {
+    return app()?.RuntimeConfig() ?? { defaultAgent: 'codex' };
+  },
+  async UpdateDefaultAgent(agentName) {
+    return app()?.UpdateDefaultAgent(agentName) ?? { defaultAgent: agentName || 'codex' };
+  },
   async RuntimeStart() {
     const status = await app()?.RuntimeStart();
     if (!status) throw new Error('Wails runtime is not connected');
@@ -228,6 +237,11 @@ export const api: WailsApp = {
   },
   async DiscordHardSync() {
     const status = await app()?.DiscordHardSync?.() ?? await app()?.DiscordResetManagedChannels();
+    if (!status) throw new Error('Wails runtime is not connected');
+    return status;
+  },
+  async DiscordTaskSync(taskID) {
+    const status = await app()?.DiscordTaskSync(taskID);
     if (!status) throw new Error('Wails runtime is not connected');
     return status;
   },

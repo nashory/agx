@@ -28,6 +28,13 @@ and allowed user ID are kept in the same local config file for convenience, so a
 future reconnect on that machine only needs a fresh token. These values are not
 bundled into AGX release builds.
 
+Do not embed a shared bot token in AGX release builds. A Discord bot token is a
+secret credential for that bot account; if it is shipped in a desktop app, users
+can extract it and control the bot. AGX is local-first, so each installation
+should use a dedicated bot token owned by that user or organization. A shared
+AGX-operated bot would require a hosted backend/relay and a different trust
+model.
+
 ## CLI Setup
 
 You can also configure Discord from the CLI:

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -20,6 +21,8 @@ func (s *Service) routes() http.Handler {
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
 	mux.HandleFunc("POST /v1/shutdown", s.handleShutdown)
 	mux.HandleFunc("GET /v1/events", s.handleEvents)
+	mux.HandleFunc("GET /v1/config", s.handleGetConfig)
+	mux.HandleFunc("PATCH /v1/config", s.handlePatchConfig)
 	mux.HandleFunc("GET /v1/agents", s.handleListAgents)
 	mux.HandleFunc("GET /v1/projects", s.handleListProjects)
 	mux.HandleFunc("POST /v1/projects", s.handleCreateProject)
@@ -48,6 +51,7 @@ func (s *Service) routes() http.Handler {
 	mux.HandleFunc("POST /v1/discord/disconnect", s.handleDiscordDisconnect)
 	mux.HandleFunc("POST /v1/discord/soft-sync", s.handleDiscordSoftSync)
 	mux.HandleFunc("POST /v1/discord/hard-sync", s.handleDiscordHardSync)
+	mux.HandleFunc("POST /v1/discord/tasks/{id}/sync", s.handleDiscordTaskSync)
 	mux.HandleFunc("POST /v1/discord/invite-url", s.handleDiscordInviteURL)
 	return mux
 }
@@ -114,6 +118,14 @@ type Agent struct {
 	Command     string `json:"command"`
 	Description string `json:"description"`
 	Available   bool   `json:"available"`
+}
+
+type RuntimeConfig struct {
+	DefaultAgent string `json:"defaultAgent"`
+}
+
+type patchConfigRequest struct {
+	DefaultAgent *string `json:"defaultAgent"`
 }
 
 type createProjectRequest struct {
@@ -198,6 +210,45 @@ func (s *Service) handleShutdown(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		_ = s.Shutdown(ctx)
 	}()
+}
+
+func (s *Service) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, warnings := config.LoadGlobal()
+	if len(warnings) > 0 {
+		writeError(w, warnings[0])
+		return
+	}
+	writeJSON(w, RuntimeConfig{DefaultAgent: cfg.DefaultAgent})
+}
+
+func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
+	var req patchConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorStatus(w, http.StatusBadRequest, fmt.Errorf("decode config request: %w", err))
+		return
+	}
+	cfg, warnings := config.LoadGlobal()
+	if len(warnings) > 0 {
+		writeError(w, warnings[0])
+		return
+	}
+	if req.DefaultAgent != nil {
+		agentName := strings.TrimSpace(*req.DefaultAgent)
+		if agentName == "" {
+			agentName = config.DefaultAgent
+		}
+		if _, err := agent.RegistryForProject("").Get(agentName); err != nil {
+			writeErrorStatus(w, http.StatusBadRequest, err)
+			return
+		}
+		cfg.DefaultAgent = agentName
+		if err := config.SaveDefaultAgent(agentName); err != nil {
+			writeError(w, err)
+			return
+		}
+		s.bus.Publish("config.changed", RuntimeConfig{DefaultAgent: cfg.DefaultAgent})
+	}
+	writeJSON(w, RuntimeConfig{DefaultAgent: cfg.DefaultAgent})
 }
 
 func (s *Service) handleListAgents(w http.ResponseWriter, r *http.Request) {
@@ -956,21 +1007,53 @@ func (s *Service) handleDiscordDisconnect(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Service) handleDiscordSoftSync(w http.ResponseWriter, r *http.Request) {
-	if !s.discord.Status().Connected {
-		cfg, _ := config.LoadGlobal()
-		s.discord.Configure(cfg.Discord)
-		s.discord.SetStore(s.store)
-		if err := s.discord.Start(r.Context(), "runtime"); err != nil {
-			writeError(w, err)
-			return
-		}
+	if err := s.ensureDiscordStarted(r.Context(), false); err != nil {
+		writeError(w, err)
+		return
 	}
 	if err := s.discord.SoftSync(r.Context()); err != nil {
+		if errors.Is(err, agxdiscord.ErrSyncInProgress) {
+			writeErrorStatus(w, http.StatusConflict, err)
+			return
+		}
 		writeError(w, err)
 		return
 	}
 	status := s.discord.Status()
 	s.bus.Publish("discord.status", status)
+	writeJSON(w, status)
+}
+
+func (s *Service) handleDiscordTaskSync(w http.ResponseWriter, r *http.Request) {
+	taskID := strings.TrimSpace(r.PathValue("id"))
+	if taskID == "" {
+		writeErrorStatus(w, http.StatusBadRequest, fmt.Errorf("task id is required"))
+		return
+	}
+	task, err := s.store.GetTask(taskID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if task.Interface != db.TaskInterfaceDiscord {
+		writeErrorStatus(w, http.StatusBadRequest, fmt.Errorf("task %s is not a Discord task", taskID))
+		return
+	}
+	if err := s.ensureDiscordStarted(r.Context(), false); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.discord.SyncTaskChannel(r.Context(), taskID); err != nil {
+		if errors.Is(err, agxdiscord.ErrSyncInProgress) {
+			writeErrorStatus(w, http.StatusConflict, err)
+			return
+		}
+		writeError(w, err)
+		return
+	}
+	status := s.discord.Status()
+	s.bus.Publish("discord.status", status)
+	s.bus.Publish("task.changed", taskDTO(task))
 	writeJSON(w, status)
 }
 
@@ -982,6 +1065,19 @@ func (s *Service) handleDiscordHardSync(w http.ResponseWriter, r *http.Request) 
 	status := s.discordStatus()
 	s.bus.Publish("discord.status", status)
 	writeJSON(w, status)
+}
+
+func (s *Service) ensureDiscordStarted(ctx context.Context, initialSync bool) error {
+	if s.discord.Status().Connected {
+		return nil
+	}
+	cfg, _ := config.LoadGlobal()
+	s.discord.Configure(cfg.Discord)
+	s.discord.SetStore(s.store)
+	if initialSync {
+		return s.discord.Start(ctx, "runtime")
+	}
+	return s.discord.StartWithoutInitialSync(ctx, "runtime")
 }
 
 func (s *Service) handleDiscordInviteURL(w http.ResponseWriter, r *http.Request) {

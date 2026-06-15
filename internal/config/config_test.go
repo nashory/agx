@@ -95,6 +95,49 @@ command = "custom-cli"
 	}
 }
 
+func TestSaveDefaultAgentPreservesGlobalConfig(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(`
+[agents.custom]
+command = "custom-cli"
+
+[discord]
+enabled = true
+bot_token = "token"
+guild_id = "guild"
+allowed_user_ids = ["user"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveDefaultAgent("custom"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, warnings := LoadGlobal()
+	if len(warnings) > 0 {
+		t.Fatalf("LoadGlobal warnings = %v", warnings)
+	}
+	if cfg.DefaultAgent != "custom" {
+		t.Fatalf("DefaultAgent = %q, want custom", cfg.DefaultAgent)
+	}
+	if cfg.Agents["custom"].Command != "custom-cli" {
+		t.Fatalf("custom command = %q, want custom-cli", cfg.Agents["custom"].Command)
+	}
+	if cfg.Discord.GuildID != "guild" || !cfg.Discord.Enabled || cfg.Discord.BotToken != "token" {
+		t.Fatalf("Discord = %#v, want preserved config", cfg.Discord)
+	}
+	info, err := os.Stat(filepath.Join(configDir, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("config mode = %o, want 600", got)
+	}
+}
+
 func TestLoadPreservesGlobalWorktreeWhenProjectOmitsWorktree(t *testing.T) {
 	configDir := t.TempDir()
 	projectRoot := t.TempDir()

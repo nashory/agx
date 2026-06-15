@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -150,6 +151,66 @@ func TestBridgeStartValidationRecordsStatusError(t *testing.T) {
 	if status.Connected {
 		t.Fatal("Connected = true after failed Start")
 	}
+}
+
+func TestBridgeSoftSyncReturnsInProgress(t *testing.T) {
+	bridge := NewBridge(config.DiscordConfig{})
+	bridge.syncMu.Lock()
+	defer bridge.syncMu.Unlock()
+
+	if err := bridge.SoftSync(context.Background()); !errors.Is(err, ErrSyncInProgress) {
+		t.Fatalf("SoftSync() error = %v, want ErrSyncInProgress", err)
+	}
+}
+
+func TestBridgeSyncTaskChannelReturnsInProgress(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	bridge := NewBridge(config.DiscordConfig{GuildID: "guild-1"})
+	bridge.connected = true
+	bridge.bot = &Bot{}
+	bridge.store = store
+	bridge.syncMu.Lock()
+	defer bridge.syncMu.Unlock()
+
+	if err := bridge.SyncTaskChannel(context.Background(), "task-1"); !errors.Is(err, ErrSyncInProgress) {
+		t.Fatalf("SyncTaskChannel() error = %v, want ErrSyncInProgress", err)
+	}
+}
+
+func TestRefreshTaskStreamsStartsMappedStructuredTask(t *testing.T) {
+	bridge := NewBridge(config.DiscordConfig{})
+	bridge.connected = true
+	bridge.bot = &Bot{}
+	calls := make(chan struct{}, 1)
+	events := make(chan agentstream.Event)
+	defer close(events)
+	bridge.service = &fakeCommandService{tasks: []TaskSummary{{
+		ID:              "task-1",
+		ChannelID:       "channel-1",
+		Status:          "active",
+		Agent:           "codex",
+		AgentThreadID:   stringPtr("thread-1"),
+		AgentStreamKind: stringPtr("codex-app-server"),
+	}}}
+	bridge.events = scriptedAgentEvents{events: events, calls: calls}
+
+	bridge.RefreshTaskStreams(context.Background())
+
+	select {
+	case <-calls:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for task stream subscription")
+	}
+	bridge.mu.Lock()
+	if _, ok := bridge.streams["task-1"]; !ok {
+		t.Fatal("task stream was not registered")
+	}
+	bridge.cancelTaskStreamsLocked()
+	bridge.mu.Unlock()
 }
 
 func stringPtr(value string) *string {

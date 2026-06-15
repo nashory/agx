@@ -88,6 +88,8 @@ func TestClientMethodsUseRuntimeRoutes(t *testing.T) {
 		switch {
 		case r.URL.Path == "/v1/status":
 			_ = json.NewEncoder(w).Encode(Status{Running: true, Version: "test"})
+		case r.URL.Path == "/v1/config":
+			_ = json.NewEncoder(w).Encode(RuntimeConfig{DefaultAgent: "codex"})
 		case r.URL.Path == "/v1/agents":
 			_ = json.NewEncoder(w).Encode([]Agent{{Name: "codex", Command: "codex", Available: true}})
 		case r.URL.Path == "/v1/projects" && r.Method == http.MethodGet:
@@ -116,6 +118,8 @@ func TestClientMethodsUseRuntimeRoutes(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(Task{ID: "task-1", ProjectID: "project-1", Title: "Task", Status: db.StatusActive})
 		case r.URL.Path == "/v1/discord/invite-url":
 			_ = json.NewEncoder(w).Encode(discordInviteResponse{URL: "https://discord.com/oauth2/authorize?client_id=123"})
+		case r.URL.Path == "/v1/discord/tasks/task-1/sync":
+			_ = json.NewEncoder(w).Encode(map[string]any{"enabled": true, "connected": true, "guildId": "guild"})
 		case strings.HasPrefix(r.URL.Path, "/v1/discord/"):
 			_ = json.NewEncoder(w).Encode(map[string]any{"enabled": true, "connected": true, "guildId": "guild"})
 		default:
@@ -134,6 +138,12 @@ func TestClientMethodsUseRuntimeRoutes(t *testing.T) {
 
 	if _, err := client.Status(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if cfg, err := client.Config(ctx); err != nil || cfg.DefaultAgent != "codex" {
+		t.Fatalf("Config() = (%#v, %v), want codex", cfg, err)
+	}
+	if cfg, err := client.UpdateDefaultAgent(ctx, "codex"); err != nil || cfg.DefaultAgent != "codex" {
+		t.Fatalf("UpdateDefaultAgent() = (%#v, %v), want codex", cfg, err)
 	}
 	if _, err := client.ListAgents(ctx, "project-1"); err != nil {
 		t.Fatal(err)
@@ -234,12 +244,17 @@ func TestClientMethodsUseRuntimeRoutes(t *testing.T) {
 	if _, err := client.DiscordHardSync(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.DiscordTaskSync(ctx, "task-1"); err != nil {
+		t.Fatal(err)
+	}
 	if inviteURL, err := client.DiscordInviteURL(ctx, "token"); err != nil || !strings.Contains(inviteURL, "discord.com") {
 		t.Fatalf("DiscordInviteURL() = (%q, %v), want Discord URL", inviteURL, err)
 	}
 
 	for _, want := range []string{
 		"GET /v1/status",
+		"GET /v1/config",
+		"PATCH /v1/config",
 		"GET /v1/agents?project_id=project-1",
 		"GET /v1/agents?project_path=%2Ftmp%2Fproject",
 		"POST /v1/projects",
@@ -249,6 +264,7 @@ func TestClientMethodsUseRuntimeRoutes(t *testing.T) {
 		"GET /v1/tasks/task-1/logs?lines=50",
 		"GET /v1/tasks/task-1/transcript?limit=10",
 		"POST /v1/discord/connect",
+		"POST /v1/discord/tasks/task-1/sync",
 		"POST /v1/discord/invite-url",
 	} {
 		if !containsRequest(requests, want) {

@@ -575,6 +575,51 @@ func TestCommandRouterPlainMessageSendsToTask(t *testing.T) {
 	}
 }
 
+func TestCommandRouterPlainMessageDoesNotAckStructuredTask(t *testing.T) {
+	service := &fakeCommandService{
+		channel: map[string]string{"channel-1": "task-1"},
+		tasks: []TaskSummary{{
+			ID:              "task-1",
+			Status:          "active",
+			Agent:           "codex",
+			AgentThreadID:   stringPtr("thread-1"),
+			AgentStreamKind: stringPtr("codex-app-server"),
+		}},
+	}
+	router := NewCommandRouter(config.DiscordConfig{AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.HandlePlainMessage(context.Background(), CommandInput{ChannelID: "channel-1", UserID: "user"}, "ship it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.sentText != "ship it" {
+		t.Fatalf("sentText = %q, want ship it", service.sentText)
+	}
+	if strings.TrimSpace(response.Content) != "" {
+		t.Fatalf("response.Content = %q, want no fallback ack for structured task", response.Content)
+	}
+}
+
+func TestCommandRouterPlainMessageAcksLegacyTask(t *testing.T) {
+	service := &fakeCommandService{
+		channel: map[string]string{"channel-1": "task-1"},
+		tasks: []TaskSummary{{
+			ID:     "task-1",
+			Status: "active",
+			Agent:  "codex",
+		}},
+	}
+	router := NewCommandRouter(config.DiscordConfig{AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.HandlePlainMessage(context.Background(), CommandInput{ChannelID: "channel-1", UserID: "user"}, "ship it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(response.Content, "Message sent to codex") || !strings.Contains(response.Content, "AGX Desktop") {
+		t.Fatalf("response.Content = %q, want legacy fallback ack", response.Content)
+	}
+}
+
 func TestCommandRouterComponentChoiceSendsSelectedLabelToTask(t *testing.T) {
 	service := &fakeCommandService{channel: map[string]string{"channel-1": "task-1"}}
 	router := NewCommandRouter(config.DiscordConfig{AllowedUserIDs: []string{"user"}}, service)

@@ -163,6 +163,60 @@ func TestServiceProjectAndTaskEndpoints(t *testing.T) {
 	}
 }
 
+func TestServiceConfigDefaultAgentEndpoints(t *testing.T) {
+	configDir := shortTempDir(t)
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+	service, _ := newRuntimeAPITestService(t)
+
+	var cfg RuntimeConfig
+	if code := runtimeAPIRequest(t, service, http.MethodGet, "/v1/config", nil, &cfg); code != http.StatusOK {
+		t.Fatalf("get config status = %d, want 200", code)
+	}
+	if cfg.DefaultAgent != "codex" {
+		t.Fatalf("DefaultAgent = %q, want codex", cfg.DefaultAgent)
+	}
+
+	agentName := "claude"
+	if code := runtimeAPIRequest(t, service, http.MethodPatch, "/v1/config", patchConfigRequest{DefaultAgent: &agentName}, &cfg); code != http.StatusOK {
+		t.Fatalf("patch config status = %d, want 200", code)
+	}
+	if cfg.DefaultAgent != "claude" {
+		t.Fatalf("DefaultAgent = %q, want claude", cfg.DefaultAgent)
+	}
+	saved, warnings := config.LoadGlobal()
+	if len(warnings) > 0 {
+		t.Fatal(warnings[0])
+	}
+	if saved.DefaultAgent != "claude" {
+		t.Fatalf("saved DefaultAgent = %q, want claude", saved.DefaultAgent)
+	}
+}
+
+func TestServiceConfigRejectsUnknownDefaultAgent(t *testing.T) {
+	configDir := shortTempDir(t)
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+	service, _ := newRuntimeAPITestService(t)
+
+	agentName := "missing"
+	status, message := runtimeAPIError(t, service, http.MethodPatch, "/v1/config", patchConfigRequest{DefaultAgent: &agentName})
+	if status != http.StatusBadRequest || !strings.Contains(message, `unknown agent "missing"`) {
+		t.Fatalf("patch config error = (%d, %q), want unknown agent bad request", status, message)
+	}
+}
+
+func TestDiscordTaskSyncRejectsLocalTask(t *testing.T) {
+	service, project := newRuntimeAPITestService(t)
+	task, err := service.store.CreateTask(project.ID, "local task", nil, "codex", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, message := runtimeAPIError(t, service, http.MethodPost, "/v1/discord/tasks/"+task.ID+"/sync", nil)
+	if status != http.StatusBadRequest || !strings.Contains(message, "is not a Discord task") {
+		t.Fatalf("task sync error = (%d, %q), want non-Discord task bad request", status, message)
+	}
+}
+
 func TestRuntimeCreateTaskValidation(t *testing.T) {
 	service, project := newRuntimeAPITestService(t)
 
@@ -563,6 +617,24 @@ func TestDiscordDisconnectClearsStoredTokenOnly(t *testing.T) {
 	}
 	if cfg.Discord.Enabled || cfg.Discord.BotToken != "" || cfg.Discord.GuildID != "guild" || len(cfg.Discord.AllowedUserIDs) != 1 || cfg.Discord.AllowedUserIDs[0] != "user-1" {
 		t.Fatalf("discord config after disconnect = %#v, want disabled, token cleared, ids preserved", cfg.Discord)
+	}
+}
+
+func TestDiscordConnectRejectsEmptyTokenAfterDisconnect(t *testing.T) {
+	configDir := shortTempDir(t)
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+	if err := config.SaveDiscord(config.DiscordConfig{
+		Enabled:        false,
+		BotToken:       "",
+		GuildID:        "guild",
+		AllowedUserIDs: []string{"user-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test-version")
+	status, message := runtimeAPIError(t, service, http.MethodPost, "/v1/discord/connect", discordConnectRequest{})
+	if status != http.StatusBadRequest || !strings.Contains(message, "discord bot token is required") {
+		t.Fatalf("connect error = (%d, %q), want missing token bad request", status, message)
 	}
 }
 

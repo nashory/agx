@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
-const DefaultAgent = "claude"
+const DefaultAgent = "codex"
 
 type Config struct {
 	DefaultAgent string                 `toml:"default_agent"`
@@ -105,6 +106,19 @@ func SaveDiscord(discord DiscordConfig) error {
 		return warnings[0]
 	}
 	cfg.Discord = discord
+	return saveGlobalConfig(cfg)
+}
+
+func SaveDefaultAgent(defaultAgent string) error {
+	cfg, warnings := LoadGlobal()
+	if len(warnings) > 0 {
+		return warnings[0]
+	}
+	cfg.DefaultAgent = strings.TrimSpace(defaultAgent)
+	return saveGlobalConfig(cfg)
+}
+
+func saveGlobalConfig(cfg Config) error {
 	if cfg.DefaultAgent == "" {
 		cfg.DefaultAgent = DefaultAgent
 	}

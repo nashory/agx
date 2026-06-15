@@ -20,7 +20,7 @@ paths, or other sensitive values.
 Example:
 
 ```toml
-default_agent = "claude"
+default_agent = "codex"
 
 [agents.local]
 command = "my-agent-cli"
@@ -62,4 +62,3 @@ When worktrees are enabled, AGX creates:
 
 Use worktrees when you want each task to edit in isolation. Use the project
 checkout when you want agents to operate directly in the current working tree.
-

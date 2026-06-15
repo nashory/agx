@@ -3,6 +3,8 @@ package agent
 import (
 	"fmt"
 	"sort"
+
+	"github.com/nashory/agx/internal/config"
 )
 
 // Registry resolves configured agent names against built-in defaults and
@@ -26,7 +28,7 @@ func NewRegistry(defaultAgent string, customAgents ...Agent) *Registry {
 		agents[a.Name] = a
 	}
 	if defaultAgent == "" {
-		defaultAgent = "claude"
+		defaultAgent = config.DefaultAgent
 	}
 	return &Registry{agents: agents, defaultName: defaultAgent}
 }

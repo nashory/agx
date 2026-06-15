@@ -43,15 +43,15 @@ sudo apt-get install -y git tmux ca-certificates
 
 Install and sign in to at least one supported agent CLI:
 
-- `claude`
 - `codex`
+- `claude`
 - `gemini`
 
 Verify that your chosen agent is available:
 
 ```bash
-which claude || true
 which codex || true
+which claude || true
 which gemini || true
 ```
 

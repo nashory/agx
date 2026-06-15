@@ -222,6 +222,11 @@ type RuntimeStatusInfo struct {
 	Error         string                 `json:"error,omitempty"`
 }
 
+// RuntimeConfigInfo exposes non-secret global runtime configuration to Desktop.
+type RuntimeConfigInfo struct {
+	DefaultAgent string `json:"defaultAgent"`
+}
+
 const maxReadFileBytes = 1 << 20
 const maxStreamLogBytes int64 = 1 << 20
 const maxContextFiles = 50
@@ -723,6 +728,48 @@ func (a *App) RuntimeStatus() RuntimeStatusInfo {
 	return runtimeStatusDTO(status)
 }
 
+func (a *App) RuntimeConfig() (RuntimeConfigInfo, error) {
+	if !a.directMode {
+		ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
+		defer cancel()
+		cfg, err := agxruntime.NewClient().Config(ctx)
+		if err != nil {
+			return RuntimeConfigInfo{}, err
+		}
+		return RuntimeConfigInfo{DefaultAgent: cfg.DefaultAgent}, nil
+	}
+	cfg, warnings := config.LoadGlobal()
+	if len(warnings) > 0 {
+		return RuntimeConfigInfo{}, warnings[0]
+	}
+	return RuntimeConfigInfo{DefaultAgent: cfg.DefaultAgent}, nil
+}
+
+func (a *App) UpdateDefaultAgent(agentName string) (RuntimeConfigInfo, error) {
+	if !a.directMode {
+		ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
+		defer cancel()
+		cfg, err := agxruntime.NewClient().UpdateDefaultAgent(ctx, agentName)
+		if err != nil {
+			return RuntimeConfigInfo{}, err
+		}
+		a.emitMetadataEvent("")
+		return RuntimeConfigInfo{DefaultAgent: cfg.DefaultAgent}, nil
+	}
+	agentName = strings.TrimSpace(agentName)
+	if agentName == "" {
+		agentName = config.DefaultAgent
+	}
+	if _, err := agent.RegistryForProject("").Get(agentName); err != nil {
+		return RuntimeConfigInfo{}, err
+	}
+	if err := config.SaveDefaultAgent(agentName); err != nil {
+		return RuntimeConfigInfo{}, err
+	}
+	a.emitMetadataEvent("")
+	return RuntimeConfigInfo{DefaultAgent: agentName}, nil
+}
+
 func (a *App) RuntimeStart() (RuntimeStatusInfo, error) {
 	if status := a.RuntimeStatus(); status.Running {
 		return status, nil
@@ -906,6 +953,18 @@ func (a *App) DiscordHardSync() (DiscordStatusInfo, error) {
 		return a.discordStatusDTO(status), nil
 	}
 	return a.beginDiscordHardSync("")
+}
+
+func (a *App) DiscordTaskSync(taskID string) (DiscordStatusInfo, error) {
+	ctx, cancel := a.runtimeRequestContext(discordConnectTimeout)
+	defer cancel()
+	status, err := agxruntime.NewClient().DiscordTaskSync(ctx, strings.TrimSpace(taskID))
+	if err != nil {
+		a.emitDiscordStatusEvent()
+		return a.DiscordStatus(), err
+	}
+	a.emitDiscordStatusEvent()
+	return a.discordStatusDTO(status), nil
 }
 
 func (a *App) beginDiscordHardSync(preserveControlChannelID string) (DiscordStatusInfo, error) {

@@ -17,8 +17,8 @@ Required tools:
 
 Optional tools for end-to-end testing:
 
-- `claude`
 - `codex`
+- `claude`
 - `gemini`
 - `agent`
 - `copilot`

@@ -52,6 +52,23 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, "/v1/shutdown", nil, nil)
 }
 
+func (c *Client) Config(ctx context.Context) (RuntimeConfig, error) {
+	var cfg RuntimeConfig
+	if err := c.do(ctx, http.MethodGet, "/v1/config", nil, &cfg); err != nil {
+		return RuntimeConfig{}, err
+	}
+	return cfg, nil
+}
+
+func (c *Client) UpdateDefaultAgent(ctx context.Context, agentName string) (RuntimeConfig, error) {
+	var cfg RuntimeConfig
+	req := patchConfigRequest{DefaultAgent: &agentName}
+	if err := c.do(ctx, http.MethodPatch, "/v1/config", req, &cfg); err != nil {
+		return RuntimeConfig{}, err
+	}
+	return cfg, nil
+}
+
 // Events opens the runtime server-sent event stream. The returned channel closes
 // when the stream ends or ctx is canceled.
 func (c *Client) Events(ctx context.Context) (<-chan Event, error) {
@@ -445,6 +462,14 @@ func (c *Client) DiscordSoftSync(ctx context.Context) (agxdiscord.Status, error)
 func (c *Client) DiscordHardSync(ctx context.Context) (agxdiscord.Status, error) {
 	var status agxdiscord.Status
 	if err := c.do(ctx, http.MethodPost, "/v1/discord/hard-sync", nil, &status); err != nil {
+		return agxdiscord.Status{}, err
+	}
+	return status, nil
+}
+
+func (c *Client) DiscordTaskSync(ctx context.Context, taskID string) (agxdiscord.Status, error) {
+	var status agxdiscord.Status
+	if err := c.do(ctx, http.MethodPost, "/v1/discord/tasks/"+taskID+"/sync", nil, &status); err != nil {
 		return agxdiscord.Status{}, err
 	}
 	return status, nil

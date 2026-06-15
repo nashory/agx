@@ -1815,6 +1815,17 @@ button {
   padding: 18px;
 }
 
+.action-error-modal {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 36%);
+  padding: 18px;
+}
+
 .quick-discord-choice {
   min-height: 38px;
   display: inline-flex;

@@ -69,8 +69,8 @@ brew install --cask nashory/tap/agx
 Install at least one supported agent CLI and sign in outside AGX:
 
 ```bash
-which claude || true
 which codex || true
+which claude || true
 which gemini || true
 ```
 
@@ -329,6 +329,11 @@ and allowed user ID remain on that machine so reconnecting only requires a fresh
 token. Prefer `DISCORD_BOT_TOKEN` over `--token` so the token does not appear in
 shell history or process arguments.
 
+AGX release builds do not include a shared bot token. Because the runtime runs
+locally and connects directly to Discord, each installation should use its own
+dedicated bot token. Shipping one developer-owned bot token inside the app would
+make that bot credential extractable from the desktop bundle.
+
 Common Discord commands include:
 
 | Command | Purpose |
@@ -349,7 +354,9 @@ reference.
 
 ## Supported Agents
 
-AGX uses agent CLIs already installed and authenticated on your machine.
+AGX uses agent CLIs already installed and authenticated on your machine. Codex
+is the global default unless you change it in Desktop Settings or
+`~/.config/agx/config.toml`.
 
 | Agent | Command |
 | --- | --- |
