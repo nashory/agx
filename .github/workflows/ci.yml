@@ -63,6 +63,7 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/frontend/package-lock.json
       - run: npm --prefix desktop/frontend ci
+      - run: npm --prefix desktop/frontend test
       - run: npm --prefix desktop/frontend run build
 
   release-verify:

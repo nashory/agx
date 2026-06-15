@@ -13,6 +13,7 @@ run() {
 cd "${ROOT}"
 
 run go test ./...
+run npm --prefix desktop/frontend test
 run npm --prefix desktop/frontend run build
 run go build -ldflags "${AGX_RELEASE_LDFLAGS:-}" -o bin/agx ./cmd/agx
 run go build -tags "${AGX_DESKTOP_TAGS:-desktop,production}" -o bin/agx-desktop ./desktop
