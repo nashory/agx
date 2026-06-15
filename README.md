@@ -474,6 +474,7 @@ use worktree mode when multiple agents are editing in parallel.
 | [Discord](docs/DISCORD.md) | Discord setup, CLI configuration, and command reference. |
 | [Architecture](docs/ARCHITECTURE.md) | Runtime model, task states, local resources, and workspace behavior. |
 | [Development](docs/DEVELOPMENT.md) | Build, run, test, smoke checks, packaging, and release commands. |
+| [Release](docs/RELEASE.md) | Required release verification, artifact scanning, checksums, and compatibility review. |
 | [Contributing](docs/CONTRIBUTING.md) | Contribution areas, coding expectations, and PR checklist. |
 
 ## Build From Source
@@ -509,13 +510,16 @@ Build release artifacts:
 ```bash
 VERSION=v0.1.0-dev make package-macos
 VERSION=v0.1.0-dev make package-linux
+AGX_REQUIRE_RELEASE_ARTIFACTS=1 make release-verify
 make release-checksums
 ```
 
-CI runs Go tests on macOS and Linux, builds the frontend, packages Linux
-artifacts, and runs Docker smoke checks.
+CI runs Go tests on macOS and Linux, builds and smoke-tests the frontend,
+packages Linux artifacts, scans release archives, verifies checksums, and runs
+Docker smoke checks.
 
-See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the full developer guide.
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) and
+[docs/RELEASE.md](docs/RELEASE.md) for the full developer and release guides.
 
 ## Contributing
 

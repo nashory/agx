@@ -109,6 +109,12 @@ agx --version
 agx doctor
 ```
 
+When downloading from a release, verify `checksums.txt` before installing:
+
+```bash
+shasum -a 256 -c checksums.txt
+```
+
 For native Linux service management:
 
 ```bash
