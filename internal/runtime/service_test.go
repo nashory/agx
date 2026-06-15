@@ -300,6 +300,42 @@ func TestRuntimeErrorResponseIncludesValidationCode(t *testing.T) {
 	}
 }
 
+func TestRuntimeCreateProjectModeTaskConflictResponse(t *testing.T) {
+	service, project := newRuntimeAPITestService(t)
+	if _, err := service.store.CreateTaskRuntimeModeInterfaceWorkspace(
+		db.NewTaskID(),
+		project.ID,
+		"active project task",
+		nil,
+		"codex",
+		false,
+		db.TaskInterfaceLocal,
+		db.WorkspaceModeProject,
+		db.StatusActive,
+		nil,
+		nil,
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	status, payload := runtimeAPIErrorResponse(t, service, http.MethodPost, "/v1/tasks", createTaskRequest{
+		ProjectID:     project.ID,
+		Title:         "second project task",
+		Agent:         "codex",
+		WorkspaceMode: string(db.WorkspaceModeProject),
+	})
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want conflict; payload=%#v", status, payload)
+	}
+	if payload.Code != ErrorCodeConflict || !payload.Retryable || payload.PartialSuccess {
+		t.Fatalf("payload = %#v, want retryable conflict without partial success", payload)
+	}
+	if !strings.Contains(payload.Error, "another project-mode task is already active for this project") {
+		t.Fatalf("payload error = %q, want project-mode conflict guidance", payload.Error)
+	}
+}
+
 func TestRuntimeTaskDTOIncludesDiscordSyncState(t *testing.T) {
 	service, project := newRuntimeAPITestService(t)
 	task, err := service.store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "discord task", nil, "codex", false, db.TaskInterfaceDiscord, db.StatusWaiting, nil, nil, nil)
