@@ -45,7 +45,7 @@ import { ActionLogConsole } from './actionLog';
 import { CodePreview, isMarkdownPreviewPath, renderMarkdown } from './codePreview';
 import { FilePanel } from './filePanel';
 import { addUniquePaths, appendPromptPaths, pathsFromDrop } from './pathDrag';
-import type { Agent, DiscordStatusInfo, LanguageStat, Project, ProjectCandidate, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskStatus, TaskTranscriptMessage, ViewMode, WorkspaceMode } from './types';
+import type { Agent, DiscordStatusInfo, LanguageStat, Project, ProjectCandidate, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskDiscordSync, TaskStatus, TaskTranscriptMessage, ViewMode, WorkspaceMode } from './types';
 import './styles.css';
 
 type ThemeMode = 'dark' | 'light';
@@ -243,6 +243,19 @@ function relativeTime(value: string): string {
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`;
   return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function discordSyncLabel(sync?: TaskDiscordSync): string {
+  if (!sync) return 'Sync not started';
+  if (sync.status === 'synced') return 'Synced';
+  if (sync.status === 'failed') return 'Sync failed';
+  return 'Sync pending';
+}
+
+function discordSyncTime(sync?: TaskDiscordSync): string {
+  if (!sync) return '';
+  const timestamp = sync.lastFailureAt || sync.lastSuccessAt || sync.updatedAt;
+  return timestamp ? relativeTime(timestamp) : '';
 }
 
 function isTaskStatus(value: string): value is TaskStatus {
@@ -3786,6 +3799,9 @@ function DiscordTaskDetail({
     }
   }
 
+  const syncStatusClass = task.discordSync?.status ?? 'not-started';
+  const syncStatusTime = discordSyncTime(task.discordSync);
+
   return (
     <main className="session-shell discord-task-detail-shell">
       <Header
@@ -3843,6 +3859,12 @@ function DiscordTaskDetail({
               <div>
                 <h2>{task.title}</h2>
                 <p>This task is controlled from Discord. Desktop input is read-only for this task.</p>
+                <div className={`discord-sync-status ${syncStatusClass}`}>
+                  <span>{discordSyncLabel(task.discordSync)}</span>
+                  {task.discordSync?.attempts ? <span>{task.discordSync.attempts} attempt{task.discordSync.attempts === 1 ? '' : 's'}</span> : null}
+                  {syncStatusTime && <span>{syncStatusTime}</span>}
+                </div>
+                {task.discordSync?.lastError && <p className="discord-sync-error">{task.discordSync.lastError}</p>}
               </div>
             </header>
             {(scrollState.canScrollUp || scrollState.canScrollDown) && (

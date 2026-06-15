@@ -2423,6 +2423,44 @@ button {
   line-height: 1.45;
 }
 
+.discord-sync-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.discord-sync-status span {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: var(--surface-muted);
+}
+
+.discord-sync-status.synced span:first-child {
+  border-color: var(--success-border);
+  color: var(--success);
+}
+
+.discord-sync-status.failed span:first-child {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: var(--danger);
+}
+
+.discord-sync-status.pending span:first-child {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.discord-sync-error {
+  margin-top: 10px !important;
+  max-width: 720px;
+  color: var(--danger) !important;
+  overflow-wrap: anywhere;
+}
+
 .discord-transcript {
   max-width: 880px;
   display: flex;
