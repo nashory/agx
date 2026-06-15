@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/nashory/agx/internal/config"
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
+	"github.com/nashory/agx/internal/display"
 	"github.com/nashory/agx/internal/session"
 	"github.com/nashory/agx/internal/tmux"
 )
@@ -161,7 +163,9 @@ func (s *Service) Start(ctx context.Context) error {
 		go func() {
 			startCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			_ = s.discord.Start(startCtx, "runtime")
+			if err := s.discord.Start(startCtx, "runtime"); err != nil {
+				log.Printf("discord startup failed: %v", err)
+			}
 			s.bus.Publish("discord.status", s.discord.Status())
 		}()
 	}
@@ -404,7 +408,9 @@ func (s *Service) syncDiscordAsync() {
 	go func() {
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			_ = s.discord.SoftSync(ctx)
+			if err := s.discord.SoftSync(ctx); err != nil {
+				log.Printf("background Discord soft sync failed: %v", err)
+			}
 			cancel()
 			s.bus.Publish("discord.status", s.discord.Status())
 
@@ -437,6 +443,7 @@ func (s *Service) syncDiscordTaskNow(taskID string) error {
 // queues a retry if Discord is slow or temporarily rejects the channel update.
 func (s *Service) syncDiscordTaskBestEffort(taskID string) {
 	if err := s.syncDiscordTaskNow(taskID); err != nil {
+		log.Printf("foreground Discord task sync failed for task %s: %v", display.ShortID(taskID), err)
 		if s.discord != nil && s.discord.Status().Connected {
 			s.discord.RefreshTaskStreams(context.Background())
 		}
@@ -451,7 +458,9 @@ func (s *Service) syncDiscordTaskAsync(taskID string) {
 		return
 	}
 	go func() {
-		_ = s.syncDiscordTaskNow(taskID)
+		if err := s.syncDiscordTaskNow(taskID); err != nil {
+			log.Printf("background Discord task sync failed for task %s: %v", display.ShortID(taskID), err)
+		}
 	}()
 }
 

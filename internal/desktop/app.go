@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -2254,7 +2255,9 @@ func (a *App) syncDiscordAsync() {
 	go func() {
 		for {
 			ctx, cancel := a.runtimeRequestContext(15 * time.Second)
-			_, _ = agxruntime.NewClient().DiscordSoftSync(ctx)
+			if _, err := agxruntime.NewClient().DiscordSoftSync(ctx); err != nil {
+				log.Printf("desktop background Discord soft sync failed: %v", err)
+			}
 			cancel()
 			a.emitDiscordStatusEvent()
 
@@ -2272,10 +2275,11 @@ func (a *App) syncDiscordAsync() {
 
 func (a *App) deleteDiscordTaskChannelAsync(taskID string) {
 	go func() {
-		_ = taskID
 		ctx, cancel := a.runtimeRequestContext(15 * time.Second)
 		defer cancel()
-		_, _ = agxruntime.NewClient().DiscordSoftSync(ctx)
+		if _, err := agxruntime.NewClient().DiscordSoftSync(ctx); err != nil {
+			log.Printf("desktop Discord task channel cleanup sync failed for task %s: %v", display.ShortID(taskID), err)
+		}
 		a.emitDiscordStatusEvent()
 	}()
 }
