@@ -1283,7 +1283,7 @@ func (s *Service) deleteDiscordChannelForTaskAsync(task db.Task, fallbackChannel
 	}
 	taskID := task.ID
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := s.backgroundTimeout(15 * time.Second)
 		defer cancel()
 		if err := s.discord.DeleteTaskChannelWithFallback(ctx, taskID, fallbackChannelID); err != nil {
 			log.Printf("operation=%q task=%s error=%v", "discord_task_channel_cleanup", display.ShortID(taskID), err)

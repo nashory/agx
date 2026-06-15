@@ -49,8 +49,10 @@ type Service struct {
 	server *http.Server
 	ln     net.Listener
 
-	shutdownOnce sync.Once
-	shutdownCh   chan struct{}
+	backgroundCtx    context.Context
+	backgroundCancel context.CancelFunc
+	shutdownOnce     sync.Once
+	shutdownCh       chan struct{}
 }
 
 // Status is the runtime health snapshot returned to clients and emitted on the
@@ -70,16 +72,19 @@ type Status struct {
 // NewService constructs an idle runtime service. Start must be called before
 // the service owns the database, socket, or Discord bridge.
 func NewService(version string) *Service {
+	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
 	service := &Service{
-		paths:       DefaultPaths(),
-		version:     version,
-		started:     time.Now().UTC(),
-		bus:         NewEventBus(),
-		tmux:        tmux.NewController(),
-		locks:       map[string]*sync.Mutex{},
-		states:      map[string]runtimeTaskState{},
-		attachments: defaultAttachmentDownloader(),
-		shutdownCh:  make(chan struct{}),
+		paths:            DefaultPaths(),
+		version:          version,
+		started:          time.Now().UTC(),
+		bus:              NewEventBus(),
+		tmux:             tmux.NewController(),
+		locks:            map[string]*sync.Mutex{},
+		states:           map[string]runtimeTaskState{},
+		attachments:      defaultAttachmentDownloader(),
+		backgroundCtx:    backgroundCtx,
+		backgroundCancel: backgroundCancel,
+		shutdownCh:       make(chan struct{}),
 	}
 	service.discord = agxdiscord.NewBridge(config.DiscordConfig{})
 	service.agents = newAgentEventService(service)
@@ -161,7 +166,7 @@ func (s *Service) Start(ctx context.Context) error {
 	s.bus.Publish("runtime.status", s.Status())
 	if cfg.Discord.Enabled {
 		go func() {
-			startCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			startCtx, cancel := s.backgroundTimeout(15 * time.Second)
 			defer cancel()
 			if err := s.discord.Start(startCtx, "runtime"); err != nil {
 				log.Printf("operation=%q error=%v", "discord_startup", err)
@@ -295,6 +300,9 @@ func shouldRetireCompletedRuntimeShell(task db.Task, state runtimeTaskState, sta
 func (s *Service) Shutdown(ctx context.Context) error {
 	var err error
 	s.shutdownOnce.Do(func() {
+		if s.backgroundCancel != nil {
+			s.backgroundCancel()
+		}
 		s.bus.Publish("runtime.status", map[string]any{"running": false})
 		if s.server != nil {
 			err = s.server.Shutdown(ctx)
@@ -329,6 +337,17 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	return err
 }
 
+func (s *Service) backgroundContext() context.Context {
+	if s.backgroundCtx == nil {
+		return context.Background()
+	}
+	return s.backgroundCtx
+}
+
+func (s *Service) backgroundTimeout(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(s.backgroundContext(), timeout)
+}
+
 func (s *Service) emitMetadataEvent(projectID string) {
 	s.bus.Publish("project.changed", map[string]string{"projectId": projectID})
 }
@@ -350,7 +369,9 @@ func (s *Service) startDiscordHardSync(preserveControlChannelID string) error {
 		cfg, _ := config.LoadGlobal()
 		s.discord.Configure(cfg.Discord)
 		s.discord.SetStore(s.store)
-		if err := s.discord.Start(context.Background(), "runtime"); err != nil {
+		startCtx, cancel := s.backgroundTimeout(15 * time.Second)
+		defer cancel()
+		if err := s.discord.Start(startCtx, "runtime"); err != nil {
 			return err
 		}
 	}
@@ -370,7 +391,7 @@ func (s *Service) startDiscordHardSync(preserveControlChannelID string) error {
 	s.bus.Publish("discord.status", s.discordStatus())
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		ctx, cancel := s.backgroundTimeout(10 * time.Minute)
 		defer cancel()
 		err := s.discord.HardSyncPreserving(ctx, preserveControlChannelID)
 		completed := time.Now()
@@ -407,7 +428,7 @@ func (s *Service) syncDiscordAsync() {
 	s.discordSyncMu.Unlock()
 	go func() {
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			ctx, cancel := s.backgroundTimeout(15 * time.Second)
 			if err := s.discord.SoftSync(ctx); err != nil {
 				log.Printf("operation=%q error=%v", "discord_soft_sync_background", err)
 			}
@@ -432,7 +453,7 @@ func (s *Service) syncDiscordTaskNow(taskID string) error {
 	if s.discord == nil || !s.discord.Status().Connected {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), discordTaskSyncTimeout)
+	ctx, cancel := s.backgroundTimeout(discordTaskSyncTimeout)
 	defer cancel()
 	err := s.discord.SyncTaskChannel(ctx, taskID)
 	s.bus.Publish("discord.status", s.discord.Status())
@@ -445,7 +466,7 @@ func (s *Service) syncDiscordTaskBestEffort(taskID string) {
 	if err := s.syncDiscordTaskNow(taskID); err != nil {
 		log.Printf("operation=%q task=%s error=%v", "discord_task_sync_foreground", display.ShortID(taskID), err)
 		if s.discord != nil && s.discord.Status().Connected {
-			s.discord.RefreshTaskStreams(context.Background())
+			s.discord.RefreshTaskStreams(s.backgroundContext())
 		}
 		s.syncDiscordTaskAsync(taskID)
 	}

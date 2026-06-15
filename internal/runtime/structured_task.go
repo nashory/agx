@@ -93,7 +93,7 @@ func removeStructuredWorktree(project db.Project, prepared worktree.Prepared) er
 }
 
 func (s *Service) rollbackStructuredDiscordTask(primary error, project db.Project, task db.Task, prepared worktree.Prepared) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := s.backgroundTimeout(15 * time.Second)
 	defer cancel()
 	return s.withStructuredCleanupError(primary, fmt.Sprintf("rollback structured Discord task %s", display.ShortID(task.ID)), func() error {
 		var discordErr error
