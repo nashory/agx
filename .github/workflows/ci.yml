@@ -46,6 +46,9 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y tmux
       - run: go build -o bin/agx ./cmd/agx
       - run: VERSION=ci make package-linux
+      - run: make release-scan
+      - run: make release-checksums
+      - run: shasum -a 256 -c dist/checksums.txt
       - run: |
           mkdir -p /tmp/agx-linux-smoke
           tar -xzf dist/agx-linux-amd64.tar.gz -C /tmp/agx-linux-smoke
