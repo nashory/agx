@@ -194,7 +194,7 @@ func TestRuntimeClientTaskCreatePassesWorkspaceFlags(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "task task-12 active (codex)") {
+	if !strings.Contains(out.String(), "task task-123 active (codex)") {
 		t.Fatalf("output = %q, want created task summary", out.String())
 	}
 }
