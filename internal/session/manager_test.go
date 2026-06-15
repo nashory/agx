@@ -565,6 +565,39 @@ func TestManagerDeleteTaskReportsCleanupFailureAfterDeletingRow(t *testing.T) {
 	}
 }
 
+func TestStopProjectReturnsWorktreeCleanupFailureAndClearsRuntimeState(t *testing.T) {
+	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escapedWorktreePath := t.TempDir()
+	branchName := "agx/task-stop-cleanup"
+	sessionName := "task-stop"
+	task, err := store.CreateTaskRuntime(db.NewTaskID(), project.ID, "cleanup failure", nil, "claude", db.StatusActive, &sessionName, &escapedWorktreePath, &branchName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(store, tmux.NewController(), agent.NewRegistry("claude"))
+
+	err = manager.StopProject(project)
+	if err == nil || !strings.Contains(err.Error(), "remove task") || !strings.Contains(err.Error(), "worktree") {
+		t.Fatalf("StopProject() error = %v, want worktree cleanup failure", err)
+	}
+	refreshed, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Status != db.StatusOffline || refreshed.SessionName != nil || refreshed.WorktreePath != nil || refreshed.BranchName != nil || refreshed.BaseBranch != nil {
+		t.Fatalf("task after StopProject cleanup failure = %#v, want runtime state cleared", refreshed)
+	}
+}
+
 func newSessionStoreWithLiveTask(t *testing.T) (*db.Store, db.Project, db.Task) {
 	t.Helper()
 	store, err := db.OpenMemory()
