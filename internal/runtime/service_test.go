@@ -63,9 +63,15 @@ func runtimeAPIRequest(t *testing.T, service *Service, method, path string, body
 
 func runtimeAPIError(t *testing.T, service *Service, method, path string, body any) (int, string) {
 	t.Helper()
-	var payload map[string]string
+	status, payload := runtimeAPIErrorResponse(t, service, method, path, body)
+	return status, payload.Error
+}
+
+func runtimeAPIErrorResponse(t *testing.T, service *Service, method, path string, body any) (int, errorResponse) {
+	t.Helper()
+	var payload errorResponse
 	status := runtimeAPIRequest(t, service, method, path, body, &payload)
-	return status, payload["error"]
+	return status, payload
 }
 
 func TestServiceStatusAndShutdown(t *testing.T) {
@@ -228,9 +234,12 @@ func TestRuntimeDeleteTaskReturnsCleanupFailureAfterDeletingRow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, message := runtimeAPIError(t, service, http.MethodDelete, "/v1/tasks/"+task.ID, nil)
-	if status != http.StatusInternalServerError || !strings.Contains(message, "deleted, but cleanup failed") {
-		t.Fatalf("delete error = (%d, %q), want cleanup failure", status, message)
+	status, payload := runtimeAPIErrorResponse(t, service, http.MethodDelete, "/v1/tasks/"+task.ID, nil)
+	if status != http.StatusInternalServerError || !strings.Contains(payload.Error, "deleted, but cleanup failed") {
+		t.Fatalf("delete error = (%d, %#v), want cleanup failure", status, payload)
+	}
+	if payload.Code != errorCodeCleanupFailed || !payload.PartialSuccess {
+		t.Fatalf("delete error payload = %#v, want cleanup code and partial success", payload)
 	}
 	if _, err := service.store.GetTask(task.ID); !errors.Is(err, db.ErrTaskNotFound) {
 		t.Fatalf("GetTask after cleanup failure = %v, want ErrTaskNotFound", err)
@@ -276,6 +285,18 @@ func TestRuntimeCreateTaskValidation(t *testing.T) {
 				t.Fatalf("error = %q, want substring %q", message, tt.want)
 			}
 		})
+	}
+}
+
+func TestRuntimeErrorResponseIncludesValidationCode(t *testing.T) {
+	service, _ := newRuntimeAPITestService(t)
+
+	status, payload := runtimeAPIErrorResponse(t, service, http.MethodPost, "/v1/tasks", createTaskRequest{Title: "missing project"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want bad request", status)
+	}
+	if payload.Code != errorCodeValidation || payload.Retryable || payload.PartialSuccess {
+		t.Fatalf("payload = %#v, want validation code without retry/partial flags", payload)
 	}
 }
 

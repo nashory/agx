@@ -122,6 +122,24 @@ type Agent struct {
 	Available   bool   `json:"available"`
 }
 
+const (
+	errorCodeInternal       = "internal_error"
+	errorCodeValidation     = "validation_error"
+	errorCodeNotFound       = "not_found"
+	errorCodeConflict       = "conflict"
+	errorCodeTimeout        = "timeout"
+	errorCodeCleanupFailed  = "cleanup_failed"
+	errorCodePartialSuccess = "partial_success"
+	errorCodeSyncInProgress = "sync_in_progress"
+)
+
+type errorResponse struct {
+	Error          string `json:"error"`
+	Code           string `json:"code"`
+	Retryable      bool   `json:"retryable,omitempty"`
+	PartialSuccess bool   `json:"partialSuccess,omitempty"`
+}
+
 type RuntimeConfig struct {
 	DefaultAgent string `json:"defaultAgent"`
 }
@@ -1199,7 +1217,41 @@ func writeError(w http.ResponseWriter, err error) {
 func writeErrorStatus(w http.ResponseWriter, status int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	_ = json.NewEncoder(w).Encode(runtimeErrorResponse(status, err))
+}
+
+func runtimeErrorResponse(status int, err error) errorResponse {
+	response := errorResponse{
+		Error: err.Error(),
+		Code:  errorCodeInternal,
+	}
+	switch {
+	case errors.As(err, new(session.TaskCleanupError)):
+		response.Code = errorCodeCleanupFailed
+		response.PartialSuccess = true
+	case isPartialSuccessRuntimeError(err):
+		response.Code = errorCodePartialSuccess
+		response.PartialSuccess = true
+	case errors.Is(err, agxdiscord.ErrSyncInProgress):
+		response.Code = errorCodeSyncInProgress
+		response.Retryable = true
+	case errors.Is(err, context.DeadlineExceeded):
+		response.Code = errorCodeTimeout
+		response.Retryable = true
+	case status == http.StatusBadRequest:
+		response.Code = errorCodeValidation
+	case status == http.StatusNotFound:
+		response.Code = errorCodeNotFound
+	case status == http.StatusConflict:
+		response.Code = errorCodeConflict
+		response.Retryable = true
+	}
+	return response
+}
+
+func isPartialSuccessRuntimeError(err error) bool {
+	var partial interface{ PartialSuccess() bool }
+	return errors.As(err, &partial) && partial.PartialSuccess()
 }
 
 func (s *Service) taskAndProject(taskID string) (db.Task, db.Project, error) {
