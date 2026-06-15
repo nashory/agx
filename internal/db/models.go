@@ -198,3 +198,27 @@ type DiscordMapping struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
+
+type DiscordTaskSyncStatus string
+
+const (
+	DiscordTaskSyncPending DiscordTaskSyncStatus = "pending"
+	DiscordTaskSyncSynced  DiscordTaskSyncStatus = "synced"
+	DiscordTaskSyncFailed  DiscordTaskSyncStatus = "failed"
+)
+
+// DiscordTaskSyncState records the last known Discord channel sync result for
+// one AGX task. It complements discord_mappings with retry and failure context.
+type DiscordTaskSyncState struct {
+	TaskID           string
+	Status           DiscordTaskSyncStatus
+	Attempts         int
+	DiscordChannelID *string
+	DiscordThreadID  *string
+	LastSuccessAt    *time.Time
+	LastFailureAt    *time.Time
+	LastError        *string
+	RetryAfter       *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}

@@ -88,6 +88,74 @@ func TestDeleteDiscordMapping(t *testing.T) {
 	}
 }
 
+func TestDiscordTaskSyncStateTracksAttempts(t *testing.T) {
+	store, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(NewTaskID(), project.ID, "discord task", nil, "codex", false, TaskInterfaceDiscord, StatusWaiting, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := store.UpsertDiscordTaskSyncPending(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Status != DiscordTaskSyncPending || pending.Attempts != 1 {
+		t.Fatalf("pending state = %#v, want pending attempt 1", pending)
+	}
+	failed, err := store.MarkDiscordTaskSyncFailure(task.ID, errors.New("timeout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != DiscordTaskSyncFailed || failed.Attempts != 2 || failed.LastError == nil || *failed.LastError != "timeout" {
+		t.Fatalf("failed state = %#v, want failed attempt 2 with error", failed)
+	}
+	synced, err := store.MarkDiscordTaskSyncSuccess(task.ID, "channel-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if synced.Status != DiscordTaskSyncSynced || synced.DiscordChannelID == nil || *synced.DiscordChannelID != "channel-1" || synced.LastError != nil {
+		t.Fatalf("synced state = %#v, want channel and cleared error", synced)
+	}
+}
+
+func TestDiscordTaskSyncStateBackfillsExistingMappings(t *testing.T) {
+	store, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(NewTaskID(), project.ID, "discord task", nil, "codex", false, TaskInterfaceDiscord, StatusWaiting, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertDiscordMapping(DiscordAGXTask, task.ID, DiscordTypeChannel, "channel-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.backfillDiscordTaskSyncState(); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.GetDiscordTaskSyncState(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != DiscordTaskSyncSynced || state.DiscordChannelID == nil || *state.DiscordChannelID != "channel-1" {
+		t.Fatalf("backfilled state = %#v, want synced channel mapping", state)
+	}
+}
+
 func TestResetAllClearsDiscordMappings(t *testing.T) {
 	store, err := OpenMemory()
 	if err != nil {

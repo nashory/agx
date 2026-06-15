@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -114,6 +115,101 @@ WHERE agx_type = ? AND agx_id = ?
 	return nil
 }
 
+func (s *Store) UpsertDiscordTaskSyncPending(taskID string) (DiscordTaskSyncState, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return DiscordTaskSyncState{}, fmt.Errorf("task id is required")
+	}
+	if _, err := s.db.Exec(`
+INSERT INTO discord_task_sync_state (task_id, status, attempts, updated_at)
+VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+ON CONFLICT(task_id) DO UPDATE SET
+	status = excluded.status,
+	attempts = discord_task_sync_state.attempts + 1,
+	last_error = NULL,
+	retry_after = NULL,
+	updated_at = CURRENT_TIMESTAMP
+`, taskID, string(DiscordTaskSyncPending)); err != nil {
+		return DiscordTaskSyncState{}, err
+	}
+	return s.GetDiscordTaskSyncState(taskID)
+}
+
+func (s *Store) MarkDiscordTaskSyncSuccess(taskID, channelID string) (DiscordTaskSyncState, error) {
+	taskID = strings.TrimSpace(taskID)
+	channelID = strings.TrimSpace(channelID)
+	if taskID == "" {
+		return DiscordTaskSyncState{}, fmt.Errorf("task id is required")
+	}
+	if channelID == "" {
+		return DiscordTaskSyncState{}, fmt.Errorf("discord channel id is required")
+	}
+	if _, err := s.db.Exec(`
+INSERT INTO discord_task_sync_state (task_id, status, attempts, discord_channel_id, last_success_at, updated_at)
+VALUES (?, ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+ON CONFLICT(task_id) DO UPDATE SET
+	status = excluded.status,
+	discord_channel_id = excluded.discord_channel_id,
+	last_success_at = CURRENT_TIMESTAMP,
+	last_error = NULL,
+	retry_after = NULL,
+	updated_at = CURRENT_TIMESTAMP
+`, taskID, string(DiscordTaskSyncSynced), channelID); err != nil {
+		return DiscordTaskSyncState{}, err
+	}
+	return s.GetDiscordTaskSyncState(taskID)
+}
+
+func (s *Store) MarkDiscordTaskSyncFailure(taskID string, syncErr error) (DiscordTaskSyncState, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return DiscordTaskSyncState{}, fmt.Errorf("task id is required")
+	}
+	message := ""
+	if syncErr != nil {
+		message = syncErr.Error()
+	}
+	if _, err := s.db.Exec(`
+INSERT INTO discord_task_sync_state (task_id, status, attempts, last_failure_at, last_error, updated_at)
+VALUES (?, ?, 1, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(task_id) DO UPDATE SET
+	status = excluded.status,
+	attempts = discord_task_sync_state.attempts + 1,
+	last_failure_at = CURRENT_TIMESTAMP,
+	last_error = excluded.last_error,
+	updated_at = CURRENT_TIMESTAMP
+`, taskID, string(DiscordTaskSyncFailed), message); err != nil {
+		return DiscordTaskSyncState{}, err
+	}
+	return s.GetDiscordTaskSyncState(taskID)
+}
+
+func (s *Store) GetDiscordTaskSyncState(taskID string) (DiscordTaskSyncState, error) {
+	row := s.db.QueryRow(`
+SELECT task_id, status, attempts, discord_channel_id, discord_thread_id, last_success_at, last_failure_at, last_error, retry_after, created_at, updated_at
+FROM discord_task_sync_state
+WHERE task_id = ?
+`, taskID)
+	return scanDiscordTaskSyncState(row)
+}
+
+func (s *Store) backfillDiscordTaskSyncState() error {
+	_, err := s.db.Exec(`
+INSERT INTO discord_task_sync_state (task_id, status, discord_channel_id, last_success_at, updated_at)
+SELECT tasks.id, ?, discord_mappings.discord_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+FROM tasks
+JOIN discord_mappings
+  ON discord_mappings.agx_type = ?
+ AND discord_mappings.agx_id = tasks.id
+WHERE discord_mappings.discord_type = ?
+ON CONFLICT(task_id) DO UPDATE SET
+	discord_channel_id = excluded.discord_channel_id,
+	last_success_at = COALESCE(discord_task_sync_state.last_success_at, excluded.last_success_at),
+	updated_at = CURRENT_TIMESTAMP
+`, string(DiscordTaskSyncSynced), DiscordAGXTask, DiscordTypeChannel)
+	return err
+}
+
 func validateDiscordMapping(agxType, agxID, discordType, discordID string) error {
 	if agxID == "" {
 		return fmt.Errorf("agx id is required")
@@ -143,4 +239,50 @@ func scanDiscordMapping(scanner interface {
 		return DiscordMapping{}, ErrDiscordMappingNotFound
 	}
 	return mapping, err
+}
+
+func scanDiscordTaskSyncState(scanner interface {
+	Scan(dest ...any) error
+}) (DiscordTaskSyncState, error) {
+	var state DiscordTaskSyncState
+	var channelID, threadID, lastError sql.NullString
+	var lastSuccess, lastFailure, retryAfter sql.NullTime
+	err := scanner.Scan(
+		&state.TaskID,
+		&state.Status,
+		&state.Attempts,
+		&channelID,
+		&threadID,
+		&lastSuccess,
+		&lastFailure,
+		&lastError,
+		&retryAfter,
+		&state.CreatedAt,
+		&state.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return DiscordTaskSyncState{}, ErrDiscordMappingNotFound
+	}
+	if err != nil {
+		return DiscordTaskSyncState{}, err
+	}
+	if channelID.Valid {
+		state.DiscordChannelID = &channelID.String
+	}
+	if threadID.Valid {
+		state.DiscordThreadID = &threadID.String
+	}
+	if lastSuccess.Valid {
+		state.LastSuccessAt = &lastSuccess.Time
+	}
+	if lastFailure.Valid {
+		state.LastFailureAt = &lastFailure.Time
+	}
+	if lastError.Valid {
+		state.LastError = &lastError.String
+	}
+	if retryAfter.Valid {
+		state.RetryAfter = &retryAfter.Time
+	}
+	return state, nil
 }

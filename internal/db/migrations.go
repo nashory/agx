@@ -103,6 +103,22 @@ CREATE TABLE IF NOT EXISTS discord_mappings (
 CREATE INDEX IF NOT EXISTS idx_discord_agx ON discord_mappings(agx_type, agx_id);
 CREATE INDEX IF NOT EXISTS idx_discord_id ON discord_mappings(discord_id);
 
+CREATE TABLE IF NOT EXISTS discord_task_sync_state (
+	task_id            TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+	status             TEXT NOT NULL CHECK (status IN ('pending', 'synced', 'failed')),
+	attempts           INTEGER NOT NULL DEFAULT 0,
+	discord_channel_id TEXT,
+	discord_thread_id  TEXT,
+	last_success_at    DATETIME,
+	last_failure_at    DATETIME,
+	last_error         TEXT,
+	retry_after        DATETIME,
+	created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_discord_task_sync_status ON discord_task_sync_state(status, updated_at);
+
 CREATE TABLE IF NOT EXISTS project_access_grants (
 	path       TEXT PRIMARY KEY,
 	granted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -148,6 +164,9 @@ WHERE id IN (
 	SELECT agx_id FROM discord_mappings WHERE agx_type = 'task'
 )
 `); err != nil {
+		return err
+	}
+	if err := s.backfillDiscordTaskSyncState(); err != nil {
 		return err
 	}
 	return s.migrateV2TaskStatuses()
