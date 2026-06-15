@@ -16,6 +16,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type runtimeProjectResolverClient interface {
+	ListProjects(context.Context) ([]agxruntime.Project, error)
+	CreateProject(context.Context, string, string, *string, *string) (agxruntime.Project, error)
+	GrantProjectAccess(context.Context, string) (agxruntime.Project, error)
+}
+
+type runtimeTaskResolverClient interface {
+	ListTasks(context.Context, string) ([]agxruntime.Task, error)
+}
+
+type runtimeTaskCreateClient interface {
+	runtimeProjectResolverClient
+	RunNewTaskWithInitialPromptWorkspace(context.Context, string, string, *string, string, bool, *string, db.WorkspaceMode) (agxruntime.Task, error)
+	RunNewDiscordTaskWithWorkspace(context.Context, string, string, *string, string, bool, db.WorkspaceMode) (agxruntime.Task, error)
+}
+
 func isRuntimeBackedInvocation(args []string) bool {
 	if len(args) < 2 {
 		return false
@@ -404,10 +420,13 @@ func newRuntimeClientTaskCmd(client *agxruntime.Client) *cobra.Command {
 	return cmd
 }
 
-func newRuntimeClientTaskCreateCmd(client *agxruntime.Client) *cobra.Command {
+func newRuntimeClientTaskCreateCmd(client runtimeTaskCreateClient) *cobra.Command {
 	var agentName string
 	var projectRef string
 	var description string
+	var workspaceMode string
+	var discordTask bool
+	var allMighty bool
 	cmd := &cobra.Command{
 		Use:   "create TITLE",
 		Short: "Create and run a task",
@@ -423,7 +442,16 @@ func newRuntimeClientTaskCreateCmd(client *agxruntime.Client) *cobra.Command {
 			if description != "" {
 				desc = &description
 			}
-			task, err := client.RunNewTask(ctx, project.ID, args[0], desc, agentName, true)
+			mode, err := db.ParseWorkspaceMode(workspaceMode)
+			if err != nil {
+				return err
+			}
+			var task agxruntime.Task
+			if discordTask {
+				task, err = client.RunNewDiscordTaskWithWorkspace(ctx, project.ID, args[0], desc, agentName, allMighty, mode)
+			} else {
+				task, err = client.RunNewTaskWithInitialPromptWorkspace(ctx, project.ID, args[0], desc, agentName, allMighty, nil, mode)
+			}
 			if err != nil {
 				return err
 			}
@@ -438,6 +466,9 @@ func newRuntimeClientTaskCreateCmd(client *agxruntime.Client) *cobra.Command {
 	cmd.Flags().StringVarP(&agentName, "agent", "a", "", "agent")
 	cmd.Flags().StringVarP(&projectRef, "project", "p", "", "project")
 	cmd.Flags().StringVar(&description, "description", "", "detailed prompt")
+	cmd.Flags().StringVar(&workspaceMode, "workspace-mode", string(db.WorkspaceModeWorktree), "workspace mode: "+db.WorkspaceModeList())
+	cmd.Flags().BoolVar(&discordTask, "discord", false, "create a Discord-controlled task")
+	cmd.Flags().BoolVar(&allMighty, "all-mighty", true, "grant unrestricted agent permissions")
 	return cmd
 }
 
@@ -778,7 +809,7 @@ func runtimeCLIContext(cmd *cobra.Command) (context.Context, context.CancelFunc)
 	return context.WithTimeout(cmd.Context(), 30*time.Second)
 }
 
-func resolveRuntimeProject(ctx context.Context, client *agxruntime.Client, ref string, createCurrent bool) (agxruntime.Project, error) {
+func resolveRuntimeProject(ctx context.Context, client runtimeProjectResolverClient, ref string, createCurrent bool) (agxruntime.Project, error) {
 	if ref == "" {
 		root, err := findGitRoot(".")
 		if err != nil {
@@ -821,7 +852,7 @@ func resolveRuntimeProject(ctx context.Context, client *agxruntime.Client, ref s
 	return matches[0], nil
 }
 
-func resolveRuntimeTask(ctx context.Context, client *agxruntime.Client, ref string) (agxruntime.Task, error) {
+func resolveRuntimeTask(ctx context.Context, client runtimeTaskResolverClient, ref string) (agxruntime.Task, error) {
 	tasks, err := client.ListTasks(ctx, "")
 	if err != nil {
 		return agxruntime.Task{}, err
@@ -841,7 +872,7 @@ func resolveRuntimeTask(ctx context.Context, client *agxruntime.Client, ref stri
 	return matches[0], nil
 }
 
-func runtimeProjectsByID(ctx context.Context, client *agxruntime.Client) (map[string]agxruntime.Project, error) {
+func runtimeProjectsByID(ctx context.Context, client runtimeProjectResolverClient) (map[string]agxruntime.Project, error) {
 	projects, err := client.ListProjects(ctx)
 	if err != nil {
 		return nil, err

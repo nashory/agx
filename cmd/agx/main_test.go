@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nashory/agx/internal/db"
 	agxruntime "github.com/nashory/agx/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -155,6 +159,106 @@ func TestRuntimeCommandTreeAndResetValidation(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientTaskCreatePassesWorkspaceFlags(t *testing.T) {
+	client := &fakeRuntimeTaskCreateClient{
+		projects: []agxruntime.Project{{ID: "project-1", Name: "AGX", Path: "/repo/agx"}},
+		runTask: func(_ context.Context, projectID, title string, description *string, agentName string, allMighty bool, initialPrompt *string, workspaceMode db.WorkspaceMode) (agxruntime.Task, error) {
+			if projectID != "project-1" || title != "ship it" || agentName != "codex" || allMighty {
+				t.Fatalf("run task args = (%q, %q, %q, %v), want project/title/codex/allMighty=false", projectID, title, agentName, allMighty)
+			}
+			if description == nil || *description != "details" {
+				t.Fatalf("description = %#v, want details", description)
+			}
+			if initialPrompt != nil {
+				t.Fatalf("initialPrompt = %#v, want nil", initialPrompt)
+			}
+			if workspaceMode != db.WorkspaceModeProject {
+				t.Fatalf("workspaceMode = %q, want project", workspaceMode)
+			}
+			return agxruntime.Task{ID: "task-12345678", Agent: agentName, Status: db.StatusActive}, nil
+		},
+	}
+	cmd := newRuntimeClientTaskCreateCmd(client)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{
+		"--project", "AGX",
+		"--agent", "codex",
+		"--description", "details",
+		"--workspace-mode", "project",
+		"--all-mighty=false",
+		"ship it",
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "task task-12 active (codex)") {
+		t.Fatalf("output = %q, want created task summary", out.String())
+	}
+}
+
+func TestRuntimeClientTaskCreateDiscordPath(t *testing.T) {
+	client := &fakeRuntimeTaskCreateClient{
+		projects: []agxruntime.Project{{ID: "project-1", Name: "AGX", Path: "/repo/agx"}},
+		runDiscordTask: func(_ context.Context, projectID, title string, description *string, agentName string, allMighty bool, workspaceMode db.WorkspaceMode) (agxruntime.Task, error) {
+			if projectID != "project-1" || title != "sync me" || agentName != "" || !allMighty || workspaceMode != db.WorkspaceModeWorktree {
+				t.Fatalf("discord task args = (%q, %q, %q, %v, %q)", projectID, title, agentName, allMighty, workspaceMode)
+			}
+			return agxruntime.Task{ID: "task-discord", Agent: "codex", Status: db.StatusActive}, nil
+		},
+	}
+	cmd := newRuntimeClientTaskCreateCmd(client)
+	cmd.SetArgs([]string{"--project", "AGX", "--discord", "sync me"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeClientTaskCreatePreservesRuntimeError(t *testing.T) {
+	conflict := &agxruntime.RuntimeError{
+		Method:     http.MethodPost,
+		Path:       "/v1/tasks",
+		Status:     "409 Conflict",
+		StatusCode: http.StatusConflict,
+		Message:    "another project-mode task is already active for this project: task-1",
+		Code:       agxruntime.ErrorCodeConflict,
+		Retryable:  true,
+	}
+	client := &fakeRuntimeTaskCreateClient{
+		projects: []agxruntime.Project{{ID: "project-1", Name: "AGX", Path: "/repo/agx"}},
+		runTask: func(context.Context, string, string, *string, string, bool, *string, db.WorkspaceMode) (agxruntime.Task, error) {
+			return agxruntime.Task{}, conflict
+		},
+	}
+	cmd := newRuntimeClientTaskCreateCmd(client)
+	cmd.SetArgs([]string{"--project", "AGX", "--workspace-mode", "project", "second"})
+
+	err := cmd.Execute()
+	if !errors.Is(err, conflict) {
+		t.Fatalf("Execute() error = %v, want runtime conflict", err)
+	}
+	var runtimeErr *agxruntime.RuntimeError
+	if !errors.As(err, &runtimeErr) || runtimeErr.Code != agxruntime.ErrorCodeConflict || !runtimeErr.Retryable {
+		t.Fatalf("runtime error = %#v, want retryable conflict", runtimeErr)
+	}
+}
+
+func TestRuntimeClientTaskCreateRejectsInvalidWorkspaceMode(t *testing.T) {
+	client := &fakeRuntimeTaskCreateClient{
+		projects: []agxruntime.Project{{ID: "project-1", Name: "AGX", Path: "/repo/agx"}},
+	}
+	cmd := newRuntimeClientTaskCreateCmd(client)
+	cmd.SetArgs([]string{"--project", "AGX", "--workspace-mode", "spaceship", "ship it"})
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "invalid workspace mode") {
+		t.Fatalf("Execute() error = %v, want invalid workspace mode", err)
+	}
+}
+
 func TestDoctorCommandPrintsOfflineDiagnostics(t *testing.T) {
 	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
 	cmd := newDoctorCmd()
@@ -177,6 +281,38 @@ func TestDoctorCommandPrintsOfflineDiagnostics(t *testing.T) {
 			t.Fatalf("doctor output missing %q:\n%s", want, text)
 		}
 	}
+}
+
+type fakeRuntimeTaskCreateClient struct {
+	projects       []agxruntime.Project
+	runTask        func(context.Context, string, string, *string, string, bool, *string, db.WorkspaceMode) (agxruntime.Task, error)
+	runDiscordTask func(context.Context, string, string, *string, string, bool, db.WorkspaceMode) (agxruntime.Task, error)
+}
+
+func (f *fakeRuntimeTaskCreateClient) ListProjects(context.Context) ([]agxruntime.Project, error) {
+	return f.projects, nil
+}
+
+func (f *fakeRuntimeTaskCreateClient) CreateProject(context.Context, string, string, *string, *string) (agxruntime.Project, error) {
+	return agxruntime.Project{}, db.ErrProjectNotFound
+}
+
+func (f *fakeRuntimeTaskCreateClient) GrantProjectAccess(context.Context, string) (agxruntime.Project, error) {
+	return agxruntime.Project{}, db.ErrProjectNotFound
+}
+
+func (f *fakeRuntimeTaskCreateClient) RunNewTaskWithInitialPromptWorkspace(ctx context.Context, projectID, title string, description *string, agentName string, allMighty bool, initialPrompt *string, workspaceMode db.WorkspaceMode) (agxruntime.Task, error) {
+	if f.runTask != nil {
+		return f.runTask(ctx, projectID, title, description, agentName, allMighty, initialPrompt, workspaceMode)
+	}
+	return agxruntime.Task{}, nil
+}
+
+func (f *fakeRuntimeTaskCreateClient) RunNewDiscordTaskWithWorkspace(ctx context.Context, projectID, title string, description *string, agentName string, allMighty bool, workspaceMode db.WorkspaceMode) (agxruntime.Task, error) {
+	if f.runDiscordTask != nil {
+		return f.runDiscordTask(ctx, projectID, title, description, agentName, allMighty, workspaceMode)
+	}
+	return agxruntime.Task{}, nil
 }
 
 func TestCompactPath(t *testing.T) {
