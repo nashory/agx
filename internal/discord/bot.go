@@ -406,11 +406,19 @@ func (b *Bot) ResetManagedChannels(ctx context.Context, guildID string, _ []Proj
 }
 
 func (b *Bot) SendMessage(ctx context.Context, channelID, content string) error {
+	return b.sendMessageWithSession(ctx, b.session, channelID, content)
+}
+
+type messageSendSession interface {
+	ChannelMessageSend(string, string, ...discordgo.RequestOption) (*discordgo.Message, error)
+}
+
+func (b *Bot) sendMessageWithSession(ctx context.Context, session messageSendSession, channelID, content string) error {
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
 	b.stopProcessingIndicator(context.Background(), channelID)
-	_, err := b.session.ChannelMessageSend(channelID, content)
+	_, err := session.ChannelMessageSend(channelID, content)
 	return err
 }
 
@@ -707,38 +715,48 @@ func (b *Bot) AddCommandHandler(router *CommandRouter) {
 		return
 	}
 	b.session.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if i.Type != discordgo.InteractionApplicationCommand {
-			return
-		}
-		input := CommandInputFromInteraction(i)
-		if input.ChannelID != "" {
-			if channel, err := s.Channel(input.ChannelID); err == nil && channel != nil {
-				input.ChannelName = channel.Name
-			}
-		}
-		ctx := context.Background()
-		flags := discordgo.MessageFlags(0)
-		if !router.IsAuthorized(input) {
-			flags = discordgo.MessageFlagsEphemeral
-		} else if allowed, _, err := router.IsAllowedSlashChannel(ctx, input); err == nil && !allowed {
-			flags = discordgo.MessageFlagsEphemeral
-		}
-		if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Flags: flags},
-		}); err != nil {
-			return
-		}
-		response, err := router.Execute(ctx, input)
-		content := response.Content
-		if err != nil {
-			content = "AGX command failed: " + err.Error()
-		}
-		if strings.TrimSpace(content) == "" {
-			content = "Done."
-		}
-		_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content})
+		b.handleCommandInteraction(s, router, i)
 	})
+}
+
+type commandHandlerSession interface {
+	Channel(string, ...discordgo.RequestOption) (*discordgo.Channel, error)
+	InteractionRespond(*discordgo.Interaction, *discordgo.InteractionResponse, ...discordgo.RequestOption) error
+	InteractionResponseEdit(*discordgo.Interaction, *discordgo.WebhookEdit, ...discordgo.RequestOption) (*discordgo.Message, error)
+}
+
+func (b *Bot) handleCommandInteraction(session commandHandlerSession, router *CommandRouter, i *discordgo.InteractionCreate) {
+	if i.Type != discordgo.InteractionApplicationCommand {
+		return
+	}
+	input := CommandInputFromInteraction(i)
+	if input.ChannelID != "" {
+		if channel, err := session.Channel(input.ChannelID); err == nil && channel != nil {
+			input.ChannelName = channel.Name
+		}
+	}
+	ctx := context.Background()
+	flags := discordgo.MessageFlags(0)
+	if !router.IsAuthorized(input) {
+		flags = discordgo.MessageFlagsEphemeral
+	} else if allowed, _, err := router.IsAllowedSlashChannel(ctx, input); err == nil && !allowed {
+		flags = discordgo.MessageFlagsEphemeral
+	}
+	if err := session.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Flags: flags},
+	}); err != nil {
+		return
+	}
+	response, err := router.Execute(ctx, input)
+	content := response.Content
+	if err != nil {
+		content = "AGX command failed: " + err.Error()
+	}
+	if strings.TrimSpace(content) == "" {
+		content = "Done."
+	}
+	_, _ = session.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content})
 }
 
 func (b *Bot) AddComponentHandler(router *CommandRouter) {
@@ -746,49 +764,59 @@ func (b *Bot) AddComponentHandler(router *CommandRouter) {
 		return
 	}
 	b.session.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if i.Type != discordgo.InteractionMessageComponent {
-			return
-		}
-		data := i.MessageComponentData()
-		taskID, _, ok := parseChoiceComponentID(data.CustomID)
-		if !ok {
-			return
-		}
-		input := CommandInput{
-			GuildID:   i.GuildID,
-			ChannelID: i.ChannelID,
-			Options:   map[string]string{},
-		}
-		if i.Member != nil && i.Member.User != nil {
-			input.UserID = i.Member.User.ID
-		}
-		if input.UserID == "" && i.User != nil {
-			input.UserID = i.User.ID
-		}
-		if !router.IsAuthorized(input) {
-			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{Content: "You are not allowed to control AGX from Discord.", Flags: discordgo.MessageFlagsEphemeral},
-			})
-			return
-		}
-		choice := componentLabel(i.Message, data.CustomID)
-		if choice == "" {
-			choice = "option"
-		}
-		if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredMessageUpdate}); err != nil {
-			return
-		}
-		response, err := router.HandleComponentChoice(context.Background(), input, taskID, choice)
-		if err != nil {
-			_ = b.SendMessage(context.Background(), i.ChannelID, "AGX choice failed: "+err.Error())
-			return
-		}
-		b.markChoiceSelected(i.ChannelID, i.Message, data.CustomID, choice)
-		if strings.TrimSpace(response.Content) != "" {
-			_ = b.SendMessage(context.Background(), i.ChannelID, response.Content)
-		}
+		b.handleComponentInteraction(s, router, i)
 	})
+}
+
+type componentHandlerSession interface {
+	InteractionRespond(*discordgo.Interaction, *discordgo.InteractionResponse, ...discordgo.RequestOption) error
+	ChannelMessageSend(string, string, ...discordgo.RequestOption) (*discordgo.Message, error)
+	ChannelMessageEditComplex(*discordgo.MessageEdit, ...discordgo.RequestOption) (*discordgo.Message, error)
+}
+
+func (b *Bot) handleComponentInteraction(session componentHandlerSession, router *CommandRouter, i *discordgo.InteractionCreate) {
+	if i.Type != discordgo.InteractionMessageComponent {
+		return
+	}
+	data := i.MessageComponentData()
+	taskID, _, ok := parseChoiceComponentID(data.CustomID)
+	if !ok {
+		return
+	}
+	input := CommandInput{
+		GuildID:   i.GuildID,
+		ChannelID: i.ChannelID,
+		Options:   map[string]string{},
+	}
+	if i.Member != nil && i.Member.User != nil {
+		input.UserID = i.Member.User.ID
+	}
+	if input.UserID == "" && i.User != nil {
+		input.UserID = i.User.ID
+	}
+	if !router.IsAuthorized(input) {
+		_ = session.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{Content: "You are not allowed to control AGX from Discord.", Flags: discordgo.MessageFlagsEphemeral},
+		})
+		return
+	}
+	choice := componentLabel(i.Message, data.CustomID)
+	if choice == "" {
+		choice = "option"
+	}
+	if err := session.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredMessageUpdate}); err != nil {
+		return
+	}
+	response, err := router.HandleComponentChoice(context.Background(), input, taskID, choice)
+	if err != nil {
+		_ = b.sendMessageWithSession(context.Background(), session, i.ChannelID, "AGX choice failed: "+err.Error())
+		return
+	}
+	b.markChoiceSelectedWithSession(session, i.ChannelID, i.Message, data.CustomID, choice)
+	if strings.TrimSpace(response.Content) != "" {
+		_ = b.sendMessageWithSession(context.Background(), session, i.ChannelID, response.Content)
+	}
 }
 
 func componentLabel(message *discordgo.Message, customID string) string {
@@ -821,6 +849,14 @@ func componentLabel(message *discordgo.Message, customID string) string {
 }
 
 func (b *Bot) markChoiceSelected(channelID string, message *discordgo.Message, customID, choice string) {
+	b.markChoiceSelectedWithSession(b.session, channelID, message, customID, choice)
+}
+
+type messageEditSession interface {
+	ChannelMessageEditComplex(*discordgo.MessageEdit, ...discordgo.RequestOption) (*discordgo.Message, error)
+}
+
+func (b *Bot) markChoiceSelectedWithSession(session messageEditSession, channelID string, message *discordgo.Message, customID, choice string) {
 	if b == nil || b.session == nil || message == nil {
 		return
 	}
@@ -830,7 +866,7 @@ func (b *Bot) markChoiceSelected(channelID string, message *discordgo.Message, c
 	}
 	content += "\n\nSelected: `" + strings.ReplaceAll(truncateUTF8(choice, 120), "`", "'") + "`"
 	components := disableChoiceComponents(message.Components, customID)
-	_, _ = b.session.ChannelMessageEditComplex(&discordgo.MessageEdit{
+	_, _ = session.ChannelMessageEditComplex(&discordgo.MessageEdit{
 		ID:         message.ID,
 		Channel:    channelID,
 		Content:    &content,
@@ -882,58 +918,67 @@ func (b *Bot) AddPlainMessageHandler(router *CommandRouter) {
 		return
 	}
 	b.session.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
-		if m == nil || m.Author == nil || m.Author.Bot {
-			return
-		}
-		content := strings.TrimSpace(m.Content)
-		attachments := incomingAttachmentsFromDiscord(m.Attachments)
-		if content == "" && len(attachments) == 0 {
-			return
-		}
-		if !b.rememberIncomingMessage(m.ID) {
-			return
-		}
-		input := CommandInput{
-			GuildID:   m.GuildID,
-			ChannelID: m.ChannelID,
-			UserID:    m.Author.ID,
-			Options:   map[string]string{},
-		}
-		ctx := context.Background()
-		if router.service == nil {
-			_ = b.SendMessage(ctx, m.ChannelID, "AGX message failed: discord command service is not configured")
-			return
-		}
-		if !router.IsAuthorized(input) {
-			_ = b.SendMessage(ctx, m.ChannelID, "You are not allowed to control AGX from Discord.")
-			return
-		}
-		taskID, err := router.taskID(ctx, input)
-		if err != nil {
-			if errors.Is(err, ErrChannelNotLinked) {
-				return
-			}
-			_ = b.SendMessage(ctx, m.ChannelID, "AGX message failed: "+err.Error())
-			return
-		}
-		if isPlainKillMessage(content) {
-			if _, err := router.HandlePlainMessage(ctx, input, content); err != nil {
-				_ = b.SendMessage(ctx, m.ChannelID, "AGX message failed: "+err.Error())
-			}
-			return
-		}
-		b.startProcessingIndicator(ctx, m.ChannelID)
-		response, err := router.handlePlainTaskMessage(ctx, taskID, IncomingTaskMessage{Text: content, DiscordMessageID: m.ID, Attachments: attachments})
-		if err != nil {
-			_ = b.SendMessage(ctx, m.ChannelID, "AGX message failed: "+err.Error())
-			return
-		}
-		if strings.TrimSpace(response.Content) != "" {
-			_ = b.SendMessage(ctx, m.ChannelID, response.Content)
-			return
-		}
-		_ = b.session.MessageReactionAdd(m.ChannelID, m.ID, "🚀")
+		b.handlePlainMessage(s, router, m)
 	})
+}
+
+type plainMessageHandlerSession interface {
+	ChannelMessageSend(string, string, ...discordgo.RequestOption) (*discordgo.Message, error)
+	MessageReactionAdd(string, string, string, ...discordgo.RequestOption) error
+}
+
+func (b *Bot) handlePlainMessage(session plainMessageHandlerSession, router *CommandRouter, m *discordgo.MessageCreate) {
+	if m == nil || m.Author == nil || m.Author.Bot {
+		return
+	}
+	content := strings.TrimSpace(m.Content)
+	attachments := incomingAttachmentsFromDiscord(m.Attachments)
+	if content == "" && len(attachments) == 0 {
+		return
+	}
+	if !b.rememberIncomingMessage(m.ID) {
+		return
+	}
+	input := CommandInput{
+		GuildID:   m.GuildID,
+		ChannelID: m.ChannelID,
+		UserID:    m.Author.ID,
+		Options:   map[string]string{},
+	}
+	ctx := context.Background()
+	if router.service == nil {
+		_ = b.sendMessageWithSession(ctx, session, m.ChannelID, "AGX message failed: discord command service is not configured")
+		return
+	}
+	if !router.IsAuthorized(input) {
+		_ = b.sendMessageWithSession(ctx, session, m.ChannelID, "You are not allowed to control AGX from Discord.")
+		return
+	}
+	taskID, err := router.taskID(ctx, input)
+	if err != nil {
+		if errors.Is(err, ErrChannelNotLinked) {
+			return
+		}
+		_ = b.sendMessageWithSession(ctx, session, m.ChannelID, "AGX message failed: "+err.Error())
+		return
+	}
+	if isPlainKillMessage(content) {
+		if _, err := router.HandlePlainMessage(ctx, input, content); err != nil {
+			_ = b.sendMessageWithSession(ctx, session, m.ChannelID, "AGX message failed: "+err.Error())
+		}
+		return
+	}
+	b.startProcessingIndicator(ctx, m.ChannelID)
+	response, err := router.handlePlainTaskMessage(ctx, taskID, IncomingTaskMessage{Text: content, DiscordMessageID: m.ID, Attachments: attachments})
+	if err != nil {
+		_ = b.sendMessageWithSession(ctx, session, m.ChannelID, "AGX message failed: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(response.Content) != "" {
+		_ = b.sendMessageWithSession(ctx, session, m.ChannelID, response.Content)
+		return
+	}
+	_ = session.MessageReactionAdd(m.ChannelID, m.ID, "🚀")
 }
 
 func (b *Bot) rememberIncomingMessage(messageID string) bool {
