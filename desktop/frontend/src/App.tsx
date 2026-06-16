@@ -3,16 +3,12 @@ import { createPortal } from 'react-dom';
 import {
   Activity,
   ArrowLeft,
-  CheckCircle2,
-  Code2,
   ExternalLink,
   Folder,
   FolderOpen,
   GitBranch,
   Grid2X2,
   Keyboard,
-  List,
-  LockKeyhole,
   MessageCircle,
   Minus,
   PanelLeftClose,
@@ -22,7 +18,6 @@ import {
   RefreshCw,
   Send,
   Settings as SettingsIcon,
-  ShieldCheck,
   SquareTerminal,
   Square,
   Trash2,
@@ -43,6 +38,7 @@ import { MonitorView } from './features/monitor/MonitorView';
 import { ProjectView } from './features/projects/ProjectView';
 import { RuntimeStartupView, SettingsView } from './features/settings/SettingsView';
 import { ShortcutsView } from './features/shortcuts/ShortcutsView';
+import { TaskCreateToolbar } from './features/tasks/TaskCreateToolbar';
 import { addUniquePaths, appendPromptPaths, pathsFromDrop } from './pathDrag';
 import type { Agent, DiscordStatusInfo, Project, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskStatus, ViewMode, WorkspaceMode } from './types';
 import { EmptyState, ErrorBar, Header, IconButton, Segmented, type ThemeMode } from './ui';
@@ -65,7 +61,6 @@ import {
   mainTabs,
   preferenceKey,
   projectGridColumns,
-  quickTaskTemplates,
   relativeTime,
   sortTasks,
   statusClass,
@@ -1036,62 +1031,29 @@ function TaskView({
       </Header>
       <ErrorBar error={error} />
       {busy && <div className="busy-bar">Working...</div>}
-      <section className="task-toolbar">
-        <input ref={titleRef} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Task title" />
-        <input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Prompt or details" />
-        <select value={agent} onChange={(event) => setAgent(event.target.value)} aria-label="Agent">
-          <option value="">Default agent</option>
-          {agents.map((item) => (
-            <option key={item.name} value={item.name}>
-              {item.name}{item.available ? '' : ' (missing)'}
-            </option>
-          ))}
-        </select>
-        <label className={`all-mighty-toggle ${allMighty ? 'active' : ''}`} title="Run without approval prompts or sandbox restrictions where the agent supports it">
-          <input type="checkbox" checked={allMighty} onChange={(event) => setAllMighty(event.target.checked)} />
-          <ShieldCheck size={16} />
-          <span>All-mighty</span>
-        </label>
-        <div className="workspace-mode-toggle" role="group" aria-label="Workspace mode">
-          <button type="button" className={workspaceMode === 'worktree' ? 'active' : ''} onClick={() => setWorkspaceMode('worktree')} title="Run in an isolated task worktree">
-            <GitBranch size={15} />
-            <span>Worktree</span>
-          </button>
-          <button type="button" className={workspaceMode === 'project' ? 'active' : ''} onClick={() => setWorkspaceMode('project')} title="Run in the current project checkout. Only one project-mode task can be active.">
-            <FolderOpen size={15} />
-            <span>Project</span>
-          </button>
-        </div>
-        <label className={`discord-attach-toggle ${attachToDiscord ? 'active' : ''}`} title={discordConnected ? 'Create this task as Discord-controlled. Desktop input will be read-only.' : 'Connect Discord before creating Discord-controlled tasks.'}>
-          <input type="checkbox" checked={attachToDiscord} onChange={(event) => setAttachToDiscord(event.target.checked)} />
-          <MessageCircle size={16} />
-          <span>Attach to Discord</span>
-        </label>
-        <button className="primary-button" onClick={createTask} disabled={busy || !project.accessGranted || !title.trim() || (attachToDiscord && !discordConnected)}>
-          Create
-        </button>
-      </section>
-      <section className="quick-task-row" aria-label="Quick task templates">
-        <div className="quick-task-buttons">
-          {quickTaskTemplates.map((template) => (
-            <button className="quick-task-button" key={template.id} disabled={busy || !project.accessGranted || (attachToDiscord && !discordConnected)} onClick={() => setQuickTemplate(template)}>
-              {template.id === 'vanilla' && <SquareTerminal size={16} />}
-              {template.id === 'coding-machine' && <Code2 size={16} />}
-              {template.id === 'code-reviewer' && <CheckCircle2 size={16} />}
-              {template.id === 'planner' && <List size={16} />}
-              <span>{template.label}</span>
-            </button>
-          ))}
-        </div>
-        <div className={`project-access-inline ${project.accessGranted ? 'granted' : 'required'}`}>
-          {!project.accessGranted && <span className="project-access-state">Access Required</span>}
-          <button className="text-button project-access-button" onClick={() => void grantAccess()} disabled={grantingAccess} title={project.accessGranted ? 'Re-run project access repair and validation' : 'Grant project write access before creating tasks'}>
-            {project.accessGranted && <CheckCircle2 size={15} />}
-            {!project.accessGranted && <LockKeyhole size={15} />}
-            {grantingAccess ? 'Granting...' : project.accessGranted ? 'Access Granted' : 'Grant Access'}
-          </button>
-        </div>
-      </section>
+      <TaskCreateToolbar
+        project={project}
+        title={title}
+        description={description}
+        agent={agent}
+        agents={agents}
+        allMighty={allMighty}
+        workspaceMode={workspaceMode}
+        attachToDiscord={attachToDiscord}
+        discordConnected={discordConnected}
+        busy={busy}
+        grantingAccess={grantingAccess}
+        titleInputRef={titleRef}
+        onTitleChange={setTitle}
+        onDescriptionChange={setDescription}
+        onAgentChange={setAgent}
+        onAllMightyChange={setAllMighty}
+        onWorkspaceModeChange={setWorkspaceMode}
+        onAttachToDiscordChange={setAttachToDiscord}
+        onCreate={createTask}
+        onQuickTemplate={setQuickTemplate}
+        onGrantAccess={() => void grantAccess()}
+      />
       <TaskInterfaceTabs value={taskFilter} counts={taskCounts} onChange={setTaskFilter} />
       <section className={`task-board-layout ${showTaskOutput ? 'with-output' : ''}`}>
         <section className="task-board-main">
