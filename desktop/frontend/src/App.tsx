@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   ExternalLink,
   Folder,
-  Grid2X2,
   Keyboard,
   MessageCircle,
   Minus,
@@ -32,11 +31,13 @@ import { DiscordTaskDetail } from './features/discord/DiscordTaskDetail';
 import { DiscordView } from './features/discord/DiscordView';
 import { ActionErrorModal } from './features/errors/ActionErrorModal';
 import { MonitorView } from './features/monitor/MonitorView';
+import { GrantAccessModal } from './features/projects/GrantAccessModal';
 import { ProjectView } from './features/projects/ProjectView';
 import { RuntimeStartupView, SettingsView } from './features/settings/SettingsView';
 import { ShortcutsView } from './features/shortcuts/ShortcutsView';
 import { QuickTaskModal } from './features/tasks/QuickTaskModal';
 import { TaskCreateToolbar } from './features/tasks/TaskCreateToolbar';
+import { TaskInterfaceTabs } from './features/tasks/TaskInterfaceTabs';
 import { addUniquePaths, appendPromptPaths, pathsFromDrop } from './pathDrag';
 import type { Agent, DiscordStatusInfo, Project, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskStatus, ViewMode, WorkspaceMode } from './types';
 import { EmptyState, ErrorBar, Header, IconButton, Segmented, type ThemeMode } from './ui';
@@ -1097,63 +1098,6 @@ function TaskView({
         />
       )}
     </main>
-  );
-}
-
-function TaskInterfaceTabs({ value, counts, onChange }: { value: TaskInterfaceFilter; counts: Record<TaskInterfaceFilter, number>; onChange: (value: TaskInterfaceFilter) => void }) {
-  const tabs: Array<{ value: TaskInterfaceFilter; label: string; icon: React.ReactNode }> = [
-    { value: 'all', label: 'All', icon: <Grid2X2 size={15} /> },
-    { value: 'desktop', label: 'Desktop', icon: <SquareTerminal size={15} /> },
-    { value: 'discord', label: 'Discord', icon: <MessageCircle size={15} /> },
-  ];
-  return (
-    <nav className="task-interface-tabs" aria-label="Task type filter">
-      {tabs.map((tab) => (
-        <button key={tab.value} type="button" className={value === tab.value ? 'active' : ''} onClick={() => onChange(tab.value)} aria-pressed={value === tab.value}>
-          {tab.icon}
-          <span>{tab.label}</span>
-          <strong>{counts[tab.value]}</strong>
-        </button>
-      ))}
-    </nav>
-  );
-}
-
-function GrantAccessModal({
-  project,
-  granting,
-  onBack,
-  onGrant,
-}: {
-  project: Project;
-  granting: boolean;
-  onBack: () => void;
-  onGrant: () => void;
-}) {
-  return (
-    <div className="modal-backdrop blurred access-backdrop">
-      <section className="project-access-modal" role="dialog" aria-modal="true" aria-labelledby="grant-access-title">
-        <header className="modal-header">
-          <div>
-            <h2 id="grant-access-title">Grant Access</h2>
-            <p>{project.name}</p>
-          </div>
-        </header>
-        <div className="access-modal-body">
-          <p>AGX needs to verify that it can create and write task worktrees for this project before agents run.</p>
-          <code>{project.path}</code>
-          {project.accessError && <div className="access-modal-error">{project.accessError}</div>}
-        </div>
-        <footer className="wizard-actions">
-          <button className="text-button" disabled={granting} onClick={onBack}>
-            Back
-          </button>
-          <button className="primary-button" disabled={granting} onClick={onGrant}>
-            {granting ? 'Granting...' : 'Grant Access'}
-          </button>
-        </footer>
-      </section>
-    </div>
   );
 }
 
