@@ -38,8 +38,16 @@ jobs:
         run: |
           go test ./... -covermode=atomic -coverprofile=coverage.out
           go tool cover -func=coverage.out | tee coverage.txt
+          total=$(awk '/^total:/ { print $3 }' coverage.txt)
+          total_number=${total%%%}
+          if awk "BEGIN { exit !($total_number < 50.0) }"; then
+            echo "::warning::Go coverage ${total} is below the current soft floor of 50.0%"
+          fi
           {
             echo "## Go Coverage"
+            echo
+            echo "- Soft floor: 50.0%"
+            echo "- Current total: ${total}"
             echo
             echo '```text'
             tail -n 20 coverage.txt
