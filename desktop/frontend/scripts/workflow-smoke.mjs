@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const app = readFileSync(resolve(root, 'src/App.tsx'), 'utf8');
 const appLogic = readFileSync(resolve(root, 'src/appLogic.ts'), 'utf8');
+const discordTaskSyncAction = readFileSync(resolve(root, 'src/features/discord/DiscordTaskSyncAction.tsx'), 'utf8');
 const discordView = readFileSync(resolve(root, 'src/features/discord/DiscordView.tsx'), 'utf8');
 const api = readFileSync(resolve(root, 'src/api.ts'), 'utf8');
 const types = readFileSync(resolve(root, 'src/types.ts'), 'utf8');
@@ -28,10 +29,11 @@ const checks = [
   },
   {
     name: 'Discord hard sync button',
-    source: app,
+    source: `${app}\n${discordTaskSyncAction}`,
     needles: [
+      'DiscordTaskSyncAction taskId={task.id}',
       'Sync with Discord',
-      'api.DiscordTaskSync(task.id)',
+      'api.DiscordTaskSync(taskId)',
     ],
   },
   {

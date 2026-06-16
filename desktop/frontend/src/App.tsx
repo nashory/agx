@@ -38,6 +38,7 @@ import { ActionLogConsole } from './actionLog';
 import { CodePreview, isMarkdownPreviewPath, renderMarkdown } from './codePreview';
 import { AgentBadge, AllMightyBadge, DiscordBadge, WorkspaceBadge } from './components/badges';
 import { FilePanel } from './filePanel';
+import { DiscordTaskSyncAction } from './features/discord/DiscordTaskSyncAction';
 import { DiscordView } from './features/discord/DiscordView';
 import { ActionErrorModal } from './features/errors/ActionErrorModal';
 import { MonitorView } from './features/monitor/MonitorView';
@@ -2009,7 +2010,6 @@ function DiscordTaskDetail({
   onToggleTheme: () => void;
 }) {
   const [messages, setMessages] = useState<TaskTranscriptMessage[]>([]);
-  const [syncingDiscord, setSyncingDiscord] = useState(false);
   const [scrollState, setScrollState] = useState({ canScrollUp: false, canScrollDown: false, newBelow: 0 });
   const [showFilePanel, setShowFilePanel] = useState(true);
   const [filePanelWidth, setFilePanelWidth] = useState(280);
@@ -2137,24 +2137,6 @@ function DiscordTaskDetail({
     updateScrollState();
   }, [updateScrollState]);
 
-  async function syncWithDiscord() {
-    if (syncingDiscord) return;
-    setSyncingDiscord(true);
-    onError('');
-    onLog(`$ sync Discord task "${task.title}"`);
-    try {
-      await api.DiscordTaskSync(task.id);
-      onLog(`[ok] sync Discord task "${task.title}"`);
-      await onChanged();
-    } catch (err) {
-      const message = errorMessage(err);
-      onError(message);
-      onLog(`[error] sync Discord task "${task.title}": ${message}`);
-    } finally {
-      setSyncingDiscord(false);
-    }
-  }
-
   const syncStatusClass = task.discordSync?.status ?? 'not-started';
   const syncStatusTime = discordSyncTime(task.discordSync);
 
@@ -2167,10 +2149,7 @@ function DiscordTaskDetail({
         theme={theme}
         onToggleTheme={onToggleTheme}
       >
-        <button className="text-button" disabled={syncingDiscord} onClick={() => void syncWithDiscord()}>
-          <RefreshCw size={15} />
-          {syncingDiscord ? 'Syncing...' : 'Sync with Discord'}
-        </button>
+        <DiscordTaskSyncAction taskId={task.id} taskTitle={task.title} onError={onError} onLog={onLog} onChanged={onChanged} />
         <IconButton label={showFilePanel ? 'Hide file tree' : 'Show file tree'} onClick={() => setShowFilePanel((value) => !value)}>
           {showFilePanel ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
         </IconButton>
