@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nashory/agx/internal/db"
+	agxdiscord "github.com/nashory/agx/internal/discord"
 	"github.com/nashory/agx/internal/display"
 	agxruntime "github.com/nashory/agx/internal/runtime"
 	"github.com/nashory/agx/internal/tmux"
@@ -30,6 +31,25 @@ type runtimeTaskCreateClient interface {
 	runtimeProjectResolverClient
 	RunNewTaskWithInitialPromptWorkspace(context.Context, string, string, *string, string, bool, *string, db.WorkspaceMode) (agxruntime.Task, error)
 	RunNewDiscordTaskWithWorkspace(context.Context, string, string, *string, string, bool, db.WorkspaceMode) (agxruntime.Task, error)
+}
+
+type runtimeTaskListClient interface {
+	runtimeProjectResolverClient
+	ListTasks(context.Context, string) ([]agxruntime.Task, error)
+	ListTasksStatus(context.Context, string, string) ([]agxruntime.Task, error)
+	MonitorTasks(context.Context) ([]agxruntime.MonitorTask, error)
+}
+
+type runtimeTaskDeleteClient interface {
+	runtimeTaskResolverClient
+	DeleteTask(context.Context, string) error
+}
+
+type runtimeChatClient interface {
+	DiscordConnect(context.Context, string, string, string) (agxdiscord.Status, error)
+	DiscordDisconnect(context.Context) (agxdiscord.Status, error)
+	DiscordStatus(context.Context) (agxdiscord.Status, error)
+	DiscordSoftSync(context.Context) (agxdiscord.Status, error)
 }
 
 func isRuntimeBackedInvocation(args []string) bool {
@@ -226,7 +246,7 @@ func newRuntimeClientChatCmd(client *agxruntime.Client) *cobra.Command {
 	return cmd
 }
 
-func newRuntimeClientChatConnectCmd(client *agxruntime.Client) *cobra.Command {
+func newRuntimeClientChatConnectCmd(client runtimeChatClient) *cobra.Command {
 	var token string
 	var guild string
 	var allowedUsers []string
@@ -253,7 +273,7 @@ func newRuntimeClientChatConnectCmd(client *agxruntime.Client) *cobra.Command {
 	return cmd
 }
 
-func newRuntimeClientChatDisconnectCmd(client *agxruntime.Client) *cobra.Command {
+func newRuntimeClientChatDisconnectCmd(client runtimeChatClient) *cobra.Command {
 	return &cobra.Command{
 		Use:   "disconnect",
 		Short: "Disable Discord chat integration",
@@ -269,7 +289,7 @@ func newRuntimeClientChatDisconnectCmd(client *agxruntime.Client) *cobra.Command
 	}
 }
 
-func newRuntimeClientChatStatusCmd(client *agxruntime.Client) *cobra.Command {
+func newRuntimeClientChatStatusCmd(client runtimeChatClient) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Show Discord chat runtime status",
@@ -293,7 +313,7 @@ func newRuntimeClientChatStatusCmd(client *agxruntime.Client) *cobra.Command {
 	}
 }
 
-func newRuntimeClientChatSyncCmd(client *agxruntime.Client) *cobra.Command {
+func newRuntimeClientChatSyncCmd(client runtimeChatClient) *cobra.Command {
 	return &cobra.Command{
 		Use:   "sync",
 		Short: "Reconcile Discord chat state",
@@ -472,7 +492,7 @@ func newRuntimeClientTaskCreateCmd(client runtimeTaskCreateClient) *cobra.Comman
 	return cmd
 }
 
-func newRuntimeClientTaskListCmd(client *agxruntime.Client) *cobra.Command {
+func newRuntimeClientTaskListCmd(client runtimeTaskListClient) *cobra.Command {
 	var projectRef string
 	var status string
 	cmd := &cobra.Command{
@@ -507,7 +527,7 @@ func newRuntimeClientTaskListCmd(client *agxruntime.Client) *cobra.Command {
 	return cmd
 }
 
-func newRuntimeClientTaskShowCmd(client *agxruntime.Client) *cobra.Command {
+func newRuntimeClientTaskShowCmd(client runtimeTaskResolverClient) *cobra.Command {
 	return &cobra.Command{
 		Use:   "show TASK_ID",
 		Short: "Show task details",
@@ -583,7 +603,7 @@ func newRuntimeClientTaskEditCmd(client *agxruntime.Client) *cobra.Command {
 	return cmd
 }
 
-func newRuntimeClientTaskDeleteCmd(client *agxruntime.Client) *cobra.Command {
+func newRuntimeClientTaskDeleteCmd(client runtimeTaskDeleteClient) *cobra.Command {
 	return &cobra.Command{
 		Use:   "delete TASK_ID",
 		Short: "Delete a task",
@@ -640,7 +660,7 @@ func newRuntimeClientRunCmd(client *agxruntime.Client) *cobra.Command {
 	return cmd
 }
 
-func newRuntimeClientPsCmd(client *agxruntime.Client) *cobra.Command {
+func newRuntimeClientPsCmd(client runtimeTaskListClient) *cobra.Command {
 	var projectRef string
 	var all bool
 	cmd := &cobra.Command{

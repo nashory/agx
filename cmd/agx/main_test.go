@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/nashory/agx/internal/db"
+	agxdiscord "github.com/nashory/agx/internal/discord"
 	agxruntime "github.com/nashory/agx/internal/runtime"
 	"github.com/spf13/cobra"
 )
@@ -259,6 +260,190 @@ func TestRuntimeClientTaskCreateRejectsInvalidWorkspaceMode(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientTaskListFiltersProjectAndStatus(t *testing.T) {
+	var gotProjectID string
+	var gotStatus string
+	client := &fakeRuntimeTaskCreateClient{
+		projects: []agxruntime.Project{{ID: "project-1", Name: "AGX", Path: "/repo/agx"}},
+		listTasksStatus: func(_ context.Context, projectID, status string) ([]agxruntime.Task, error) {
+			gotProjectID = projectID
+			gotStatus = status
+			return []agxruntime.Task{{ID: "task-abcdef12", Status: db.StatusWaiting, Agent: "codex", Title: "review"}}, nil
+		},
+	}
+	cmd := newRuntimeClientTaskListCmd(client)
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--project", "AGX", "--status", string(db.StatusWaiting)})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if gotProjectID != "project-1" || gotStatus != string(db.StatusWaiting) {
+		t.Fatalf("ListTasksStatus args = (%q, %q), want project-1/waiting", gotProjectID, gotStatus)
+	}
+	for _, want := range []string{"ID", "STATUS", "AGENT", "TITLE", "task-abc", "waiting", "codex", "review"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("task list output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestRuntimeClientTaskShowAndDeleteResolveTaskPrefix(t *testing.T) {
+	description := "details"
+	sessionName := "task-window"
+	worktreePath := "/repo/agx/.worktrees/task"
+	branchName := "agx/task"
+	client := &fakeRuntimeTaskCreateClient{
+		tasks: []agxruntime.Task{{
+			ID:           "task-abcdef12",
+			Title:        "ship",
+			Status:       db.StatusActive,
+			Agent:        "codex",
+			Description:  &description,
+			SessionName:  &sessionName,
+			WorktreePath: &worktreePath,
+			BranchName:   &branchName,
+		}},
+	}
+	showCmd := newRuntimeClientTaskShowCmd(client)
+	var showOut bytes.Buffer
+	showCmd.SetOut(&showOut)
+	showCmd.SetErr(&showOut)
+	showCmd.SetArgs([]string{"task-abc"})
+
+	if err := showCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"ID:          task-abcdef12", "Title:       ship", "Description: details", "Worktree:    /repo/agx/.worktrees/task"} {
+		if !strings.Contains(showOut.String(), want) {
+			t.Fatalf("task show output missing %q:\n%s", want, showOut.String())
+		}
+	}
+
+	deleteCmd := newRuntimeClientTaskDeleteCmd(client)
+	var deleteOut bytes.Buffer
+	deleteCmd.SetOut(&deleteOut)
+	deleteCmd.SetErr(&deleteOut)
+	deleteCmd.SetArgs([]string{"task-abc"})
+
+	if err := deleteCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if client.deletedTaskID != "task-abcdef12" {
+		t.Fatalf("deleted task id = %q, want resolved full task ID", client.deletedTaskID)
+	}
+	if !strings.Contains(deleteOut.String(), "deleted task-abc") {
+		t.Fatalf("delete output = %q, want short deleted summary", deleteOut.String())
+	}
+}
+
+func TestRuntimeClientPsListsMonitorTasksAndAllTasks(t *testing.T) {
+	client := &fakeRuntimeTaskCreateClient{
+		projects: []agxruntime.Project{{ID: "project-1", Name: "AGX", Path: "/repo/agx"}},
+		monitorTasks: []agxruntime.MonitorTask{{
+			ProjectName: "AGX",
+			Task:        agxruntime.Task{ID: "task-monitor", ProjectID: "project-1", Title: "monitor", Agent: "codex", Status: db.StatusActive},
+		}},
+		tasks: []agxruntime.Task{{ID: "task-all", ProjectID: "project-1", Title: "all", Agent: "codex", Status: db.StatusComplete}},
+	}
+
+	monitorCmd := newRuntimeClientPsCmd(client)
+	var monitorOut bytes.Buffer
+	monitorCmd.SetOut(&monitorOut)
+	monitorCmd.SetErr(&monitorOut)
+	if err := monitorCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(monitorOut.String(), "monitor") || !strings.Contains(monitorOut.String(), "AGX") {
+		t.Fatalf("ps monitor output = %q, want monitor task with project", monitorOut.String())
+	}
+
+	allCmd := newRuntimeClientPsCmd(client)
+	var allOut bytes.Buffer
+	allCmd.SetOut(&allOut)
+	allCmd.SetErr(&allOut)
+	allCmd.SetArgs([]string{"--all"})
+	if err := allCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(allOut.String(), "all") || !strings.Contains(allOut.String(), "complete") {
+		t.Fatalf("ps --all output = %q, want all task", allOut.String())
+	}
+}
+
+func TestRuntimeClientChatCommandsUseRuntimeStatus(t *testing.T) {
+	var gotToken string
+	var gotGuild string
+	var gotAllowedUser string
+	client := &fakeRuntimeTaskCreateClient{
+		discordStatus: agxdiscord.Status{
+			Enabled:        true,
+			Connected:      true,
+			GuildID:        "guild-1",
+			GuildName:      "AGX Guild",
+			AllowedUserIDs: []string{"user-1"},
+		},
+		discordConnect: func(_ context.Context, token, guildID, allowedUserID string) (agxdiscord.Status, error) {
+			gotToken = token
+			gotGuild = guildID
+			gotAllowedUser = allowedUserID
+			return agxdiscord.Status{GuildID: guildID}, nil
+		},
+	}
+
+	connectCmd := newRuntimeClientChatConnectCmd(client)
+	var connectOut bytes.Buffer
+	connectCmd.SetOut(&connectOut)
+	connectCmd.SetErr(&connectOut)
+	connectCmd.SetArgs([]string{"--token", "token-1", "--guild", "guild-1", "--allow-user", "user-1", "--allow-user", "ignored"})
+	if err := connectCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if gotToken != "token-1" || gotGuild != "guild-1" || gotAllowedUser != "user-1" {
+		t.Fatalf("DiscordConnect args = (%q, %q, %q), want first configured user", gotToken, gotGuild, gotAllowedUser)
+	}
+	if !strings.Contains(connectOut.String(), "discord chat enabled for guild guild-1") {
+		t.Fatalf("connect output = %q", connectOut.String())
+	}
+
+	statusCmd := newRuntimeClientChatStatusCmd(client)
+	var statusOut bytes.Buffer
+	statusCmd.SetOut(&statusOut)
+	statusCmd.SetErr(&statusOut)
+	if err := statusCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"enabled: true", "connected: true", "guild: guild-1", "guild name: AGX Guild", "allowed user: user-1"} {
+		if !strings.Contains(statusOut.String(), want) {
+			t.Fatalf("status output missing %q:\n%s", want, statusOut.String())
+		}
+	}
+
+	syncCmd := newRuntimeClientChatSyncCmd(client)
+	var syncOut bytes.Buffer
+	syncCmd.SetOut(&syncOut)
+	syncCmd.SetErr(&syncOut)
+	if err := syncCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !client.discordSoftSynced || !strings.Contains(syncOut.String(), "discord chat synced with AGX Guild") {
+		t.Fatalf("sync output = %q, synced=%v", syncOut.String(), client.discordSoftSynced)
+	}
+
+	disconnectCmd := newRuntimeClientChatDisconnectCmd(client)
+	var disconnectOut bytes.Buffer
+	disconnectCmd.SetOut(&disconnectOut)
+	disconnectCmd.SetErr(&disconnectOut)
+	if err := disconnectCmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !client.discordDisconnected || !strings.Contains(disconnectOut.String(), "discord chat disabled") {
+		t.Fatalf("disconnect output = %q, disconnected=%v", disconnectOut.String(), client.discordDisconnected)
+	}
+}
+
 func TestDoctorCommandPrintsOfflineDiagnostics(t *testing.T) {
 	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
 	cmd := newDoctorCmd()
@@ -284,9 +469,17 @@ func TestDoctorCommandPrintsOfflineDiagnostics(t *testing.T) {
 }
 
 type fakeRuntimeTaskCreateClient struct {
-	projects       []agxruntime.Project
-	runTask        func(context.Context, string, string, *string, string, bool, *string, db.WorkspaceMode) (agxruntime.Task, error)
-	runDiscordTask func(context.Context, string, string, *string, string, bool, db.WorkspaceMode) (agxruntime.Task, error)
+	projects            []agxruntime.Project
+	tasks               []agxruntime.Task
+	monitorTasks        []agxruntime.MonitorTask
+	discordStatus       agxdiscord.Status
+	deletedTaskID       string
+	discordSoftSynced   bool
+	discordDisconnected bool
+	runTask             func(context.Context, string, string, *string, string, bool, *string, db.WorkspaceMode) (agxruntime.Task, error)
+	runDiscordTask      func(context.Context, string, string, *string, string, bool, db.WorkspaceMode) (agxruntime.Task, error)
+	listTasksStatus     func(context.Context, string, string) ([]agxruntime.Task, error)
+	discordConnect      func(context.Context, string, string, string) (agxdiscord.Status, error)
 }
 
 func (f *fakeRuntimeTaskCreateClient) ListProjects(context.Context) ([]agxruntime.Project, error) {
@@ -313,6 +506,47 @@ func (f *fakeRuntimeTaskCreateClient) RunNewDiscordTaskWithWorkspace(ctx context
 		return f.runDiscordTask(ctx, projectID, title, description, agentName, allMighty, workspaceMode)
 	}
 	return agxruntime.Task{}, nil
+}
+
+func (f *fakeRuntimeTaskCreateClient) ListTasks(context.Context, string) ([]agxruntime.Task, error) {
+	return f.tasks, nil
+}
+
+func (f *fakeRuntimeTaskCreateClient) ListTasksStatus(ctx context.Context, projectID, status string) ([]agxruntime.Task, error) {
+	if f.listTasksStatus != nil {
+		return f.listTasksStatus(ctx, projectID, status)
+	}
+	return f.tasks, nil
+}
+
+func (f *fakeRuntimeTaskCreateClient) MonitorTasks(context.Context) ([]agxruntime.MonitorTask, error) {
+	return f.monitorTasks, nil
+}
+
+func (f *fakeRuntimeTaskCreateClient) DeleteTask(_ context.Context, taskID string) error {
+	f.deletedTaskID = taskID
+	return nil
+}
+
+func (f *fakeRuntimeTaskCreateClient) DiscordConnect(ctx context.Context, token, guildID, allowedUserID string) (agxdiscord.Status, error) {
+	if f.discordConnect != nil {
+		return f.discordConnect(ctx, token, guildID, allowedUserID)
+	}
+	return f.discordStatus, nil
+}
+
+func (f *fakeRuntimeTaskCreateClient) DiscordDisconnect(context.Context) (agxdiscord.Status, error) {
+	f.discordDisconnected = true
+	return f.discordStatus, nil
+}
+
+func (f *fakeRuntimeTaskCreateClient) DiscordStatus(context.Context) (agxdiscord.Status, error) {
+	return f.discordStatus, nil
+}
+
+func (f *fakeRuntimeTaskCreateClient) DiscordSoftSync(context.Context) (agxdiscord.Status, error) {
+	f.discordSoftSynced = true
+	return f.discordStatus, nil
 }
 
 func TestCompactPath(t *testing.T) {
