@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import {
   Activity,
   ArrowLeft,
@@ -16,8 +15,6 @@ import {
   Send,
   Settings as SettingsIcon,
   SquareTerminal,
-  Square,
-  Trash2,
 } from 'lucide-react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -25,7 +22,7 @@ import '@xterm/xterm/css/xterm.css';
 import { api, type LogEvent, type MetadataEvent, type MonitorTask } from './api';
 import { ActionLogConsole } from './actionLog';
 import { CodePreview, isMarkdownPreviewPath } from './codePreview';
-import { AgentBadge, AllMightyBadge, DiscordBadge, WorkspaceBadge } from './components/badges';
+import { DiscordBadge } from './components/badges';
 import { FilePanel } from './filePanel';
 import { DiscordTaskDetail } from './features/discord/DiscordTaskDetail';
 import { DiscordView } from './features/discord/DiscordView';
@@ -35,6 +32,7 @@ import { GrantAccessModal } from './features/projects/GrantAccessModal';
 import { ProjectView } from './features/projects/ProjectView';
 import { RuntimeStartupView, SettingsView } from './features/settings/SettingsView';
 import { ShortcutsView } from './features/shortcuts/ShortcutsView';
+import { TaskCard, TaskList } from './features/tasks/TaskBoardItems';
 import { QuickTaskModal } from './features/tasks/QuickTaskModal';
 import { TaskCreateToolbar } from './features/tasks/TaskCreateToolbar';
 import { TaskInterfaceTabs } from './features/tasks/TaskInterfaceTabs';
@@ -1059,7 +1057,7 @@ function TaskView({
           {visibleTasks.length === 0 ? (
             <EmptyState title={tasks.length === 0 ? 'No tasks' : `No ${taskInterfaceLabel(taskFilter)} tasks`} detail={tasks.length === 0 ? 'Create a task to start an agent session.' : 'Switch tabs or create a matching task.'} />
           ) : viewMode === 'list' ? (
-            <TaskList tasks={visibleTasks} busy={busy} focusedTaskID={focusedTaskID} onFocusTask={setFocusedTaskID} onSelectTask={onSelectTask} onSplitTask={onSplitTask} onAction={onAction} />
+            <TaskList tasks={visibleTasks} busy={busy} focusedTaskID={focusedTaskID} onFocusTask={setFocusedTaskID} onSelectTask={onSelectTask} onAction={onAction} />
           ) : (
             <section className="task-grid">
               {visibleTasks.map((task, index) => (
@@ -1204,145 +1202,6 @@ function TaskOutputPanel({
       </header>
       <div className="task-output-terminal" ref={terminalRef} onMouseDown={() => terminal.current?.focus()} />
     </aside>
-  );
-}
-
-function TaskCard({ task, busy, focused, onFocus, onOpen, onAction, index = 0 }: { task: Task; busy: boolean; focused: boolean; onFocus: () => void; onOpen: () => void; onAction: DesktopAction; index?: number }) {
-  return (
-    <article
-      className={`task-card ${focused ? 'focused' : ''}`}
-      style={{ animationDelay: `${Math.min(index * 30, 240)}ms` }}
-      onClick={onFocus}
-    >
-      <button className="task-open" onClick={onOpen}>
-        <span className="card-title">{task.title}</span>
-        <span className="task-badge-row">
-          {isDiscordTask(task) && <DiscordBadge />}
-          <WorkspaceBadge mode={task.workspaceMode} />
-          {task.allMighty && <AllMightyBadge />}
-          <AgentBadge agent={task.agent} />
-        </span>
-        <span className="task-activity">Last activity {relativeTime(task.updatedAt)}</span>
-        {task.lastUserPrompt && <span className="task-last-prompt">{task.lastUserPrompt}</span>}
-      </button>
-      <span className={`status-pill task-status-pin ${task.status}`}>{statusLabel(task.status)}</span>
-      <TaskActions task={task} busy={busy} onAction={onAction} />
-    </article>
-  );
-}
-
-function TaskList({ tasks, busy, focusedTaskID, onFocusTask, onSelectTask, onSplitTask, onAction }: { tasks: Task[]; busy: boolean; focusedTaskID: string | null; onFocusTask: (taskID: string) => void; onSelectTask: (task: Task) => void; onSplitTask: (task: Task) => void; onAction: DesktopAction }) {
-  return (
-    <section className="task-table">
-      {tasks.map((task) => (
-        <div
-          className={`task-row ${task.id === focusedTaskID ? 'focused' : ''}`}
-          key={task.id}
-          onClick={() => onFocusTask(task.id)}
-        >
-          <button onClick={() => onSelectTask(task)}>{task.title}</button>
-          <span>{statusLabel(task.status)}</span>
-          <span><AgentBadge agent={task.agent} /></span>
-          <span className="task-list-badges">{isDiscordTask(task) && <DiscordBadge />}<WorkspaceBadge mode={task.workspaceMode} />{task.allMighty ? <AllMightyBadge /> : 'Standard'}</span>
-          <span>{relativeTime(task.updatedAt)}</span>
-          <TaskActions task={task} busy={busy} onAction={onAction} />
-        </div>
-      ))}
-    </section>
-  );
-}
-
-function TaskActions({ task, busy, onAction }: { task: Task; busy: boolean; onAction: DesktopAction }) {
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState(task.title);
-
-  useEffect(() => {
-    if (!editing) setTitle(task.title);
-  }, [editing, task.title]);
-
-  function deleteTask() {
-    setConfirmingDelete(false);
-    onAction(() => api.DeleteTask(task.id), `delete task "${task.title}"`);
-  }
-
-  function updateTitle() {
-    const nextTitle = title.trim();
-    if (!nextTitle || nextTitle === task.title) {
-      setEditing(false);
-      return;
-    }
-    setEditing(false);
-    onAction(async () => {
-      await api.UpdateTaskTitle(task.id, nextTitle);
-    }, `rename task "${task.title}" to "${nextTitle}"`);
-  }
-
-  return (
-    <>
-      <div className="icon-row">
-        {!isDiscordTask(task) && task.status === 'offline' && (
-          <IconButton label="Restart task" disabled={busy} onClick={() => onAction(async () => {
-            await api.RunTask(task.id);
-            return { taskID: task.id, expectSession: true };
-          }, `restart task "${task.title}"`)}>
-            <Play size={16} />
-          </IconButton>
-        )}
-        {!isDiscordTask(task) && (task.status === 'active' || task.status === 'waiting' || task.status === 'complete') && (
-          <IconButton label="Stop task" disabled={busy} onClick={() => onAction(() => api.StopTask(task.id), `stop task "${task.title}"`)}>
-            <Square size={16} />
-          </IconButton>
-        )}
-        <button className="text-button" disabled={busy} onClick={() => setEditing(true)}>
-          Edit
-        </button>
-        <IconButton label="Delete task" disabled={busy} onClick={() => setConfirmingDelete(true)}>
-          <Trash2 size={16} />
-        </IconButton>
-      </div>
-      {editing && createPortal((
-        <div className="modal-backdrop blurred" onMouseDown={() => setEditing(false)}>
-          <section className="confirm-modal task-edit-modal" onMouseDown={(event) => event.stopPropagation()}>
-            <h2>Edit Task</h2>
-            <label>
-              Task name
-              <input
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    updateTitle();
-                  }
-                  if (event.key === 'Escape') {
-                    event.preventDefault();
-                    setEditing(false);
-                  }
-                }}
-                autoFocus
-              />
-            </label>
-            <div className="wizard-actions">
-              <button className="text-button" onClick={() => setEditing(false)}>Cancel</button>
-              <button className="primary-button" disabled={busy || !title.trim()} onClick={updateTitle}>Save</button>
-            </div>
-          </section>
-        </div>
-      ), document.body)}
-      {confirmingDelete && createPortal((
-        <div className="modal-backdrop blurred" onMouseDown={() => setConfirmingDelete(false)}>
-          <section className="confirm-modal" onMouseDown={(event) => event.stopPropagation()}>
-            <h2>Delete Task</h2>
-            <p>Delete "{task.title}" from AGX? This stops its session and removes its task worktree when AGX can do that safely.</p>
-            <div className="wizard-actions">
-              <button className="text-button" onClick={() => setConfirmingDelete(false)}>Cancel</button>
-              <button className="danger-button" disabled={busy} onClick={deleteTask}>Delete</button>
-            </div>
-          </section>
-        </div>
-      ), document.body)}
-    </>
   );
 }
 
