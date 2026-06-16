@@ -8,6 +8,8 @@ const appLogic = readFileSync(resolve(root, 'src/appLogic.ts'), 'utf8');
 const discordTaskDetail = readFileSync(resolve(root, 'src/features/discord/DiscordTaskDetail.tsx'), 'utf8');
 const discordTaskSyncAction = readFileSync(resolve(root, 'src/features/discord/DiscordTaskSyncAction.tsx'), 'utf8');
 const discordView = readFileSync(resolve(root, 'src/features/discord/DiscordView.tsx'), 'utf8');
+const quickTaskModal = readFileSync(resolve(root, 'src/features/tasks/QuickTaskModal.tsx'), 'utf8');
+const taskCreateToolbar = readFileSync(resolve(root, 'src/features/tasks/TaskCreateToolbar.tsx'), 'utf8');
 const api = readFileSync(resolve(root, 'src/api.ts'), 'utf8');
 const types = readFileSync(resolve(root, 'src/types.ts'), 'utf8');
 
@@ -22,7 +24,7 @@ const checks = [
   },
   {
     name: 'default agent setting',
-    source: app,
+    source: `${app}\n${quickTaskModal}\n${taskCreateToolbar}`,
     needles: [
       '<strong>Default agent</strong>',
       'UpdateDefaultAgent',
