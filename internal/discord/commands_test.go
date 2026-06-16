@@ -576,6 +576,22 @@ func TestCommandRouterPlainMessageSendsToTask(t *testing.T) {
 	}
 }
 
+func TestCommandRouterPlainMessageRejectsUnauthorizedUserBeforeResolvingTask(t *testing.T) {
+	service := &fakeCommandService{channel: map[string]string{"channel-1": "task-1"}}
+	router := NewCommandRouter(config.DiscordConfig{AllowedUserIDs: []string{"allowed"}}, service)
+
+	response, err := router.HandlePlainMessage(context.Background(), CommandInput{GuildID: "", ChannelID: "channel-1", UserID: "blocked"}, "ship it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.Ephemeral || !strings.Contains(response.Content, "not allowed") {
+		t.Fatalf("response = %#v, want ephemeral unauthorized response", response)
+	}
+	if service.sentText != "" {
+		t.Fatalf("sent text = %q, want no task message for unauthorized user", service.sentText)
+	}
+}
+
 func TestCommandRouterPlainMessageDoesNotAckStructuredTask(t *testing.T) {
 	service := &fakeCommandService{
 		channel: map[string]string{"channel-1": "task-1"},
