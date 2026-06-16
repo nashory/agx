@@ -67,6 +67,17 @@ describe('DiscordView', () => {
     expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
   });
 
+  it('keeps connect disabled until required connection fields are present', async () => {
+    const user = userEvent.setup();
+    renderDiscord(disconnectedStatus);
+
+    await user.type(screen.getByPlaceholderText('Discord bot token'), 'token');
+    await user.type(screen.getByPlaceholderText('123456789012345678'), 'user-1');
+
+    expect(api.DiscordConnect).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
+  });
+
   it('does not allow reconnecting with a stale token after disconnect clears status', async () => {
     const user = userEvent.setup();
     vi.mocked(api.DiscordDisconnect).mockResolvedValue(disconnectedStatus);
@@ -77,6 +88,19 @@ describe('DiscordView', () => {
     await waitFor(() => expect(api.DiscordDisconnect).toHaveBeenCalled());
     expect(screen.getByPlaceholderText('Discord bot token')).not.toHaveValue();
     expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
+  });
+
+  it('soft syncs Discord and forwards the returned status', async () => {
+    const user = userEvent.setup();
+    const syncedStatus = { ...connectedStatus, sync: { running: false, stage: 'synced' } };
+    vi.mocked(api.DiscordSoftSync).mockResolvedValue(syncedStatus);
+    const { onLog } = renderDiscord(connectedStatus);
+
+    await user.click(screen.getByRole('button', { name: 'Soft Sync' }));
+
+    await waitFor(() => expect(api.DiscordSoftSync).toHaveBeenCalled());
+    expect(onLog).toHaveBeenCalledWith('[ok] discord soft sync');
+    expect(screen.getByText('synced')).not.toBeNull();
   });
 
   it('surfaces hard sync API failures through the view error callback', async () => {

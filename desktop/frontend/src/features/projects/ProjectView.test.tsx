@@ -76,4 +76,16 @@ describe('ProjectView', () => {
 
     await waitFor(() => expect(screen.getByText('not a git repository')).not.toBeNull());
   });
+
+  it('keeps the delete confirmation open and shows cleanup errors when deletion fails', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.DeleteProject).mockRejectedValue(new Error('remove task worktree failed'));
+    renderProjects([project]);
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.click(screen.getAllByRole('button', { name: 'Delete' }).at(-1)!);
+
+    await waitFor(() => expect(screen.getByText('Error: remove task worktree failed')).not.toBeNull());
+    expect(screen.getByRole('heading', { name: 'Delete Project' })).not.toBeNull();
+  });
 });

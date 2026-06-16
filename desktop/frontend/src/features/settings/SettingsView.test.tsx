@@ -62,6 +62,22 @@ describe('SettingsView', () => {
     await waitFor(() => expect(onDefaultAgentChange).toHaveBeenCalledWith('gemini'));
   });
 
+  it('disables the default agent picker while the save action is pending', async () => {
+    const user = userEvent.setup();
+    let resolveSave: (() => void) | undefined;
+    const onDefaultAgentChange = vi.fn().mockReturnValue(new Promise<void>((resolve) => {
+      resolveSave = resolve;
+    }));
+    renderSettings({ onDefaultAgentChange });
+
+    const select = screen.getByDisplayValue('Codex') as HTMLSelectElement;
+    await user.selectOptions(select, 'gemini');
+
+    await waitFor(() => expect(select).toBeDisabled());
+    resolveSave?.();
+    await waitFor(() => expect(select).not.toBeDisabled());
+  });
+
   it('shows an unavailable configured default agent instead of silently replacing it', () => {
     renderSettings({ runtimeConfig: { defaultAgent: 'opencode' } });
 
