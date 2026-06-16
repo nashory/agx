@@ -78,16 +78,31 @@ Create or extend feature modules in this order:
 
 ### Implementation Order
 
-1. Extract `ActionErrorModal` as a pure component.
-2. Extract `DiscordTaskDetail` with the same props it currently reads from
-   `App.tsx`.
-3. Extract task creation modal into `features/tasks`.
-4. Move small pure helpers near the feature that owns them.
-5. Only after extraction, simplify `App.tsx` state names and prop plumbing.
+Split this phase into smaller commits so review and rollback stay easy:
+
+1. **Phase 1A**: Extract `ActionErrorModal` as a pure component.
+   - Target: remove the global action error dialog markup from `App.tsx`.
+   - Test: close behavior and optional primary action behavior.
+2. **Phase 1B**: Extract the Discord task sync header/action surface before the
+   full detail view.
+   - Target: isolate `Sync with Discord`, sync status display, and error/log
+     callbacks.
+   - Reason: the full Discord task detail currently also owns transcript,
+     scrolling, file panel, preview, and task refresh behavior. Moving it as one
+     block would reduce `App.tsx` size but just relocate the complexity.
+3. **Phase 1C**: Extract `DiscordTaskDetail` once the sync action surface is
+   testable.
+4. **Phase 1D**: Extract task creation modal into `features/tasks`.
+5. **Phase 1E**: Move small pure helpers near the feature that owns them.
+6. Only after extraction, simplify `App.tsx` state names and prop plumbing.
 
 ### Acceptance Criteria
 
-- `App.tsx` drops materially in size, target under 1,800 lines after phase 1.
+- `App.tsx` drops materially in size, with staged targets:
+  - under 2,450 lines after Phase 1A,
+  - under 2,150 lines after Phase 1C,
+  - under 1,900 lines after Phase 1D,
+  - under 1,800 lines after helper cleanup.
 - No Wails API signature changes.
 - Existing UI text and class names are preserved unless a test proves a better
   user-facing behavior is required.
@@ -116,7 +131,7 @@ It should contain:
 - reusable project/task fixtures,
 - assertion helpers for output snippets where useful.
 
-Keep command-specific assertions in `main_test.go` or split by domain:
+Move runtime command tests out of `main_test.go` by domain:
 
 ```text
 cmd/agx/runtime_task_test.go
@@ -135,6 +150,8 @@ cmd/agx/runtime_project_test.go
 ### Acceptance Criteria
 
 - `main_test.go` stops being the dumping ground for every runtime fake method.
+- Existing runtime command tests move into domain-specific files as part of the
+  fake-client cleanup.
 - Runtime command tests remain socket-free.
 - Existing CLI tests are preserved.
 - Add at least one project command test after the fake is moved:
@@ -159,18 +176,34 @@ domain behavior, but handler tests need to assert Discord-specific side effects:
 
 ### Preferred Seam
 
-Introduce a package-local minimal interface or adapter around the Discord
-session methods used by handler code. Keep `NewBot` returning real Discord
-behavior through an adapter.
+Do not replace the full `Bot.session` field in one step. `Bot` currently uses
+`*discordgo.Session` for lifecycle, command registration, guild/channel sync,
+message sending, progress updates, and event handlers. A single replacement
+interface would either become too large or force a broad refactor.
+
+Instead, start with handler-specific seams:
+
+1. Keep `Bot.session *discordgo.Session` for lifecycle and channel-management
+   behavior.
+2. Extract handler bodies into small methods that accept a narrow handler
+   session interface.
+3. Register those methods from `AddCommandHandler`, `AddPlainMessageHandler`,
+   `AddComponentHandler`, and `AddReactionHandler`.
+4. Test the extracted handler methods with fake sessions.
+
+This gives direct coverage for Discord event behavior without changing the
+public `Bot` construction path.
 
 Example shape:
 
 ```go
-type botSession interface {
-    AddHandler(handler any) func()
+type interactionSession interface {
     Channel(channelID string, options ...discordgo.RequestOption) (*discordgo.Channel, error)
     InteractionRespond(*discordgo.Interaction, *discordgo.InteractionResponse, ...discordgo.RequestOption) error
     InteractionResponseEdit(*discordgo.Interaction, *discordgo.WebhookEdit, ...discordgo.RequestOption) (*discordgo.Message, error)
+}
+
+type messageSession interface {
     ChannelMessageSend(string, string, ...discordgo.RequestOption) (*discordgo.Message, error)
     ChannelMessageSendComplex(string, *discordgo.MessageSend, ...discordgo.RequestOption) (*discordgo.Message, error)
     ChannelMessageEdit(string, string, string, ...discordgo.RequestOption) (*discordgo.Message, error)
@@ -180,11 +213,9 @@ type botSession interface {
 }
 ```
 
-If this interface becomes too large, split it by handler group:
-
-- `interactionSession`,
-- `messageSession`,
-- `progressSession`.
+If progress tests need timer control later, introduce `progressSession` and a
+small clock/timer seam separately. Do not add timer abstractions before a test
+needs them.
 
 ### Test Strategy
 

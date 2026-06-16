@@ -39,6 +39,7 @@ import { CodePreview, isMarkdownPreviewPath, renderMarkdown } from './codePrevie
 import { AgentBadge, AllMightyBadge, DiscordBadge, WorkspaceBadge } from './components/badges';
 import { FilePanel } from './filePanel';
 import { DiscordView } from './features/discord/DiscordView';
+import { ActionErrorModal } from './features/errors/ActionErrorModal';
 import { MonitorView } from './features/monitor/MonitorView';
 import { ProjectView } from './features/projects/ProjectView';
 import { RuntimeStartupView, SettingsView } from './features/settings/SettingsView';
@@ -685,7 +686,7 @@ export default function App() {
       >
         {content}
       </AppFrame>
-      {actionError && <ActionErrorDialog title={actionError.title} message={actionError.message} onClose={() => setActionError(null)} />}
+      {actionError && <ActionErrorModal title={actionError.title} message={actionError.message} onClose={() => setActionError(null)} />}
       {preferences.showActionLog && <ActionLogConsole logs={logs} />}
     </>
   );
@@ -1221,40 +1222,6 @@ function GrantAccessModal({
           <button className="primary-button" disabled={granting} onClick={onGrant}>
             {granting ? 'Granting...' : 'Grant Access'}
           </button>
-        </footer>
-      </section>
-    </div>
-  );
-}
-
-function ActionErrorDialog({ title, message, onClose }: { title: string; message: string; onClose: () => void }) {
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
-
-  return (
-    <div className="modal-backdrop blurred" onMouseDown={onClose}>
-      <section className="action-error-modal" role="alertdialog" aria-modal="true" aria-labelledby="action-error-title" onMouseDown={(event) => event.stopPropagation()}>
-        <header className="modal-header">
-          <div>
-            <h2 id="action-error-title">Action Failed</h2>
-            <p>{title}</p>
-          </div>
-          <IconButton label="Close" onClick={onClose}>
-            <X size={18} />
-          </IconButton>
-        </header>
-        <div className="modal-error">
-          <span>{message}</span>
-        </div>
-        <footer className="wizard-actions">
-          <button className="primary-button" onClick={onClose}>OK</button>
         </footer>
       </section>
     </div>
