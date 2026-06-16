@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/nashory/agx/internal/agent"
+	"github.com/nashory/agx/internal/config"
 	"github.com/nashory/agx/internal/db"
 	"github.com/nashory/agx/internal/tmux"
+	"github.com/nashory/agx/internal/worktree"
 )
 
 func TestProjectSessionNameIncludesShortProjectID(t *testing.T) {
@@ -340,6 +342,39 @@ func TestRecoverLiveTasksClearsInactiveStaleSessions(t *testing.T) {
 	}
 	if updated.SessionName != nil {
 		t.Fatalf("SessionName = %#v, want nil after stale inactive cleanup", updated.SessionName)
+	}
+}
+
+func TestRecoverLiveTasksRemovesOrphanWorktrees(t *testing.T) {
+	root := t.TempDir()
+	initSessionGitRepo(t, root)
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := worktree.Prepare(project, "22222222-bbbb", config.WorktreeConfig{Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manager := NewManager(store, tmux.NewController(), agent.NewRegistry("claude"))
+	result, err := manager.RecoverLiveTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Orphans != 1 {
+		t.Fatalf("Orphans = %d, want 1", result.Orphans)
+	}
+	if orphan.Path == nil {
+		t.Fatal("orphan path is nil")
+	}
+	if _, err := os.Stat(*orphan.Path); !os.IsNotExist(err) {
+		t.Fatalf("orphan worktree still exists: %v", err)
 	}
 }
 

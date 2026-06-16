@@ -244,6 +244,30 @@ func TestCleanupOrphansNoWorktreeRoot(t *testing.T) {
 	}
 }
 
+func TestCleanupOrphansIgnoresNonTaskDirectories(t *testing.T) {
+	root := initGitRepo(t)
+	project := db.Project{ID: "project", Name: "repo", Path: root}
+	worktreeRoot, err := projectWorktreeRoot(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notesDir := filepath.Join(worktreeRoot, "notes")
+	if err := os.MkdirAll(notesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := CleanupOrphans(project, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed = %d, want 0 for non-task directory", removed)
+	}
+	if _, err := os.Stat(notesDir); err != nil {
+		t.Fatalf("non-task directory was removed: %v", err)
+	}
+}
+
 func TestHasConflictsDetectsUnmergedFiles(t *testing.T) {
 	root := initGitRepo(t)
 	project := db.Project{ID: "project", Name: "repo", Path: root}
