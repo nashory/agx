@@ -46,6 +46,17 @@ cp "${BUILD_DIR}/AGXDesktop" "${APP_DIR}/Contents/MacOS/AGXDesktop"
 cp "${BUILD_DIR}/agx" "${APP_DIR}/Contents/MacOS/agx"
 chmod +x "${APP_DIR}/Contents/MacOS/AGXDesktop" "${APP_DIR}/Contents/MacOS/agx"
 
+if [[ -f "${ROOT}/build/appicon.png" ]]; then
+  ICONSET="${BUILD_DIR}/AppIcon.iconset"
+  mkdir -p "${ICONSET}"
+  for size in 16 32 128 256 512; do
+    sips -z "${size}" "${size}" "${ROOT}/build/appicon.png" --out "${ICONSET}/icon_${size}x${size}.png" >/dev/null
+    retina=$((size * 2))
+    sips -z "${retina}" "${retina}" "${ROOT}/build/appicon.png" --out "${ICONSET}/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "${ICONSET}" -o "${APP_DIR}/Contents/Resources/AppIcon.icns"
+fi
+
 cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -63,6 +74,8 @@ cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
   <string>AGX</string>
   <key>CFBundleDisplayName</key>
   <string>AGX</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

@@ -2,15 +2,20 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"log"
 
 	desktopapp "github.com/nashory/agx/internal/desktop"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+//go:embed appicon.png
+var appIcon []byte
 
 func main() {
 	app, err := desktopapp.NewApp()
@@ -28,7 +33,8 @@ func main() {
 			Assets: assets,
 		},
 		AlwaysOnTop:      false,
-		Mac:              &mac.Options{},
+		Mac:              &mac.Options{About: &mac.AboutInfo{Title: "AGX", Icon: appIcon}},
+		Linux:            &linux.Options{Icon: appIcon, ProgramName: "AGX", WebviewGpuPolicy: linux.WebviewGpuPolicyNever},
 		BackgroundColour: &options.RGBA{R: 248, G: 250, B: 252, A: 1},
 		Bind: []interface{}{
 			app,
