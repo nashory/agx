@@ -45,6 +45,7 @@ func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.bus.Publish("config.changed", RuntimeConfig{DefaultAgent: cfg.DefaultAgent})
+		logRuntimeOperation("config_update", "default_agent", cfg.DefaultAgent)
 	}
 	writeJSON(w, RuntimeConfig{DefaultAgent: cfg.DefaultAgent})
 }

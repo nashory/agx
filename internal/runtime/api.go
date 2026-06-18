@@ -42,7 +42,7 @@ func (s *Service) routes() http.Handler {
 	mux.HandleFunc("POST /v1/discord/hard-sync", s.handleDiscordHardSync)
 	mux.HandleFunc("POST /v1/discord/tasks/{id}/sync", s.handleDiscordTaskSync)
 	mux.HandleFunc("POST /v1/discord/invite-url", s.handleDiscordInviteURL)
-	return mux
+	return s.withRequestLogging(mux)
 }
 
 func mustJSON(value any) json.RawMessage {

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -48,6 +47,13 @@ func (s *Service) handleDiscordConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	status := s.discord.Status()
 	s.bus.Publish("discord.status", status)
+	logRuntimeOperation("discord_connect",
+		"connected", status.Connected,
+		"enabled", next.Enabled,
+		"guild_configured", strings.TrimSpace(next.GuildID) != "",
+		"allowed_users", len(next.AllowedUserIDs),
+		"bot_token_present", strings.TrimSpace(next.BotToken) != "",
+	)
 	writeJSON(w, status)
 }
 
@@ -70,6 +76,13 @@ func (s *Service) handleDiscordDisconnect(w http.ResponseWriter, r *http.Request
 	s.discord.Configure(cfg.Discord)
 	status := s.discord.Status()
 	s.bus.Publish("discord.status", status)
+	logRuntimeOperation("discord_disconnect",
+		"connected", status.Connected,
+		"enabled", cfg.Discord.Enabled,
+		"guild_configured", strings.TrimSpace(cfg.Discord.GuildID) != "",
+		"allowed_users", len(cfg.Discord.AllowedUserIDs),
+		"bot_token_present", strings.TrimSpace(cfg.Discord.BotToken) != "",
+	)
 	writeJSON(w, status)
 }
 
@@ -88,6 +101,11 @@ func (s *Service) handleDiscordSoftSync(w http.ResponseWriter, r *http.Request) 
 	}
 	status := s.discord.Status()
 	s.bus.Publish("discord.status", status)
+	logRuntimeOperation("discord_soft_sync",
+		"connected", status.Connected,
+		"enabled", status.Enabled,
+		"sync_running", status.Sync.Running,
+	)
 	writeJSON(w, status)
 }
 
@@ -114,7 +132,7 @@ func (s *Service) handleDiscordTaskSync(w http.ResponseWriter, r *http.Request) 
 	}
 	started := time.Now()
 	if err := s.discord.SyncTaskChannel(ctx, taskID); err != nil {
-		log.Printf("operation=%q task=%s elapsed_ms=%d error=%v", "discord_task_sync_manual", display.ShortID(taskID), time.Since(started).Milliseconds(), err)
+		logRuntimeOperation("discord_task_sync_manual", "task", display.ShortID(taskID), "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
 		if errors.Is(err, agxdiscord.ErrSyncInProgress) {
 			writeErrorStatus(w, http.StatusConflict, err)
 			return
@@ -122,7 +140,7 @@ func (s *Service) handleDiscordTaskSync(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	log.Printf("operation=%q task=%s elapsed_ms=%d", "discord_task_sync_manual", display.ShortID(taskID), time.Since(started).Milliseconds())
+	logRuntimeOperation("discord_task_sync_manual", "task", display.ShortID(taskID), "elapsed_ms", time.Since(started).Milliseconds())
 	status := s.discord.Status()
 	s.bus.Publish("discord.status", status)
 	s.bus.Publish("task.changed", s.taskDTO(task))
@@ -136,6 +154,11 @@ func (s *Service) handleDiscordHardSync(w http.ResponseWriter, r *http.Request) 
 	}
 	status := s.discordStatus()
 	s.bus.Publish("discord.status", status)
+	logRuntimeOperation("discord_hard_sync",
+		"connected", status.Connected,
+		"enabled", status.Enabled,
+		"sync_running", status.Sync.Running,
+	)
 	writeJSON(w, status)
 }
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nashory/agx/internal/agent"
@@ -36,6 +37,7 @@ type Service struct {
 	locks       map[string]*sync.Mutex
 	states      map[string]runtimeTaskState
 	locksMu     sync.Mutex
+	requestSeq  atomic.Uint64
 	discord     *agxdiscord.Bridge
 	agents      *agentEventService
 	attachments attachmentDownloader

@@ -39,6 +39,11 @@ func (s *Service) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	dto := s.projectDTO(project)
 	s.bus.Publish("project.changed", dto)
+	logRuntimeOperation("project_create",
+		"project", shortDiagnosticID(project.ID),
+		"path", project.Path,
+		"default_agent", valueOrEmptyString(project.DefaultAgent),
+	)
 	writeJSON(w, dto)
 }
 
@@ -89,6 +94,12 @@ func (s *Service) handlePatchProject(w http.ResponseWriter, r *http.Request) {
 	}
 	dto := s.projectDTO(refreshed)
 	s.bus.Publish("project.changed", dto)
+	logRuntimeOperation("project_update",
+		"project", shortDiagnosticID(refreshed.ID),
+		"default_agent", valueOrEmptyString(refreshed.DefaultAgent),
+		"name_updated", req.Name != nil,
+		"description_updated", req.Description != nil,
+	)
 	writeJSON(w, dto)
 }
 
@@ -108,6 +119,10 @@ func (s *Service) handleGrantProjectAccess(w http.ResponseWriter, r *http.Reques
 	}
 	dto := s.projectDTO(project)
 	s.bus.Publish("project.changed", dto)
+	logRuntimeOperation("project_grant_access",
+		"project", shortDiagnosticID(project.ID),
+		"path", project.Path,
+	)
 	writeJSON(w, dto)
 }
 
@@ -142,7 +157,19 @@ func (s *Service) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.bus.Publish("project.deleted", map[string]string{"id": project.ID})
+	logRuntimeOperation("project_delete",
+		"project", shortDiagnosticID(project.ID),
+		"path", project.Path,
+		"tasks", len(tasks),
+	)
 	writeJSON(w, map[string]bool{"deleted": true})
+}
+
+func valueOrEmptyString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (s *Service) projectDTO(project db.Project) Project {

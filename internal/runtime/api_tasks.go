@@ -107,6 +107,16 @@ func (s *Service) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 			}
 			dto := s.taskDTO(task)
 			s.bus.Publish("task.changed", dto)
+			logRuntimeOperation("task_create",
+				"task", shortDiagnosticID(task.ID),
+				"project", shortDiagnosticID(project.ID),
+				"workspace_mode", workspaceMode,
+				"agent", agentName,
+				"interface", task.Interface,
+				"run_immediately", req.RunImmediately,
+				"discord", req.Discord,
+				"all_mighty", req.AllMighty,
+			)
 			writeJSON(w, dto)
 			return
 		}
@@ -134,6 +144,16 @@ func (s *Service) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		}
 		dto := s.taskDTO(task)
 		s.bus.Publish("task.changed", dto)
+		logRuntimeOperation("task_create",
+			"task", shortDiagnosticID(task.ID),
+			"project", shortDiagnosticID(project.ID),
+			"workspace_mode", workspaceMode,
+			"agent", agentName,
+			"interface", task.Interface,
+			"run_immediately", req.RunImmediately,
+			"discord", req.Discord,
+			"all_mighty", req.AllMighty,
+		)
 		writeJSON(w, dto)
 		return
 	}
@@ -159,6 +179,16 @@ func (s *Service) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	dto := s.taskDTO(task)
 	s.bus.Publish("task.changed", dto)
+	logRuntimeOperation("task_create",
+		"task", shortDiagnosticID(task.ID),
+		"project", shortDiagnosticID(project.ID),
+		"workspace_mode", workspaceMode,
+		"agent", agentName,
+		"interface", task.Interface,
+		"run_immediately", req.RunImmediately,
+		"discord", req.Discord,
+		"all_mighty", req.AllMighty,
+	)
 	writeJSON(w, dto)
 }
 
@@ -234,6 +264,13 @@ func (s *Service) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	}
 	dto := s.taskDTO(refreshed)
 	s.bus.Publish("task.changed", dto)
+	logRuntimeOperation("task_run",
+		"task", shortDiagnosticID(task.ID),
+		"project", shortDiagnosticID(project.ID),
+		"workspace_mode", task.WorkspaceMode,
+		"agent", task.Agent,
+		"interface", task.Interface,
+	)
 	writeJSON(w, dto)
 }
 
@@ -269,6 +306,12 @@ func (s *Service) handleStopTask(w http.ResponseWriter, r *http.Request) {
 	dto := s.taskDTO(refreshed)
 	s.bus.Publish("task.changed", dto)
 	s.deleteDiscordChannelForTaskAsync(task, "")
+	logRuntimeOperation("task_stop",
+		"task", shortDiagnosticID(task.ID),
+		"project", shortDiagnosticID(project.ID),
+		"agent", task.Agent,
+		"interface", task.Interface,
+	)
 	writeJSON(w, dto)
 }
 
@@ -324,6 +367,15 @@ func (s *Service) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &cleanupErr) {
 			s.bus.Publish("task.deleted", map[string]string{"id": task.ID, "projectId": task.ProjectID})
 			s.deleteDiscordChannelForTaskAsync(task, "")
+			logRuntimeOperation("task_delete",
+				"task", shortDiagnosticID(task.ID),
+				"project", shortDiagnosticID(project.ID),
+				"workspace_mode", task.WorkspaceMode,
+				"agent", task.Agent,
+				"interface", task.Interface,
+				"partial_success", true,
+				"error", cleanupErr,
+			)
 			writeErrorStatus(w, http.StatusInternalServerError, cleanupErr)
 			return
 		}
@@ -332,6 +384,13 @@ func (s *Service) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 	s.bus.Publish("task.deleted", map[string]string{"id": task.ID, "projectId": task.ProjectID})
 	s.deleteDiscordChannelForTaskAsync(task, "")
+	logRuntimeOperation("task_delete",
+		"task", shortDiagnosticID(task.ID),
+		"project", shortDiagnosticID(project.ID),
+		"workspace_mode", task.WorkspaceMode,
+		"agent", task.Agent,
+		"interface", task.Interface,
+	)
 	writeJSON(w, map[string]bool{"deleted": true})
 }
 
@@ -371,6 +430,13 @@ func (s *Service) handleSendTaskMessage(w http.ResponseWriter, r *http.Request) 
 	}
 	dto := s.taskDTO(refreshed)
 	s.bus.Publish("task.changed", dto)
+	logRuntimeOperation("task_message",
+		"task", shortDiagnosticID(task.ID),
+		"project", shortDiagnosticID(project.ID),
+		"agent", task.Agent,
+		"interface", task.Interface,
+		"message_bytes", len(req.Message),
+	)
 	writeJSON(w, dto)
 }
 
