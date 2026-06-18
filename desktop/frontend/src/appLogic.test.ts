@@ -14,6 +14,7 @@ import {
   statusLabel,
   taskInterfaceCounts,
   tasksForInterfaceFilter,
+  projectGridColumns,
   type TaskInterfaceFilter,
 } from './appLogic';
 import type { Task } from './types';
@@ -112,5 +113,24 @@ describe('appLogic', () => {
     expect(tasksForInterfaceFilter(tasks, 'all').map((item) => item.id)).toEqual(['2', '1', '3']);
     expect(tasksForInterfaceFilter(tasks, 'desktop').map((item) => item.id)).toEqual(['2']);
     expect(tasksForInterfaceFilter(tasks, 'discord').map((item) => item.id)).toEqual(['1', '3']);
+  });
+
+  it('calculates columns for project and task grids', () => {
+    const grid = document.createElement('section');
+    Object.defineProperty(grid, 'clientWidth', { value: 640 });
+    vi.spyOn(window, 'getComputedStyle').mockReturnValue({ columnGap: '16px' } as CSSStyleDeclaration);
+
+    const projectCard = document.createElement('article');
+    projectCard.className = 'project-card';
+    Object.defineProperty(projectCard, 'offsetWidth', { value: 200 });
+    grid.append(projectCard);
+    expect(projectGridColumns(grid)).toBe(3);
+
+    grid.innerHTML = '';
+    const taskCard = document.createElement('article');
+    taskCard.className = 'task-card';
+    Object.defineProperty(taskCard, 'offsetWidth', { value: 200 });
+    grid.append(taskCard);
+    expect(projectGridColumns(grid)).toBe(3);
   });
 });

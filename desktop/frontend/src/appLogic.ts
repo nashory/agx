@@ -156,7 +156,7 @@ export function focusMainContent() {
 
 export function projectGridColumns(grid: HTMLElement | null): number {
   if (!grid) return 1;
-  const firstCard = grid.querySelector<HTMLElement>('.project-card');
+  const firstCard = grid.querySelector<HTMLElement>('.project-card, .task-card');
   if (!firstCard) return 1;
   const gap = Number.parseFloat(window.getComputedStyle(grid).columnGap) || 0;
   return Math.max(1, Math.floor((grid.clientWidth + gap) / (firstCard.offsetWidth + gap)));
