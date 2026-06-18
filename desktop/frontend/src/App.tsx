@@ -908,7 +908,7 @@ function TaskView({
         onBack();
         return;
       }
-      if (event.altKey && event.key.toLowerCase() === 't') {
+      if (event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === 't') {
         event.preventDefault();
         setShowTaskOutput((value) => !value);
         return;
