@@ -40,6 +40,7 @@ func main() {
 			app,
 		},
 		OnStartup: func(ctx context.Context) {
+			setApplicationIcon(appIcon)
 			wailsruntime.WindowSetAlwaysOnTop(ctx, false)
 			app.Startup(ctx)
 		},

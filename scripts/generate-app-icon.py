@@ -5,6 +5,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FONT_DIR = Path("/Users/craigstarr/github/youtube-visuals-remotion/public/fonts")
 SIZE = 1024
 SCALE = 3
 CANVAS = SIZE * SCALE
@@ -13,13 +14,16 @@ TEXT = "AGX"
 
 def load_font(size: int) -> ImageFont.FreeTypeFont:
     candidates = [
+        FONT_DIR / "JetBrainsMono-ExtraBold.ttf",
+        FONT_DIR / "JetBrainsMono-Bold.ttf",
         "/System/Library/Fonts/SFNS.ttf",
         "/System/Library/Fonts/HelveticaNeue.ttc",
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     ]
     for path in candidates:
-        if Path(path).exists():
-            return ImageFont.truetype(path, size=size)
+        font_path = Path(path)
+        if font_path.exists():
+            return ImageFont.truetype(font_path, size=size)
     return ImageFont.load_default(size=size)
 
 
@@ -41,6 +45,22 @@ def draw_tracked_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], font: Imag
         x += box[2] - box[0] + tracking
 
 
+def tracked_text_bounds(font: ImageFont.ImageFont, tracking: int) -> tuple[int, int, int, int]:
+    mask = Image.new("L", (CANVAS, CANVAS), 0)
+    draw = ImageDraw.Draw(mask)
+    x = CANVAS // 4
+    y = CANVAS // 4
+    for letter in TEXT:
+        draw.text((x, y), letter, font=font, fill=255)
+        box = draw.textbbox((0, 0), letter, font=font)
+        x += box[2] - box[0] + tracking
+    bounds = mask.getbbox()
+    if bounds is None:
+        return (0, 0, 0, 0)
+    left, top, right, bottom = bounds
+    return (left - CANVAS // 4, top - CANVAS // 4, right - CANVAS // 4, bottom - CANVAS // 4)
+
+
 def main() -> None:
     image = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
@@ -51,13 +71,12 @@ def main() -> None:
     draw.rounded_rectangle(rect, radius=radius, fill=(5, 5, 6, 255))
     draw.rounded_rectangle(rect, radius=radius, outline=(38, 40, 46, 255), width=5 * SCALE)
 
-    font = load_font(300 * SCALE)
-    tracking = 19 * SCALE
+    font = load_font(258 * SCALE)
+    tracking = 14 * SCALE
     width = text_width(draw, font, tracking)
-    box = draw.textbbox((0, 0), TEXT, font=font)
-    height = box[3] - box[1]
-    x = (CANVAS - width) // 2
-    y = (CANVAS - height) // 2 - (18 * SCALE)
+    left, top, right, bottom = tracked_text_bounds(font, tracking)
+    x = (CANVAS - width) // 2 - left
+    y = (CANVAS - (bottom - top)) // 2 - top
 
     shadow_offset = 5 * SCALE
     for alpha, offset in ((52, shadow_offset * 2), (82, shadow_offset)):
