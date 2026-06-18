@@ -830,24 +830,30 @@ func (a *App) UpdateDefaultAgent(agentName string) (RuntimeConfigInfo, error) {
 }
 
 func (a *App) RuntimeStart() (RuntimeStatusInfo, error) {
+	started := time.Now()
 	if status := a.RuntimeStatus(); status.Running {
+		logDesktopOperation("runtime_start", "status", "already_running", "elapsed_ms", time.Since(started).Milliseconds())
 		return status, nil
 	}
 	agxPath, err := runtimeCLIPath()
 	if err != nil {
+		logDesktopOperation("runtime_start", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
 		return a.RuntimeStatus(), err
 	}
 	stdoutPath, stderrPath := agxruntime.RuntimeLogPaths()
 	if err := os.MkdirAll(filepath.Dir(stdoutPath), 0o700); err != nil {
+		logDesktopOperation("runtime_start", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
 		return a.RuntimeStatus(), err
 	}
 	stdout, err := os.OpenFile(stdoutPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
+		logDesktopOperation("runtime_start", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
 		return a.RuntimeStatus(), err
 	}
 	stderr, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = stdout.Close()
+		logDesktopOperation("runtime_start", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
 		return a.RuntimeStatus(), err
 	}
 	cmd := exec.Command(agxPath, "runtime", "start")
@@ -857,6 +863,7 @@ func (a *App) RuntimeStart() (RuntimeStatusInfo, error) {
 	if err := cmd.Start(); err != nil {
 		_ = stdout.Close()
 		_ = stderr.Close()
+		logDesktopOperation("runtime_start", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
 		return a.RuntimeStatus(), err
 	}
 	go func() {
@@ -864,7 +871,13 @@ func (a *App) RuntimeStart() (RuntimeStatusInfo, error) {
 		_ = stdout.Close()
 		_ = stderr.Close()
 	}()
-	return a.waitForRuntimeStart(5 * time.Second)
+	status, err := a.waitForRuntimeStart(5 * time.Second)
+	if err != nil {
+		logDesktopOperation("runtime_start", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
+		return status, err
+	}
+	logDesktopOperation("runtime_start", "status", "started", "elapsed_ms", time.Since(started).Milliseconds(), "pid", status.PID)
+	return status, nil
 }
 
 func (a *App) RuntimeInstallService() (RuntimeStatusInfo, error) {
@@ -909,20 +922,25 @@ func executableSiblingCLI(executable string) (string, bool) {
 }
 
 func (a *App) RuntimeStop() (RuntimeStatusInfo, error) {
+	started := time.Now()
 	ctx, cancel := a.runtimeRequestContext(3 * time.Second)
 	defer cancel()
 	if err := a.runtimeClient().Shutdown(ctx); err != nil {
+		logDesktopOperation("runtime_stop", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
 		return a.RuntimeStatus(), err
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		status := a.RuntimeStatus()
 		if !status.Running {
+			logDesktopOperation("runtime_stop", "status", "stopped", "elapsed_ms", time.Since(started).Milliseconds())
 			return status, nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return a.RuntimeStatus(), nil
+	status := a.RuntimeStatus()
+	logDesktopOperation("runtime_stop", "status", "timeout", "elapsed_ms", time.Since(started).Milliseconds(), "running", status.Running)
+	return status, nil
 }
 
 func (a *App) waitForRuntimeStart(timeout time.Duration) (RuntimeStatusInfo, error) {
@@ -954,14 +972,17 @@ func (a *App) DiscordStatus() DiscordStatusInfo {
 }
 
 func (a *App) DiscordConnect(token, guildID, allowedUserID string) (DiscordStatusInfo, error) {
+	started := time.Now()
 	ctx, cancel := a.runtimeRequestContext(discordConnectTimeout)
 	defer cancel()
 	status, err := a.runtimeClient().DiscordConnect(ctx, strings.TrimSpace(token), strings.TrimSpace(guildID), strings.TrimSpace(allowedUserID))
 	if err != nil {
 		a.emitDiscordStatusEvent()
+		logDesktopOperation("discord_connect", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "guild_configured", strings.TrimSpace(guildID) != "", "allowed_user_configured", strings.TrimSpace(allowedUserID) != "", "bot_token_present", strings.TrimSpace(token) != "", "error", err)
 		return a.DiscordStatus(), err
 	}
 	a.emitDiscordStatusEvent()
+	logDesktopOperation("discord_connect", "status", "connected", "elapsed_ms", time.Since(started).Milliseconds(), "connected", status.Connected)
 	return a.discordStatusDTO(status), nil
 }
 
@@ -984,14 +1005,17 @@ func (a *App) DiscordSync() (DiscordStatusInfo, error) {
 }
 
 func (a *App) DiscordSoftSync() (DiscordStatusInfo, error) {
+	started := time.Now()
 	ctx, cancel := a.runtimeRequestContext(discordConnectTimeout)
 	defer cancel()
 	status, err := a.runtimeClient().DiscordSoftSync(ctx)
 	if err != nil {
 		a.emitDiscordStatusEvent()
+		logDesktopOperation("discord_soft_sync", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
 		return a.DiscordStatus(), err
 	}
 	a.emitDiscordStatusEvent()
+	logDesktopOperation("discord_soft_sync", "status", "synced", "elapsed_ms", time.Since(started).Milliseconds(), "connected", status.Connected)
 	return a.discordStatusDTO(status), nil
 }
 
@@ -1000,29 +1024,41 @@ func (a *App) DiscordResetManagedChannels() (DiscordStatusInfo, error) {
 }
 
 func (a *App) DiscordHardSync() (DiscordStatusInfo, error) {
+	started := time.Now()
 	if !a.directMode {
 		ctx, cancel := a.runtimeRequestContext(discordConnectTimeout)
 		defer cancel()
 		status, err := a.runtimeClient().DiscordHardSync(ctx)
 		if err != nil {
 			a.emitDiscordStatusEvent()
+			logDesktopOperation("discord_hard_sync", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
 			return a.DiscordStatus(), err
 		}
 		a.emitDiscordStatusEvent()
+		logDesktopOperation("discord_hard_sync", "status", "started", "elapsed_ms", time.Since(started).Milliseconds(), "connected", status.Connected)
 		return a.discordStatusDTO(status), nil
 	}
-	return a.beginDiscordHardSync("")
+	status, err := a.beginDiscordHardSync("")
+	if err != nil {
+		logDesktopOperation("discord_hard_sync", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
+	} else {
+		logDesktopOperation("discord_hard_sync", "status", "started", "elapsed_ms", time.Since(started).Milliseconds(), "connected", status.Connected)
+	}
+	return status, err
 }
 
 func (a *App) DiscordTaskSync(taskID string) (DiscordStatusInfo, error) {
+	started := time.Now()
 	ctx, cancel := a.runtimeRequestContext(discordTaskSyncTimeout)
 	defer cancel()
 	status, err := a.runtimeClient().DiscordTaskSync(ctx, strings.TrimSpace(taskID))
 	if err != nil {
 		a.emitDiscordStatusEvent()
+		logDesktopOperation("discord_task_sync", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "error", err)
 		return a.DiscordStatus(), err
 	}
 	a.emitDiscordStatusEvent()
+	logDesktopOperation("discord_task_sync", "status", "synced", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "connected", status.Connected)
 	return a.discordStatusDTO(status), nil
 }
 
@@ -1082,14 +1118,17 @@ func (a *App) discordHardSyncBlocking(baseCtx context.Context, preserveControlCh
 }
 
 func (a *App) DiscordDisconnect() (DiscordStatusInfo, error) {
+	started := time.Now()
 	ctx, cancel := a.runtimeRequestContext(discordConnectTimeout)
 	defer cancel()
 	status, err := a.runtimeClient().DiscordDisconnect(ctx)
 	if err != nil {
 		a.emitDiscordStatusEvent()
+		logDesktopOperation("discord_disconnect", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
 		return a.DiscordStatus(), err
 	}
 	a.emitDiscordStatusEvent()
+	logDesktopOperation("discord_disconnect", "status", "disconnected", "elapsed_ms", time.Since(started).Milliseconds(), "connected", status.Connected)
 	return a.discordStatusDTO(status), nil
 }
 
@@ -1204,16 +1243,40 @@ func (a *App) ListTaskTranscript(taskID string, limit int) ([]TaskTranscriptMess
 }
 
 func (a *App) CreateTask(projectID, title, description, agentName string, allMighty bool, workspaceMode string) (Task, error) {
-	return a.createTask(projectID, title, description, agentName, allMighty, nil, parseDesktopWorkspaceMode(workspaceMode))
+	started := time.Now()
+	mode := parseDesktopWorkspaceMode(workspaceMode)
+	task, err := a.createTask(projectID, title, description, agentName, allMighty, nil, mode)
+	if err != nil {
+		logDesktopOperation("task_create", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "project", display.ShortID(projectID), "workspace_mode", mode, "agent", agentName, "all_mighty", allMighty, "error", err)
+		return Task{}, err
+	}
+	logDesktopOperation("task_create", "status", "created", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(task.ID), "project", display.ShortID(task.ProjectID), "workspace_mode", task.WorkspaceMode, "agent", task.Agent, "all_mighty", task.AllMighty)
+	return task, nil
 }
 
 func (a *App) CreateTaskNoPrompt(projectID, title, agentName string, allMighty bool, workspaceMode string) (Task, error) {
+	started := time.Now()
 	emptyPrompt := ""
-	return a.createTask(projectID, title, "", agentName, allMighty, &emptyPrompt, parseDesktopWorkspaceMode(workspaceMode))
+	mode := parseDesktopWorkspaceMode(workspaceMode)
+	task, err := a.createTask(projectID, title, "", agentName, allMighty, &emptyPrompt, mode)
+	if err != nil {
+		logDesktopOperation("task_create", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "project", display.ShortID(projectID), "workspace_mode", mode, "agent", agentName, "all_mighty", allMighty, "initial_prompt", false, "error", err)
+		return Task{}, err
+	}
+	logDesktopOperation("task_create", "status", "created", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(task.ID), "project", display.ShortID(task.ProjectID), "workspace_mode", task.WorkspaceMode, "agent", task.Agent, "all_mighty", task.AllMighty, "initial_prompt", false)
+	return task, nil
 }
 
 func (a *App) CreateDiscordTask(projectID, title, description, agentName string, allMighty bool, workspaceMode string) (Task, error) {
-	return a.createDiscordTask(context.Background(), projectID, title, description, agentName, allMighty, parseDesktopWorkspaceMode(workspaceMode))
+	started := time.Now()
+	mode := parseDesktopWorkspaceMode(workspaceMode)
+	task, err := a.createDiscordTask(context.Background(), projectID, title, description, agentName, allMighty, mode)
+	if err != nil {
+		logDesktopOperation("discord_task_create", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "project", display.ShortID(projectID), "workspace_mode", mode, "agent", agentName, "all_mighty", allMighty, "error", err)
+		return Task{}, err
+	}
+	logDesktopOperation("discord_task_create", "status", "created", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(task.ID), "project", display.ShortID(task.ProjectID), "workspace_mode", task.WorkspaceMode, "agent", task.Agent, "all_mighty", task.AllMighty)
+	return task, nil
 }
 
 func (a *App) createDiscordTask(ctx context.Context, projectID, title, description, agentName string, allMighty bool, workspaceMode db.WorkspaceMode) (Task, error) {
@@ -1404,75 +1467,117 @@ func (a *App) createStructuredAgentTask(ctx context.Context, projectID, title, d
 }
 
 func (a *App) RunTask(taskID string) error {
+	started := time.Now()
 	if a.directMode {
-		return a.directRunTask(taskID)
+		if err := a.directRunTask(taskID); err != nil {
+			logDesktopOperation("task_run", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "error", err)
+			return err
+		}
+		logDesktopOperation("task_run", "status", "started", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID))
+		return nil
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
 	task, err := a.runtimeClient().GetTask(ctx, taskID)
 	if err != nil {
+		logDesktopOperation("task_run", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "error", err)
 		return err
 	}
 	if task.Interface == string(db.TaskInterfaceDiscord) {
-		return fmt.Errorf("task is controlled by Discord")
+		err := fmt.Errorf("task is controlled by Discord")
+		logDesktopOperation("task_run", "status", "blocked", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "interface", task.Interface, "error", err)
+		return err
 	}
 	if _, err := a.runtimeClient().RunTask(ctx, task.ID); err != nil {
+		logDesktopOperation("task_run", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(task.ID), "project", display.ShortID(task.ProjectID), "agent", task.Agent, "error", err)
 		return err
 	}
 	a.emitMetadataEvent(task.ProjectID)
 	a.syncDiscordAsync()
+	logDesktopOperation("task_run", "status", "started", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(task.ID), "project", display.ShortID(task.ProjectID), "agent", task.Agent)
 	return nil
 }
 
 func (a *App) StopTask(taskID string) error {
+	started := time.Now()
 	if a.directMode {
-		return a.directStopTask(taskID)
+		if err := a.directStopTask(taskID); err != nil {
+			logDesktopOperation("task_stop", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "error", err)
+			return err
+		}
+		logDesktopOperation("task_stop", "status", "stopped", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID))
+		return nil
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
 	task, err := a.runtimeClient().StopTask(ctx, taskID)
 	if err != nil {
+		logDesktopOperation("task_stop", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "error", err)
 		return err
 	}
 	a.StopLogStream(task.ID)
 	_ = a.removeStream(task.ID)
 	a.emitMetadataEvent(task.ProjectID)
+	logDesktopOperation("task_stop", "status", "stopped", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(task.ID), "project", display.ShortID(task.ProjectID), "agent", task.Agent)
 	return nil
 }
 
 func (a *App) DeleteTask(taskID string) error {
+	started := time.Now()
 	if a.directMode {
-		return a.directDeleteTask(taskID)
+		if err := a.directDeleteTask(taskID); err != nil {
+			logDesktopOperation("task_delete", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "error", err)
+			return err
+		}
+		logDesktopOperation("task_delete", "status", "deleted", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID))
+		return nil
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
 	task, err := a.runtimeClient().GetTask(ctx, taskID)
 	if err != nil {
+		logDesktopOperation("task_delete", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "error", err)
 		return err
 	}
 	if err := a.runtimeClient().DeleteTask(ctx, task.ID); err != nil {
+		logDesktopOperation("task_delete", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(task.ID), "project", display.ShortID(task.ProjectID), "agent", task.Agent, "error", err)
 		return err
 	}
 	a.StopLogStream(task.ID)
 	_ = a.removeStream(task.ID)
 	a.emitMetadataEvent(task.ProjectID)
+	logDesktopOperation("task_delete", "status", "deleted", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(task.ID), "project", display.ShortID(task.ProjectID), "agent", task.Agent)
 	return nil
 }
 
 func (a *App) SendMessage(taskID, message string) error {
+	started := time.Now()
 	if a.directMode {
-		return a.directSendMessage(taskID, message)
+		if err := a.directSendMessage(taskID, message); err != nil {
+			logDesktopOperation("task_message", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "message_bytes", len(message), "error", err)
+			return err
+		}
+		logDesktopOperation("task_message", "status", "sent", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "message_bytes", len(message))
+		return nil
 	}
 	ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
 	defer cancel()
 	task, err := a.runtimeClient().GetTask(ctx, taskID)
 	if err != nil {
+		logDesktopOperation("task_message", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "message_bytes", len(message), "error", err)
 		return err
 	}
 	if task.Interface == string(db.TaskInterfaceDiscord) {
-		return fmt.Errorf("task is controlled by Discord")
+		err := fmt.Errorf("task is controlled by Discord")
+		logDesktopOperation("task_message", "status", "blocked", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(taskID), "interface", task.Interface, "message_bytes", len(message), "error", err)
+		return err
 	}
 	_, err = a.runtimeClient().SendTaskMessage(ctx, task.ID, message)
+	if err != nil {
+		logDesktopOperation("task_message", "status", "failed", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(task.ID), "project", display.ShortID(task.ProjectID), "message_bytes", len(message), "error", err)
+		return err
+	}
+	logDesktopOperation("task_message", "status", "sent", "elapsed_ms", time.Since(started).Milliseconds(), "task", display.ShortID(task.ID), "project", display.ShortID(task.ProjectID), "message_bytes", len(message))
 	return err
 }
 
@@ -2467,6 +2572,61 @@ func (a *App) withDesktopCleanupError(primary error, operation string, cleanup f
 	}
 	log.Printf("operation=%q error=%v", operation, cleanupErr)
 	return errors.Join(primary, fmt.Errorf("%s cleanup failed: %w", operation, cleanupErr))
+}
+
+func logDesktopOperation(operation string, fields ...any) {
+	log.Printf("operation=%q%s", "desktop_"+operation, formatDesktopLogFields(fields...))
+}
+
+func formatDesktopLogFields(fields ...any) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i := 0; i+1 < len(fields); i += 2 {
+		key, ok := fields[i].(string)
+		if !ok || key == "" {
+			continue
+		}
+		value := formatDesktopLogValue(key, fields[i+1])
+		if value == "" {
+			continue
+		}
+		b.WriteByte(' ')
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(value)
+	}
+	return b.String()
+}
+
+func formatDesktopLogValue(key string, value any) string {
+	if value == nil {
+		return ""
+	}
+	lower := strings.ToLower(key)
+	if strings.Contains(lower, "token") || strings.Contains(lower, "authorization") || strings.Contains(lower, "secret") {
+		return strconv.Quote("[redacted]")
+	}
+	switch typed := value.(type) {
+	case string:
+		if typed == "" {
+			return ""
+		}
+		return strconv.Quote(typed)
+	case fmt.Stringer:
+		return strconv.Quote(typed.String())
+	case bool:
+		return strconv.FormatBool(typed)
+	case int:
+		return strconv.Itoa(typed)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case error:
+		return strconv.Quote(typed.Error())
+	default:
+		return strconv.Quote(fmt.Sprint(typed))
+	}
 }
 
 func removePreparedDesktopWorktreeForCleanup(project db.Project, prepared worktree.Prepared) error {
