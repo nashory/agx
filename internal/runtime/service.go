@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -107,7 +106,23 @@ const (
 // task state, and serves the Unix-socket API until ctx is canceled or Shutdown
 // is called. Startup intentionally performs recovery before accepting clients so
 // stale task/session state is not exposed through the API.
-func (s *Service) Start(ctx context.Context) error {
+func (s *Service) Start(ctx context.Context) (err error) {
+	started := time.Now()
+	logRuntimeOperation("runtime_start",
+		"status", "starting",
+		"config_dir", s.paths.ConfigDir,
+		"socket", s.paths.Socket,
+		"version", s.version,
+	)
+	defer func() {
+		if err != nil && !errors.Is(err, context.Canceled) {
+			logRuntimeOperation("runtime_start",
+				"status", "failed",
+				"elapsed_ms", time.Since(started).Milliseconds(),
+				"error", err,
+			)
+		}
+	}()
 	if err := os.MkdirAll(s.paths.ConfigDir, 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
@@ -169,12 +184,23 @@ func (s *Service) Start(ctx context.Context) error {
 	s.ln = ln
 	s.server = &http.Server{Handler: s.routes()}
 	s.bus.Publish("runtime.status", s.Status())
+	logRuntimeOperation("runtime_recovery",
+		"offline", recovery.Offline,
+		"cleared", recovery.Cleared,
+		"orphans", recovery.Orphans,
+	)
+	logRuntimeOperation("runtime_start",
+		"status", "serving",
+		"elapsed_ms", time.Since(started).Milliseconds(),
+		"socket", s.paths.Socket,
+		"discord_enabled", cfg.Discord.Enabled,
+	)
 	if cfg.Discord.Enabled {
 		go func() {
 			startCtx, cancel := s.backgroundTimeout(15 * time.Second)
 			defer cancel()
 			if err := s.discord.Start(startCtx, "runtime"); err != nil {
-				log.Printf("operation=%q error=%v", "discord_startup", err)
+				logRuntimeOperation("discord_startup", "error", err)
 			}
 			s.bus.Publish("discord.status", s.discord.Status())
 		}()
@@ -303,8 +329,10 @@ func shouldRetireCompletedRuntimeShell(task db.Task, state runtimeTaskState, sta
 // database exactly once. It is safe to call from both the API handler and the
 // Start context cancellation path.
 func (s *Service) Shutdown(ctx context.Context) error {
+	started := time.Now()
 	var err error
 	s.shutdownOnce.Do(func() {
+		logRuntimeOperation("runtime_shutdown", "status", "stopping")
 		if s.backgroundCancel != nil {
 			s.backgroundCancel()
 		}
@@ -334,8 +362,22 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		if removeErr := os.Remove(s.paths.Socket); err == nil && removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			err = removeErr
 		}
-		if releaseErr := s.lock.Release(); err == nil {
-			err = releaseErr
+		if s.lock != nil {
+			if releaseErr := s.lock.Release(); err == nil {
+				err = releaseErr
+			}
+		}
+		if err == nil {
+			logRuntimeOperation("runtime_shutdown",
+				"status", "stopped",
+				"elapsed_ms", time.Since(started).Milliseconds(),
+			)
+		} else {
+			logRuntimeOperation("runtime_shutdown",
+				"status", "failed",
+				"elapsed_ms", time.Since(started).Milliseconds(),
+				"error", err,
+			)
 		}
 		close(s.shutdownCh)
 	})
@@ -435,7 +477,7 @@ func (s *Service) syncDiscordAsync() {
 		for {
 			ctx, cancel := s.backgroundTimeout(15 * time.Second)
 			if err := s.discord.SoftSync(ctx); err != nil {
-				log.Printf("operation=%q error=%v", "discord_soft_sync_background", err)
+				logRuntimeOperation("discord_soft_sync_background", "error", err)
 			}
 			cancel()
 			s.bus.Publish("discord.status", s.discord.Status())
@@ -469,7 +511,7 @@ func (s *Service) syncDiscordTaskNow(taskID string) error {
 // queues a retry if Discord is slow or temporarily rejects the channel update.
 func (s *Service) syncDiscordTaskBestEffort(taskID string) {
 	if err := s.syncDiscordTaskNow(taskID); err != nil {
-		log.Printf("operation=%q task=%s error=%v", "discord_task_sync_foreground", display.ShortID(taskID), err)
+		logRuntimeOperation("discord_task_sync_foreground", "task", display.ShortID(taskID), "error", err)
 		if s.discord != nil && s.discord.Status().Connected {
 			s.discord.RefreshTaskStreams(s.backgroundContext())
 		}
@@ -485,7 +527,7 @@ func (s *Service) syncDiscordTaskAsync(taskID string) {
 	}
 	go func() {
 		if err := s.syncDiscordTaskNow(taskID); err != nil {
-			log.Printf("operation=%q task=%s error=%v", "discord_task_sync_background", display.ShortID(taskID), err)
+			logRuntimeOperation("discord_task_sync_background", "task", display.ShortID(taskID), "error", err)
 		}
 	}()
 }
