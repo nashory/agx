@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nashory/agx/internal/codexapp"
 	"github.com/nashory/agx/internal/db"
+	agxdiscord "github.com/nashory/agx/internal/discord"
 )
 
 type fakeCodexRuntime struct {
@@ -215,6 +217,98 @@ func TestCreateStructuredDiscordTaskCanUseProjectWorkspace(t *testing.T) {
 	}
 	if fake.turnCwd != "" {
 		t.Fatalf("structured project task started unexpected turn cwd=%q", fake.turnCwd)
+	}
+}
+
+func TestCreateStructuredDiscordTaskQueuedReturnsBeforeCodexStartup(t *testing.T) {
+	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
+	addExecutableToPath(t, "codex")
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	projectRoot := initRuntimeGitRepo(t)
+	project, err := store.EnsureProject(projectRoot, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	fake := newFakeCodexRuntime()
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	service.agents.startCodex = func(context.Context) (codexRuntime, error) {
+		close(started)
+		<-unblock
+		return fake, nil
+	}
+
+	prompt := "ship it"
+	type createResult struct {
+		task db.Task
+		err  error
+	}
+	done := make(chan createResult, 1)
+	go func() {
+		task, err := service.createStructuredDiscordTaskQueued(project, createTaskRequest{
+			ProjectID:      project.ID,
+			Title:          "queued",
+			Agent:          "codex",
+			AllMighty:      true,
+			WorkspaceMode:  string(db.WorkspaceModeProject),
+			InitialPrompt:  &prompt,
+			RunImmediately: true,
+			Discord:        true,
+		}, "codex")
+		done <- createResult{task: task, err: err}
+	}()
+
+	var task db.Task
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		task = result.task
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("queued create waited for Codex startup")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("background startup did not start Codex")
+	}
+	close(unblock)
+	waitForRuntimeTestCondition(t, time.Second, func() bool {
+		updated, err := store.GetTask(task.ID)
+		return err == nil && updated.AgentThreadID != nil && *updated.AgentThreadID == "thread-1"
+	})
+	if fake.startedText != "ship it" {
+		t.Fatalf("startedText = %q, want initial prompt", fake.startedText)
+	}
+}
+
+func TestPendingStructuredDiscordTaskRejectsMessagesUntilStartup(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterfaceWorkspace(db.NewTaskID(), project.ID, "queued", nil, "codex", true, db.TaskInterfaceDiscord, db.WorkspaceModeWorktree, db.StatusWaiting, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+
+	_, err = service.sendDiscordTaskMessage(context.Background(), task.ID, agxdiscord.IncomingTaskMessage{Text: "hey"})
+	if err == nil || !strings.Contains(err.Error(), "still starting") {
+		t.Fatalf("sendDiscordTaskMessage error = %v, want still starting", err)
 	}
 }
 
@@ -455,4 +549,16 @@ func runRuntimeTestCommand(t *testing.T, dir, name string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}
+}
+
+func waitForRuntimeTestCondition(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition was not met before timeout")
 }

@@ -20,32 +20,45 @@ import (
 // state, persists the task before agent startup, and rolls back generated
 // resources if preparation fails.
 func (s *Service) createStructuredDiscordTask(ctx context.Context, project db.Project, req createTaskRequest, agentName string) (db.Task, error) {
-	registry := agent.RegistryForProject(project.Path)
-	ag, err := registry.Get(agentName)
+	task, prepared, err := s.createStructuredDiscordTaskRecord(project, req, agentName)
 	if err != nil {
 		return db.Task{}, err
 	}
+	s.syncDiscordTaskBestEffort(task.ID)
+	prompt := structuredInitialPrompt(req.Description, req.InitialPrompt)
+	if err := s.startStructuredDiscordTask(ctx, project, task, prompt); err != nil {
+		return db.Task{}, s.rollbackStructuredDiscordTask(err, project, task, prepared)
+	}
+	return s.store.GetTask(task.ID)
+}
+
+func (s *Service) createStructuredDiscordTaskRecord(project db.Project, req createTaskRequest, agentName string) (db.Task, worktree.Prepared, error) {
+	registry := agent.RegistryForProject(project.Path)
+	ag, err := registry.Get(agentName)
+	if err != nil {
+		return db.Task{}, worktree.Prepared{}, err
+	}
 	if !ag.IsAvailable() {
-		return db.Task{}, fmt.Errorf("agent %q is not available on PATH", ag.Name)
+		return db.Task{}, worktree.Prepared{}, fmt.Errorf("agent %q is not available on PATH", ag.Name)
 	}
 	taskID := db.NewTaskID()
 	workspaceMode, err := parseWorkspaceMode(req.WorkspaceMode)
 	if err != nil {
-		return db.Task{}, err
+		return db.Task{}, worktree.Prepared{}, err
 	}
 	prepared, err := prepareStructuredWorkspace(project, taskID, workspaceMode)
 	if err != nil {
-		return db.Task{}, err
+		return db.Task{}, worktree.Prepared{}, err
 	}
 	task, err := s.store.CreateTaskRuntimeModeInterfaceWorkspace(taskID, project.ID, req.Title, req.Description, agentName, req.AllMighty, db.TaskInterfaceDiscord, workspaceMode, db.StatusWaiting, nil, prepared.Path, prepared.Branch)
 	if err != nil {
-		return db.Task{}, s.withStructuredCleanupError(err, "create structured task", func() error {
+		return db.Task{}, prepared, s.withStructuredCleanupError(err, "create structured task", func() error {
 			return removeStructuredWorktreeForCleanup(project, prepared)
 		})
 	}
 	if prepared.Base != nil {
 		if err := s.store.UpdateTaskRuntimeBase(task.ID, nil, task.Status, task.WorktreePath, task.BranchName, prepared.Base); err != nil {
-			return db.Task{}, s.withStructuredCleanupError(err, "update structured task runtime", func() error {
+			return db.Task{}, prepared, s.withStructuredCleanupError(err, "update structured task runtime", func() error {
 				return errors.Join(
 					removeStructuredWorktreeForCleanup(project, prepared),
 					deleteStructuredTaskRowForCleanup(s.store, task.ID),
@@ -54,23 +67,139 @@ func (s *Service) createStructuredDiscordTask(ctx context.Context, project db.Pr
 		}
 		task.BaseBranch = prepared.Base
 	}
-	s.syncDiscordTaskBestEffort(task.ID)
-	if err := s.agents.PrepareTask(ctx, task, project); err != nil {
-		return db.Task{}, s.rollbackStructuredDiscordTask(err, project, task, prepared)
+	return task, prepared, nil
+}
+
+func (s *Service) createStructuredDiscordTaskQueued(project db.Project, req createTaskRequest, agentName string) (db.Task, error) {
+	registry := agent.RegistryForProject(project.Path)
+	ag, err := registry.Get(agentName)
+	if err != nil {
+		return db.Task{}, err
 	}
+	if !ag.IsAvailable() {
+		return db.Task{}, fmt.Errorf("agent %q is not available on PATH", ag.Name)
+	}
+	workspaceMode, err := parseWorkspaceMode(req.WorkspaceMode)
+	if err != nil {
+		return db.Task{}, err
+	}
+	task, err := s.store.CreateTaskRuntimeModeInterfaceWorkspace(db.NewTaskID(), project.ID, req.Title, req.Description, agentName, req.AllMighty, db.TaskInterfaceDiscord, workspaceMode, db.StatusWaiting, nil, nil, nil)
+	if err != nil {
+		return db.Task{}, err
+	}
+	s.syncDiscordTaskAsync(task.ID)
 	prompt := structuredInitialPrompt(req.Description, req.InitialPrompt)
+	go s.startStructuredDiscordTaskQueued(project, task.ID, workspaceMode, prompt)
+	return task, nil
+}
+
+func (s *Service) startStructuredDiscordTaskQueued(project db.Project, taskID string, workspaceMode db.WorkspaceMode, prompt string) {
+	started := time.Now()
+	logRuntimeOperation("structured_discord_task_start",
+		"status", "starting",
+		"task", shortDiagnosticID(taskID),
+		"project", shortDiagnosticID(project.ID),
+		"workspace_mode", workspaceMode,
+	)
+	task, err := s.store.GetTask(taskID)
+	if err != nil {
+		logRuntimeOperation("structured_discord_task_start", "status", "abandoned", "task", shortDiagnosticID(taskID), "error", err)
+		return
+	}
+	prepared, err := prepareStructuredWorkspace(project, task.ID, workspaceMode)
+	if err != nil {
+		s.markStructuredDiscordTaskStartupFailed(task, err)
+		return
+	}
+	if err := s.store.UpdateTaskRuntimeBase(task.ID, nil, db.StatusWaiting, prepared.Path, prepared.Branch, prepared.Base); err != nil {
+		cleanupErr := removeStructuredWorktreeForCleanup(project, prepared)
+		s.markStructuredDiscordTaskStartupFailed(task, errors.Join(err, cleanupErr))
+		return
+	}
+	task, err = s.store.GetTask(task.ID)
+	if err != nil {
+		cleanupErr := removeStructuredWorktreeForCleanup(project, prepared)
+		logRuntimeOperation("structured_discord_task_start", "status", "abandoned", "task", shortDiagnosticID(taskID), "error", errors.Join(err, cleanupErr))
+		return
+	}
+	if err := s.markStructuredTaskStream(task); err != nil {
+		cleanupErr := removeStructuredWorktreeForCleanup(project, prepared)
+		s.markStructuredDiscordTaskStartupFailed(task, errors.Join(err, cleanupErr))
+		return
+	}
+	task, err = s.store.GetTask(task.ID)
+	if err != nil {
+		logRuntimeOperation("structured_discord_task_start", "status", "abandoned", "task", shortDiagnosticID(taskID), "error", err)
+		return
+	}
+	s.publishStructuredTaskUpdate(task)
+	s.syncDiscordTaskAsync(task.ID)
+	ctx, cancel := s.backgroundTimeout(2 * time.Minute)
+	defer cancel()
+	if err := s.startStructuredDiscordTask(ctx, project, task, prompt); err != nil {
+		s.markStructuredDiscordTaskStartupFailed(task, err)
+		return
+	}
+	logRuntimeOperation("structured_discord_task_start",
+		"status", "started",
+		"elapsed_ms", time.Since(started).Milliseconds(),
+		"task", shortDiagnosticID(task.ID),
+		"project", shortDiagnosticID(project.ID),
+	)
+}
+
+func (s *Service) startStructuredDiscordTask(ctx context.Context, project db.Project, task db.Task, prompt string) error {
+	if err := s.agents.PrepareTask(ctx, task, project); err != nil {
+		return err
+	}
 	if prompt != "" {
 		refreshed, err := s.store.GetTask(task.ID)
 		if err != nil {
-			return db.Task{}, err
+			return err
 		}
 		if err := s.agents.SendTaskMessage(ctx, refreshed, project, prompt); err != nil {
-			return db.Task{}, err
+			return err
 		}
 		_ = s.store.AppendTaskTranscriptMessage(task.ID, "user", prompt, nil, nil)
 		_ = s.store.UpdateTaskLastUserPrompt(task.ID, prompt)
 	}
-	return s.store.GetTask(task.ID)
+	return nil
+}
+
+func (s *Service) markStructuredTaskStream(task db.Task) error {
+	if isClaudeTask(task.Agent) {
+		return s.agents.ensureClaudeStreamTask(task)
+	}
+	if isCodexTask(task.Agent) {
+		streamKind := codexapp.StreamKind
+		return s.store.UpdateTaskAgentStream(task.ID, task.AgentThreadID, task.AgentEventCursor, &streamKind)
+	}
+	return agentstreamUnsupported(task)
+}
+
+func agentstreamUnsupported(task db.Task) error {
+	return fmt.Errorf("agent %q does not support structured task control", task.Agent)
+}
+
+func (s *Service) markStructuredDiscordTaskStartupFailed(task db.Task, err error) {
+	_ = s.store.UpdateTaskStatus(task.ID, db.StatusOffline)
+	_ = s.store.AppendTaskTranscriptMessage(task.ID, "status", "Task startup failed: "+err.Error(), nil, nil)
+	if refreshed, getErr := s.store.GetTask(task.ID); getErr == nil {
+		s.publishStructuredTaskUpdate(refreshed)
+	}
+	s.syncDiscordTaskAsync(task.ID)
+	logRuntimeOperation("structured_discord_task_start",
+		"status", "failed",
+		"task", shortDiagnosticID(task.ID),
+		"project", shortDiagnosticID(task.ProjectID),
+		"error", err,
+	)
+}
+
+func (s *Service) publishStructuredTaskUpdate(task db.Task) {
+	dto := s.taskDTO(task)
+	s.bus.Publish("task.changed", dto)
+	s.emitMetadataEvent(task.ProjectID)
 }
 
 // prepareStructuredWorkspace mirrors session workspace semantics for structured
@@ -158,4 +287,11 @@ func isRuntimeStructuredDBTask(task db.Task) bool {
 	}
 	kind := *task.AgentStreamKind
 	return kind == claudeStreamKind || kind == codexapp.StreamKind
+}
+
+func isPendingStructuredDiscordTask(task db.Task) bool {
+	return task.Interface == db.TaskInterfaceDiscord &&
+		task.SessionName == nil &&
+		isStructuredAgentName(task.Agent) &&
+		!isRuntimeStructuredDBTask(task)
 }

@@ -21,6 +21,12 @@ func (s *Service) sendDiscordTaskMessage(ctx context.Context, taskID string, mes
 	if task.Interface != db.TaskInterfaceDiscord {
 		return agxdiscord.SendTaskMessageResult{}, fmt.Errorf("this AGX task is local-only and cannot be controlled from Discord")
 	}
+	if isPendingStructuredDiscordTask(task) {
+		if task.Status == db.StatusOffline {
+			return agxdiscord.SendTaskMessageResult{}, fmt.Errorf("this Discord task failed to start; check AGX logs and retry after fixing the startup error")
+		}
+		return agxdiscord.SendTaskMessageResult{}, fmt.Errorf("this Discord task is still starting; try again in a moment")
+	}
 	discordMessageID := cleanDiscordMessageID(message.DiscordMessageID)
 	delivered := false
 	if discordMessageID != nil {

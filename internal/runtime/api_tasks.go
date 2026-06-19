@@ -100,7 +100,7 @@ func (s *Service) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	status := db.StatusOffline
 	if req.RunImmediately {
 		if req.Discord && isStructuredAgentName(agentName) {
-			task, err := s.createStructuredDiscordTask(r.Context(), project, req, agentName)
+			task, err := s.createStructuredDiscordTaskQueued(project, req, agentName)
 			if err != nil {
 				writeError(w, err)
 				return
