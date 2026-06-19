@@ -2,11 +2,9 @@ package runtime
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/nashory/agx/internal/db"
-	"github.com/nashory/agx/internal/display"
 )
 
 func (s *Service) taskAndProject(taskID string) (db.Task, db.Project, error) {
@@ -38,10 +36,26 @@ func (s *Service) deleteDiscordChannelForTaskAsync(task db.Task, fallbackChannel
 	}
 	taskID := task.ID
 	go func() {
-		ctx, cancel := s.backgroundTimeout(15 * time.Second)
-		defer cancel()
-		if err := s.discord.DeleteTaskChannelWithFallback(ctx, taskID, fallbackChannelID); err != nil {
-			log.Printf("operation=%q task=%s error=%v", "discord_task_channel_cleanup", display.ShortID(taskID), err)
+		for attempt := 1; attempt <= 3; attempt++ {
+			ctx, cancel := context.WithTimeout(s.backgroundContext(), 3*time.Second)
+			err := s.discord.DeleteTaskChannelWithFallback(ctx, taskID, fallbackChannelID)
+			cancel()
+			if err == nil {
+				logRuntimeOperation("discord_task_channel_cleanup",
+					"task", shortDiagnosticID(taskID),
+					"attempt", attempt,
+				)
+				s.bus.Publish("discord.status", s.discord.Status())
+				return
+			}
+			logRuntimeOperation("discord_task_channel_cleanup",
+				"task", shortDiagnosticID(taskID),
+				"attempt", attempt,
+				"error", err,
+			)
+			if attempt < 3 {
+				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+			}
 		}
 		s.bus.Publish("discord.status", s.discord.Status())
 	}()

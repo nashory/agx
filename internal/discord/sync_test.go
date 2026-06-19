@@ -650,6 +650,37 @@ func TestDeleteTaskChannelWithFallbackDeletesCurrentChannelWithoutMapping(t *tes
 	}
 }
 
+func TestDeleteTaskChannelWithFallbackPrefersCurrentChannelOverStaleMapping(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "active task", nil, "claude", false, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertDiscordMapping(db.DiscordAGXTask, task.ID, db.DiscordTypeChannel, "channel-stale"); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newFakeSyncClient()
+	if err := NewSyncer(store, client, "guild-1").DeleteTaskChannelWithFallback(context.Background(), task.ID, "channel-current"); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.deleted) != 2 || client.deleted[0] != "channel-current" || client.deleted[1] != "channel-stale" {
+		t.Fatalf("deleted = %#v, want current channel first and stale mapped channel second", client.deleted)
+	}
+	if _, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID); !errors.Is(err, db.ErrDiscordMappingNotFound) {
+		t.Fatalf("task mapping error = %v, want ErrDiscordMappingNotFound", err)
+	}
+}
+
 func TestSyncActiveTasksWithCleanupDeletesUnmappedGuildChannels(t *testing.T) {
 	store, err := db.OpenMemory()
 	if err != nil {

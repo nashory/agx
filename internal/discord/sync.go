@@ -289,16 +289,29 @@ func (s *Syncer) DeleteTaskChannel(ctx context.Context, taskID string) error {
 // `/kill` robust for the current Discord task channel even if local mapping
 // state is stale.
 func (s *Syncer) DeleteTaskChannelWithFallback(ctx context.Context, taskID, fallbackChannelID string) error {
+	fallbackChannelID = strings.TrimSpace(fallbackChannelID)
 	mapping, err := s.store.GetDiscordMapping(db.DiscordAGXTask, taskID)
 	if err != nil {
 		if errors.Is(err, db.ErrDiscordMappingNotFound) {
-			fallbackChannelID = strings.TrimSpace(fallbackChannelID)
 			if fallbackChannelID == "" {
 				return nil
 			}
 			return s.client.DeleteChannel(ctx, fallbackChannelID)
 		}
 		return err
+	}
+	if fallbackChannelID != "" && fallbackChannelID != mapping.DiscordID {
+		var errs []error
+		if err := s.client.DeleteChannel(ctx, fallbackChannelID); err != nil {
+			errs = append(errs, fmt.Errorf("delete current Discord task channel: %w", err))
+		}
+		if err := s.client.DeleteChannel(ctx, mapping.DiscordID); err != nil {
+			errs = append(errs, fmt.Errorf("delete mapped Discord task channel: %w", err))
+		}
+		if err := s.store.DeleteDiscordMapping(db.DiscordAGXTask, taskID); err != nil {
+			errs = append(errs, err)
+		}
+		return errors.Join(errs...)
 	}
 	if err := s.client.DeleteChannel(ctx, mapping.DiscordID); err != nil {
 		return err
