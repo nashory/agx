@@ -12,13 +12,43 @@ import {
   type DesktopAction,
 } from '../../appLogic';
 
-export function TaskCard({ task, busy, focused, onFocus, onOpen, onAction, index = 0 }: { task: Task; busy: boolean; focused: boolean; onFocus: () => void; onOpen: () => void; onAction: DesktopAction; index?: number }) {
+export function TaskCard({
+  task,
+  busy,
+  focused,
+  selected = false,
+  onFocus,
+  onOpen,
+  onAction,
+  onToggleSelect,
+  index = 0,
+}: {
+  task: Task;
+  busy: boolean;
+  focused: boolean;
+  selected?: boolean;
+  onFocus: () => void;
+  onOpen: () => void;
+  onAction: DesktopAction;
+  onToggleSelect?: () => void;
+  index?: number;
+}) {
   return (
     <article
-      className={`task-card ${focused ? 'focused' : ''}`}
+      className={`task-card ${onToggleSelect ? 'selectable' : ''} ${focused ? 'focused' : ''} ${selected ? 'selected' : ''}`}
       style={{ animationDelay: `${Math.min(index * 30, 240)}ms` }}
       onClick={onFocus}
     >
+      {onToggleSelect && (
+        <label className="task-select-control" onClick={(event) => event.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelect}
+            aria-label={`Select ${task.title}`}
+          />
+        </label>
+      )}
       <button className="task-open" onClick={onOpen}>
         <span className="card-title">{task.title}</span>
         <span className="task-badge-row">
@@ -36,15 +66,43 @@ export function TaskCard({ task, busy, focused, onFocus, onOpen, onAction, index
   );
 }
 
-export function TaskList({ tasks, busy, focusedTaskID, onFocusTask, onSelectTask, onAction }: { tasks: Task[]; busy: boolean; focusedTaskID: string | null; onFocusTask: (taskID: string) => void; onSelectTask: (task: Task) => void; onAction: DesktopAction }) {
+export function TaskList({
+  tasks,
+  busy,
+  focusedTaskID,
+  selectedTaskIDs,
+  onFocusTask,
+  onSelectTask,
+  onAction,
+  onToggleSelect,
+}: {
+  tasks: Task[];
+  busy: boolean;
+  focusedTaskID: string | null;
+  selectedTaskIDs?: Set<string>;
+  onFocusTask: (taskID: string) => void;
+  onSelectTask: (task: Task) => void;
+  onAction: DesktopAction;
+  onToggleSelect?: (taskID: string) => void;
+}) {
   return (
     <section className="task-table">
       {tasks.map((task) => (
         <div
-          className={`task-row ${task.id === focusedTaskID ? 'focused' : ''}`}
+          className={`task-row ${onToggleSelect ? 'selectable' : ''} ${task.id === focusedTaskID ? 'focused' : ''} ${selectedTaskIDs?.has(task.id) ? 'selected' : ''}`}
           key={task.id}
           onClick={() => onFocusTask(task.id)}
         >
+          {onToggleSelect && (
+            <label className="task-row-select" onClick={(event) => event.stopPropagation()}>
+              <input
+                type="checkbox"
+                checked={selectedTaskIDs?.has(task.id) ?? false}
+                onChange={() => onToggleSelect(task.id)}
+                aria-label={`Select ${task.title}`}
+              />
+            </label>
+          )}
           <button onClick={() => onSelectTask(task)}>{task.title}</button>
           <span>{statusLabel(task.status)}</span>
           <span><AgentBadge agent={task.agent} /></span>

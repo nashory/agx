@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import {
   Activity,
   ArrowLeft,
+  CheckSquare,
   ExternalLink,
   Folder,
   Keyboard,
@@ -15,6 +16,8 @@ import {
   Send,
   Settings as SettingsIcon,
   SquareTerminal,
+  Trash2,
+  X,
 } from 'lucide-react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -879,11 +882,15 @@ function TaskView({
   const [focusedTaskID, setFocusedTaskID] = useState<string | null>(null);
   const [showTaskOutput, setShowTaskOutput] = useState(true);
   const [taskFilter, setTaskFilter] = useState<TaskInterfaceFilter>('all');
+  const [selectedTaskIDs, setSelectedTaskIDs] = useState<Set<string>>(() => new Set());
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const [grantingAccess, setGrantingAccess] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
   const taskCounts = useMemo(() => taskInterfaceCounts(tasks), [tasks]);
   const visibleTasks = useMemo(() => tasksForInterfaceFilter(tasks, taskFilter), [tasks, taskFilter]);
   const focusedTask = visibleTasks.find((task) => task.id === focusedTaskID) ?? null;
+  const selectedTasks = useMemo(() => visibleTasks.filter((task) => selectedTaskIDs.has(task.id)), [selectedTaskIDs, visibleTasks]);
+  const allVisibleTasksSelected = visibleTasks.length > 0 && selectedTasks.length === visibleTasks.length;
 
   useEffect(() => {
     void api.ListAvailableAgents(project.id).then(setAgents).catch(() => setAgents([]));
@@ -899,6 +906,14 @@ function TaskView({
       return;
     }
     setFocusedTaskID((current) => (current && visibleTasks.some((task) => task.id === current) ? current : visibleTasks[0].id));
+  }, [visibleTasks]);
+
+  useEffect(() => {
+    const visibleIDs = new Set(visibleTasks.map((task) => task.id));
+    setSelectedTaskIDs((current) => {
+      const next = new Set([...current].filter((taskID) => visibleIDs.has(taskID)));
+      return next.size === current.size ? current : next;
+    });
   }, [visibleTasks]);
 
   useEffect(() => {
@@ -938,9 +953,20 @@ function TaskView({
           onSelectTask(visibleTasks[currentIndex]);
           return;
         }
+        if (event.key === ' ' && focusedTaskID) {
+          event.preventDefault();
+          toggleTaskSelected(focusedTaskID);
+          return;
+        }
       }
       if (!(event.ctrlKey || event.metaKey)) return;
       switch (event.key) {
+        case 'a':
+          if (!isTextEntry(event.target) && visibleTasks.length > 0) {
+            event.preventDefault();
+            setSelectedTaskIDs(new Set(visibleTasks.map((task) => task.id)));
+          }
+          break;
         case '1':
           event.preventDefault();
           onViewMode('grid');
@@ -958,6 +984,44 @@ function TaskView({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [focusedTaskID, onBack, onSelectTask, onViewMode, visibleTasks, viewMode]);
+
+  function toggleTaskSelected(taskID: string) {
+    setSelectedTaskIDs((current) => {
+      const next = new Set(current);
+      if (next.has(taskID)) {
+        next.delete(taskID);
+      } else {
+        next.add(taskID);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllVisibleTasks() {
+    setSelectedTaskIDs(allVisibleTasksSelected ? new Set() : new Set(visibleTasks.map((task) => task.id)));
+  }
+
+  async function deleteSelectedTasks() {
+    const targets = selectedTasks;
+    if (targets.length === 0) return;
+    setConfirmingBulkDelete(false);
+    const failed = new Set<string>();
+    const ok = await onAction(async () => {
+      const failures: string[] = [];
+      for (const task of targets) {
+        try {
+          await api.DeleteTask(task.id);
+        } catch (err) {
+          failed.add(task.id);
+          failures.push(`${task.title}: ${errorMessage(err)}`);
+        }
+      }
+      if (failures.length > 0) {
+        throw new Error(`Failed to delete ${failures.length} of ${targets.length} tasks:\n${failures.join('\n')}`);
+      }
+    }, `delete ${targets.length} tasks`);
+    setSelectedTaskIDs(ok ? new Set() : failed);
+  }
 
   function createTask() {
     if (!title.trim() || !project.accessGranted || (attachToDiscord && !discordConnected)) return;
@@ -1052,16 +1116,30 @@ function TaskView({
         onGrantAccess={() => void grantAccess()}
       />
       <TaskInterfaceTabs value={taskFilter} counts={taskCounts} onChange={setTaskFilter} />
+      {visibleTasks.length > 0 && (
+        <section className={`task-bulk-toolbar ${selectedTasks.length > 0 ? 'active' : ''}`} aria-label="Task selection actions">
+          <div className="task-bulk-summary">
+            <IconButton label={allVisibleTasksSelected ? 'Clear task selection' : 'Select all visible tasks'} disabled={busy} onClick={toggleAllVisibleTasks}>
+              {allVisibleTasksSelected ? <X size={17} /> : <CheckSquare size={17} />}
+            </IconButton>
+            <span>{selectedTasks.length === 0 ? 'No tasks selected' : `${selectedTasks.length} selected`}</span>
+          </div>
+          <button className="danger-button task-bulk-delete" disabled={busy || selectedTasks.length === 0} onClick={() => setConfirmingBulkDelete(true)}>
+            <Trash2 size={16} />
+            Delete
+          </button>
+        </section>
+      )}
       <section className={`task-board-layout ${showTaskOutput ? 'with-output' : ''}`}>
         <section className="task-board-main">
           {visibleTasks.length === 0 ? (
             <EmptyState title={tasks.length === 0 ? 'No tasks' : `No ${taskInterfaceLabel(taskFilter)} tasks`} detail={tasks.length === 0 ? 'Create a task to start an agent session.' : 'Switch tabs or create a matching task.'} />
           ) : viewMode === 'list' ? (
-            <TaskList tasks={visibleTasks} busy={busy} focusedTaskID={focusedTaskID} onFocusTask={setFocusedTaskID} onSelectTask={onSelectTask} onAction={onAction} />
+            <TaskList tasks={visibleTasks} busy={busy} focusedTaskID={focusedTaskID} selectedTaskIDs={selectedTaskIDs} onFocusTask={setFocusedTaskID} onSelectTask={onSelectTask} onAction={onAction} onToggleSelect={toggleTaskSelected} />
           ) : (
             <section className="task-grid">
               {visibleTasks.map((task, index) => (
-                <TaskCard key={task.id} task={task} busy={busy} focused={task.id === focusedTaskID} onFocus={() => setFocusedTaskID(task.id)} onOpen={() => onSelectTask(task)} onAction={onAction} index={index} />
+                <TaskCard key={task.id} task={task} busy={busy} focused={task.id === focusedTaskID} selected={selectedTaskIDs.has(task.id)} onFocus={() => setFocusedTaskID(task.id)} onOpen={() => onSelectTask(task)} onAction={onAction} onToggleSelect={() => toggleTaskSelected(task.id)} index={index} />
               ))}
             </section>
           )}
@@ -1086,6 +1164,18 @@ function TaskView({
           onCancel={() => setQuickTemplate(null)}
           onCreate={(agentName, discordAttached, selectedWorkspaceMode) => void createQuickTask(quickTemplate, agentName, discordAttached, selectedWorkspaceMode)}
         />
+      )}
+      {confirmingBulkDelete && (
+        <div className="modal-backdrop blurred" onMouseDown={() => setConfirmingBulkDelete(false)}>
+          <section className="confirm-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <h2>Delete Tasks</h2>
+            <p>Delete {selectedTasks.length} selected tasks from AGX? Each task will be stopped and its task worktree will be removed through the normal task cleanup path.</p>
+            <div className="wizard-actions">
+              <button className="text-button" onClick={() => setConfirmingBulkDelete(false)}>Cancel</button>
+              <button className="danger-button" disabled={busy || selectedTasks.length === 0} onClick={() => void deleteSelectedTasks()}>Delete</button>
+            </div>
+          </section>
+        </div>
       )}
       {!project.accessGranted && (
         <GrantAccessModal

@@ -44,6 +44,20 @@ describe('TaskBoardItems', () => {
     expect(onAction).toHaveBeenCalledWith(expect.any(Function), 'rename task "Ship it" to "Review"');
   });
 
+  it('toggles card selection without opening the task', async () => {
+    const user = userEvent.setup();
+    const onToggleSelect = vi.fn();
+    const onOpen = vi.fn();
+    const onFocus = vi.fn();
+    render(<TaskCard task={task} busy={false} focused={false} selected={false} onFocus={onFocus} onOpen={onOpen} onAction={vi.fn()} onToggleSelect={onToggleSelect} />);
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select Ship it' }));
+
+    expect(onToggleSelect).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(onFocus).not.toHaveBeenCalled();
+  });
+
   it('selects rows in list mode', async () => {
     const user = userEvent.setup();
     const onFocusTask = vi.fn();
@@ -54,5 +68,19 @@ describe('TaskBoardItems', () => {
 
     expect(onFocusTask).toHaveBeenCalledWith('task-1');
     expect(onSelectTask).toHaveBeenCalledWith(task);
+  });
+
+  it('toggles row selection without opening the task', async () => {
+    const user = userEvent.setup();
+    const onToggleSelect = vi.fn();
+    const onSelectTask = vi.fn();
+    const onFocusTask = vi.fn();
+    render(<TaskList tasks={[task]} busy={false} focusedTaskID={null} selectedTaskIDs={new Set()} onFocusTask={onFocusTask} onSelectTask={onSelectTask} onAction={vi.fn()} onToggleSelect={onToggleSelect} />);
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select Ship it' }));
+
+    expect(onToggleSelect).toHaveBeenCalledWith('task-1');
+    expect(onSelectTask).not.toHaveBeenCalled();
+    expect(onFocusTask).not.toHaveBeenCalled();
   });
 });

@@ -2105,6 +2105,12 @@
   box-shadow: 0 0 0 1px var(--accent), var(--shadow);
 }
 
+.task-card.selected,
+.task-row.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
 .task-row.focused {
   position: relative;
   background: color-mix(in srgb, var(--accent) 9%, var(--surface));
@@ -2127,6 +2133,23 @@
   background: transparent;
   padding: 0;
   text-align: left;
+}
+
+.task-select-control {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 1;
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.task-select-control input,
+.task-row-select input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 .task-last-prompt {
@@ -2154,6 +2177,10 @@
   align-items: center;
   gap: 8px;
   padding-right: 118px;
+}
+
+.task-card.selectable .task-open {
+  padding-left: 28px;
 }
 
 .task-status-pin {
@@ -2262,6 +2289,44 @@
   min-height: 52px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
+}
+
+.task-row.selectable {
+  grid-template-columns: 26px minmax(220px, 1fr) 140px 120px 128px auto;
+}
+
+.task-row-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-bulk-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 50px;
+  padding: 8px 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.task-bulk-toolbar.active {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+}
+
+.task-bulk-summary {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.task-bulk-delete {
+  padding: 0 12px;
 }
 
 .task-row:last-child {
