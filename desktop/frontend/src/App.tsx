@@ -58,6 +58,7 @@ import {
   isTextEntry,
   loadPreferences,
   loadZoomLevel,
+  mainQuickTaskPrompt,
   mainTabs,
   preferenceKey,
   projectGridColumns,
@@ -1055,6 +1056,15 @@ function TaskView({
     }
   }
 
+  async function createMainQuickTask() {
+    if (!project.accessGranted || !discordConnected) return;
+    await onAction(async () => {
+      const task = await api.CreateDiscordTask(project.id, 'main', mainQuickTaskPrompt, '', allMighty, 'project');
+      setTaskFilter('discord');
+      return { taskID: task.id, expectSession: false };
+    }, `quick Discord project task "main"${allMighty ? ' all-mighty' : ''}`);
+  }
+
   async function grantAccess() {
     if (grantingAccess) return;
     setGrantingAccess(true);
@@ -1112,6 +1122,7 @@ function TaskView({
         onWorkspaceModeChange={setWorkspaceMode}
         onAttachToDiscordChange={setAttachToDiscord}
         onCreate={createTask}
+        onMainQuickTask={() => void createMainQuickTask()}
         onQuickTemplate={setQuickTemplate}
         onGrantAccess={() => void grantAccess()}
       />

@@ -7,6 +7,7 @@ import {
   List,
   LockKeyhole,
   MessageCircle,
+  PlayCircle,
   ShieldCheck,
   SquareTerminal,
 } from 'lucide-react';
@@ -33,6 +34,7 @@ export function TaskCreateToolbar({
   onWorkspaceModeChange,
   onAttachToDiscordChange,
   onCreate,
+  onMainQuickTask,
   onQuickTemplate,
   onGrantAccess,
 }: {
@@ -55,6 +57,7 @@ export function TaskCreateToolbar({
   onWorkspaceModeChange: (value: WorkspaceMode) => void;
   onAttachToDiscordChange: (value: boolean) => void;
   onCreate: () => void;
+  onMainQuickTask: () => void;
   onQuickTemplate: (template: QuickTaskTemplate) => void;
   onGrantAccess: () => void;
 }) {
@@ -97,6 +100,10 @@ export function TaskCreateToolbar({
       </section>
       <section className="quick-task-row" aria-label="Quick task templates">
         <div className="quick-task-buttons">
+          <button className="quick-task-button main-quick-task-button" disabled={busy || !project.accessGranted || !discordConnected} onClick={onMainQuickTask}>
+            <PlayCircle size={16} />
+            <span>Main</span>
+          </button>
           {quickTaskTemplates.map((template) => (
             <button className="quick-task-button" key={template.id} disabled={busy || !project.accessGranted || (attachToDiscord && !discordConnected)} onClick={() => onQuickTemplate(template)}>
               {template.id === 'vanilla' && <SquareTerminal size={16} />}

@@ -27,6 +27,10 @@ export type QuickTaskTemplate = {
   prompt: string;
 };
 
+export const mainQuickTaskPrompt = `Read the repository context files first and use them to understand this project before doing any work.
+
+Start with AGENTS.md, CLAUDE.md, README.md, and any other repo-local context or instruction files that are present. Summarize the relevant project conventions to yourself, then wait for the user's next instruction.`;
+
 export const quickTaskTemplates: QuickTaskTemplate[] = [
   {
     id: 'vanilla',

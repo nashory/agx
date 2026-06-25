@@ -46,6 +46,7 @@ function renderToolbar(overrides?: Partial<React.ComponentProps<typeof TaskCreat
     onWorkspaceModeChange: vi.fn(),
     onAttachToDiscordChange: vi.fn(),
     onCreate: vi.fn(),
+    onMainQuickTask: vi.fn(),
     onQuickTemplate: vi.fn(),
     onGrantAccess: vi.fn(),
     ...overrides,
@@ -75,7 +76,18 @@ describe('TaskCreateToolbar', () => {
     renderToolbar({ attachToDiscord: true, discordConnected: false });
 
     expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Main' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Vanilla' })).toBeDisabled();
+  });
+
+  it('starts the main quick task directly', async () => {
+    const user = userEvent.setup();
+    const props = renderToolbar();
+
+    await user.click(screen.getByRole('button', { name: 'Main' }));
+
+    expect(props.onMainQuickTask).toHaveBeenCalledTimes(1);
+    expect(props.onQuickTemplate).not.toHaveBeenCalled();
   });
 
   it('opens quick task template selection', async () => {
