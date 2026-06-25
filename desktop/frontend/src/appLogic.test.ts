@@ -19,13 +19,13 @@ import {
 } from './appLogic';
 import type { Task } from './types';
 
-function task(id: string, iface: Task['interface'], createdAt = `2026-01-01T00:00:0${id}.000Z`): Task {
+function task(id: string, iface: Task['interface'], createdAt = `2026-01-01T00:00:0${id}.000Z`, workspaceMode: Task['workspaceMode'] = 'worktree'): Task {
   return {
     id,
     projectId: 'project-1',
     title: `Task ${id}`,
     interface: iface,
-    workspaceMode: 'worktree',
+    workspaceMode,
     status: 'waiting',
     agent: 'codex',
     allMighty: false,
@@ -112,6 +112,18 @@ describe('appLogic', () => {
     } satisfies Record<TaskInterfaceFilter, number>);
     expect(tasksForInterfaceFilter(tasks, 'all').map((item) => item.id)).toEqual(['2', '1', '3']);
     expect(tasksForInterfaceFilter(tasks, 'desktop').map((item) => item.id)).toEqual(['2']);
+    expect(tasksForInterfaceFilter(tasks, 'discord').map((item) => item.id)).toEqual(['1', '3']);
+  });
+
+  it('keeps project-mode tasks first only in the All task filter', () => {
+    const tasks = [
+      task('1', 'discord'),
+      task('2', 'local'),
+      task('3', 'discord', '2026-01-01T00:00:03.000Z', 'project'),
+      task('4', 'local'),
+    ];
+
+    expect(tasksForInterfaceFilter(tasks, 'all').map((item) => item.id)).toEqual(['3', '2', '4', '1']);
     expect(tasksForInterfaceFilter(tasks, 'discord').map((item) => item.id)).toEqual(['1', '3']);
   });
 

@@ -310,6 +310,10 @@ export function tasksForInterfaceFilter(tasks: Task[], filter: TaskInterfaceFilt
   return filtered
     .map((task, index) => ({ task, index }))
     .sort((a, b) => {
+      if (filter === 'all') {
+        const workspaceGroup = Number(a.task.workspaceMode !== 'project') - Number(b.task.workspaceMode !== 'project');
+        if (workspaceGroup !== 0) return workspaceGroup;
+      }
       const group = Number(isDiscordTask(a.task)) - Number(isDiscordTask(b.task));
       return group !== 0 ? group : a.index - b.index;
     })
