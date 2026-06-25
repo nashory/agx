@@ -41,6 +41,9 @@ type Prepared struct {
 // permission prompts and git configuration problems often only appear at
 // worktree-add time.
 func ValidateProject(projectPath string) error {
+	if err := ensureWorktreeBaseCommit(projectPath); err != nil {
+		return err
+	}
 	parent := filepath.Join(config.ConfigDir(), "worktrees", ".validation")
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return fmt.Errorf("create validation worktree parent: %w", err)
@@ -109,6 +112,9 @@ func PrepareForTask(project db.Project, taskID string, cfg config.WorktreeConfig
 			return Prepared{}, err
 		}
 		return Prepared{WorkingDir: project.Path}, nil
+	}
+	if err := ensureWorktreeBaseCommit(project.Path); err != nil {
+		return Prepared{}, err
 	}
 	shortID := display.ShortID(taskID)
 	worktreeRoot, err := projectWorktreeRoot(project)
@@ -357,6 +363,16 @@ func currentBranch(projectPath string) (string, error) {
 		return "HEAD", nil
 	}
 	return branch, nil
+}
+
+func ensureWorktreeBaseCommit(projectPath string) error {
+	if _, err := gitOutput(projectPath, "rev-parse", "--git-dir"); err != nil {
+		return err
+	}
+	if _, err := gitOutput(projectPath, "rev-parse", "--verify", "HEAD^{commit}"); err != nil {
+		return fmt.Errorf("git repository has no commits; create an initial commit before granting access or creating worktree tasks")
+	}
+	return nil
 }
 
 func runGit(dir string, args ...string) error {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nashory/agx/internal/config"
@@ -196,6 +197,29 @@ func TestValidateProjectRejectsNonGitDirectory(t *testing.T) {
 	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
 	if err := ValidateProject(t.TempDir()); err == nil {
 		t.Fatal("ValidateProject succeeded for non-git directory")
+	}
+}
+
+func TestValidateProjectRejectsRepositoryWithoutCommits(t *testing.T) {
+	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
+	root := t.TempDir()
+	run(t, root, "git", "init", "-q")
+
+	err := ValidateProject(root)
+	if err == nil || !strings.Contains(err.Error(), "git repository has no commits") {
+		t.Fatalf("ValidateProject error = %v, want no commits guidance", err)
+	}
+}
+
+func TestPrepareWorktreeRejectsRepositoryWithoutCommits(t *testing.T) {
+	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
+	root := t.TempDir()
+	run(t, root, "git", "init", "-q")
+	project := db.Project{ID: "project", Name: "repo", Path: root}
+
+	_, err := Prepare(project, "12345678-aaaa", config.WorktreeConfig{Enabled: true})
+	if err == nil || !strings.Contains(err.Error(), "git repository has no commits") {
+		t.Fatalf("Prepare error = %v, want no commits guidance", err)
 	}
 }
 

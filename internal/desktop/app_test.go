@@ -424,8 +424,8 @@ func TestRegisterProjectAllowsRepositoryWithoutWorktreeHead(t *testing.T) {
 	if project.AccessError == nil || !strings.Contains(*project.AccessError, "Grant access") {
 		t.Fatalf("AccessError = %#v, want grant access prompt", project.AccessError)
 	}
-	if _, err := app.GrantProjectAccess(project.ID); err == nil || !strings.Contains(err.Error(), "git worktree add validation failed") {
-		t.Fatalf("GrantProjectAccess error = %v, want worktree validation error", err)
+	if _, err := app.GrantProjectAccess(project.ID); err == nil || !strings.Contains(err.Error(), "git repository has no commits") {
+		t.Fatalf("GrantProjectAccess error = %v, want no commits guidance", err)
 	}
 }
 
