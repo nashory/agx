@@ -2189,6 +2189,11 @@
   padding-left: 28px;
 }
 
+.task-card.selection-mode,
+.task-row.selection-mode {
+  cursor: pointer;
+}
+
 .task-status-pin {
   position: absolute;
   right: 14px;
@@ -2329,6 +2334,12 @@
   gap: 10px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.task-bulk-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .task-bulk-delete {

@@ -883,6 +883,7 @@ function TaskView({
   const [focusedTaskID, setFocusedTaskID] = useState<string | null>(null);
   const [showTaskOutput, setShowTaskOutput] = useState(true);
   const [taskFilter, setTaskFilter] = useState<TaskInterfaceFilter>('all');
+  const [bulkSelectionMode, setBulkSelectionMode] = useState(false);
   const [selectedTaskIDs, setSelectedTaskIDs] = useState<Set<string>>(() => new Set());
   const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const [grantingAccess, setGrantingAccess] = useState(false);
@@ -918,6 +919,12 @@ function TaskView({
   }, [visibleTasks]);
 
   useEffect(() => {
+    if (visibleTasks.length === 0) {
+      setBulkSelectionMode(false);
+    }
+  }, [visibleTasks.length]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.altKey && event.key === 'Backspace') {
         event.preventDefault();
@@ -929,10 +936,19 @@ function TaskView({
         setShowTaskOutput((value) => !value);
         return;
       }
+      if (bulkSelectionMode && event.key === 'Escape') {
+        event.preventDefault();
+        exitBulkSelectionMode();
+        return;
+      }
       if (!isTextEntry(event.target) && visibleTasks.length > 0) {
         const currentIndex = Math.max(0, visibleTasks.findIndex((task) => task.id === focusedTaskID));
         if (event.altKey && event.key === 'Enter') {
           event.preventDefault();
+          if (bulkSelectionMode) {
+            toggleTaskSelected(visibleTasks[currentIndex].id);
+            return;
+          }
           onSelectTask(visibleTasks[currentIndex]);
           return;
         }
@@ -951,10 +967,14 @@ function TaskView({
         }
         if (event.key === 'Enter') {
           event.preventDefault();
+          if (bulkSelectionMode) {
+            toggleTaskSelected(visibleTasks[currentIndex].id);
+            return;
+          }
           onSelectTask(visibleTasks[currentIndex]);
           return;
         }
-        if (event.key === ' ' && focusedTaskID) {
+        if (event.key === ' ' && focusedTaskID && bulkSelectionMode) {
           event.preventDefault();
           toggleTaskSelected(focusedTaskID);
           return;
@@ -963,7 +983,7 @@ function TaskView({
       if (!(event.ctrlKey || event.metaKey)) return;
       switch (event.key) {
         case 'a':
-          if (!isTextEntry(event.target) && visibleTasks.length > 0) {
+          if (bulkSelectionMode && !isTextEntry(event.target) && visibleTasks.length > 0) {
             event.preventDefault();
             setSelectedTaskIDs(new Set(visibleTasks.map((task) => task.id)));
           }
@@ -984,7 +1004,18 @@ function TaskView({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [focusedTaskID, onBack, onSelectTask, onViewMode, visibleTasks, viewMode]);
+  }, [bulkSelectionMode, focusedTaskID, onBack, onSelectTask, onViewMode, visibleTasks, viewMode]);
+
+  function enterBulkSelectionMode() {
+    setSelectedTaskIDs(new Set());
+    setBulkSelectionMode(true);
+  }
+
+  function exitBulkSelectionMode() {
+    setConfirmingBulkDelete(false);
+    setSelectedTaskIDs(new Set());
+    setBulkSelectionMode(false);
+  }
 
   function toggleTaskSelected(taskID: string) {
     setSelectedTaskIDs((current) => {
@@ -1021,7 +1052,12 @@ function TaskView({
         throw new Error(`Failed to delete ${failures.length} of ${targets.length} tasks:\n${failures.join('\n')}`);
       }
     }, `delete ${targets.length} tasks`);
-    setSelectedTaskIDs(ok ? new Set() : failed);
+    if (ok) {
+      exitBulkSelectionMode();
+    } else {
+      setSelectedTaskIDs(failed);
+      setBulkSelectionMode(true);
+    }
   }
 
   function createTask() {
@@ -1126,19 +1162,41 @@ function TaskView({
         onQuickTemplate={setQuickTemplate}
         onGrantAccess={() => void grantAccess()}
       />
-      <TaskInterfaceTabs value={taskFilter} counts={taskCounts} onChange={setTaskFilter} />
+      <TaskInterfaceTabs value={taskFilter} counts={taskCounts} onChange={(filter) => {
+        setTaskFilter(filter);
+        exitBulkSelectionMode();
+      }} />
       {visibleTasks.length > 0 && (
         <section className={`task-bulk-toolbar ${selectedTasks.length > 0 ? 'active' : ''}`} aria-label="Task selection actions">
-          <div className="task-bulk-summary">
-            <IconButton label={allVisibleTasksSelected ? 'Clear task selection' : 'Select all visible tasks'} disabled={busy} onClick={toggleAllVisibleTasks}>
-              {allVisibleTasksSelected ? <X size={17} /> : <CheckSquare size={17} />}
-            </IconButton>
-            <span>{selectedTasks.length === 0 ? 'No tasks selected' : `${selectedTasks.length} selected`}</span>
-          </div>
-          <button className="danger-button task-bulk-delete" disabled={busy || selectedTasks.length === 0} onClick={() => setConfirmingBulkDelete(true)}>
-            <Trash2 size={16} />
-            Delete
-          </button>
+          {bulkSelectionMode ? (
+            <>
+              <div className="task-bulk-summary">
+                <IconButton label={allVisibleTasksSelected ? 'Clear task selection' : 'Select all visible tasks'} disabled={busy} onClick={toggleAllVisibleTasks}>
+                  {allVisibleTasksSelected ? <X size={17} /> : <CheckSquare size={17} />}
+                </IconButton>
+                <span>{selectedTasks.length === 0 ? 'Select tasks to delete' : `${selectedTasks.length} selected`}</span>
+              </div>
+              <div className="task-bulk-actions">
+                <button className="text-button" disabled={busy} onClick={exitBulkSelectionMode}>
+                  Cancel
+                </button>
+                <button className="danger-button task-bulk-delete" disabled={busy || selectedTasks.length === 0} onClick={() => setConfirmingBulkDelete(true)}>
+                  <Trash2 size={16} />
+                  Delete
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="task-bulk-summary">
+                <span>Bulk actions</span>
+              </div>
+              <button className="text-button" disabled={busy} onClick={enterBulkSelectionMode}>
+                <CheckSquare size={16} />
+                Select
+              </button>
+            </>
+          )}
         </section>
       )}
       <section className={`task-board-layout ${showTaskOutput ? 'with-output' : ''}`}>
@@ -1146,11 +1204,11 @@ function TaskView({
           {visibleTasks.length === 0 ? (
             <EmptyState title={tasks.length === 0 ? 'No tasks' : `No ${taskInterfaceLabel(taskFilter)} tasks`} detail={tasks.length === 0 ? 'Create a task to start an agent session.' : 'Switch tabs or create a matching task.'} />
           ) : viewMode === 'list' ? (
-            <TaskList tasks={visibleTasks} busy={busy} focusedTaskID={focusedTaskID} selectedTaskIDs={selectedTaskIDs} onFocusTask={setFocusedTaskID} onSelectTask={onSelectTask} onAction={onAction} onToggleSelect={toggleTaskSelected} />
+            <TaskList tasks={visibleTasks} busy={busy} focusedTaskID={focusedTaskID} selectedTaskIDs={selectedTaskIDs} selectionMode={bulkSelectionMode} onFocusTask={setFocusedTaskID} onSelectTask={onSelectTask} onAction={onAction} onToggleSelect={toggleTaskSelected} />
           ) : (
             <section className="task-grid">
               {visibleTasks.map((task, index) => (
-                <TaskCard key={task.id} task={task} busy={busy} focused={task.id === focusedTaskID} selected={selectedTaskIDs.has(task.id)} onFocus={() => setFocusedTaskID(task.id)} onOpen={() => onSelectTask(task)} onAction={onAction} onToggleSelect={() => toggleTaskSelected(task.id)} index={index} />
+                <TaskCard key={task.id} task={task} busy={busy} focused={task.id === focusedTaskID} selected={selectedTaskIDs.has(task.id)} selectionMode={bulkSelectionMode} onFocus={() => setFocusedTaskID(task.id)} onOpen={() => onSelectTask(task)} onAction={onAction} onToggleSelect={() => toggleTaskSelected(task.id)} index={index} />
               ))}
             </section>
           )}

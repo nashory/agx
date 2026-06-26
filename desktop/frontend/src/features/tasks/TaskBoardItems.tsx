@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Play, Square, Trash2 } from 'lucide-react';
 import { api } from '../../api';
@@ -17,6 +18,7 @@ export function TaskCard({
   busy,
   focused,
   selected = false,
+  selectionMode = false,
   onFocus,
   onOpen,
   onAction,
@@ -27,19 +29,40 @@ export function TaskCard({
   busy: boolean;
   focused: boolean;
   selected?: boolean;
+  selectionMode?: boolean;
   onFocus: () => void;
   onOpen: () => void;
   onAction: DesktopAction;
   onToggleSelect?: () => void;
   index?: number;
 }) {
+  const selectable = selectionMode && onToggleSelect;
+
+  function handleCardClick() {
+    if (selectable) {
+      onToggleSelect();
+      return;
+    }
+    onFocus();
+  }
+
+  function handlePrimaryClick(event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    if (selectable) {
+      onToggleSelect();
+      return;
+    }
+    onFocus();
+    onOpen();
+  }
+
   return (
     <article
-      className={`task-card ${onToggleSelect ? 'selectable' : ''} ${focused ? 'focused' : ''} ${selected ? 'selected' : ''}`}
+      className={`task-card ${selectable ? 'selectable selection-mode' : ''} ${focused ? 'focused' : ''} ${selected ? 'selected' : ''}`}
       style={{ animationDelay: `${Math.min(index * 30, 240)}ms` }}
-      onClick={onFocus}
+      onClick={handleCardClick}
     >
-      {onToggleSelect && (
+      {selectable && (
         <label className="task-select-control" onClick={(event) => event.stopPropagation()}>
           <input
             type="checkbox"
@@ -49,7 +72,7 @@ export function TaskCard({
           />
         </label>
       )}
-      <button className="task-open" onClick={onOpen}>
+      <button className="task-open" onClick={handlePrimaryClick}>
         <span className="card-title">{task.title}</span>
         <span className="task-badge-row">
           {isDiscordTask(task) && <DiscordBadge />}
@@ -61,7 +84,7 @@ export function TaskCard({
         {task.lastUserPrompt && <span className="task-last-prompt">{task.lastUserPrompt}</span>}
       </button>
       <span className={`status-pill task-status-pin ${task.status}`}>{statusLabel(task.status)}</span>
-      <TaskActions task={task} busy={busy} onAction={onAction} />
+      {!selectable && <TaskActions task={task} busy={busy} onAction={onAction} />}
     </article>
   );
 }
@@ -71,6 +94,7 @@ export function TaskList({
   busy,
   focusedTaskID,
   selectedTaskIDs,
+  selectionMode = false,
   onFocusTask,
   onSelectTask,
   onAction,
@@ -80,20 +104,29 @@ export function TaskList({
   busy: boolean;
   focusedTaskID: string | null;
   selectedTaskIDs?: Set<string>;
+  selectionMode?: boolean;
   onFocusTask: (taskID: string) => void;
   onSelectTask: (task: Task) => void;
   onAction: DesktopAction;
   onToggleSelect?: (taskID: string) => void;
 }) {
+  const selectable = selectionMode && onToggleSelect;
+
   return (
     <section className="task-table">
       {tasks.map((task) => (
         <div
-          className={`task-row ${onToggleSelect ? 'selectable' : ''} ${task.id === focusedTaskID ? 'focused' : ''} ${selectedTaskIDs?.has(task.id) ? 'selected' : ''}`}
+          className={`task-row ${selectable ? 'selectable selection-mode' : ''} ${task.id === focusedTaskID ? 'focused' : ''} ${selectedTaskIDs?.has(task.id) ? 'selected' : ''}`}
           key={task.id}
-          onClick={() => onFocusTask(task.id)}
+          onClick={() => {
+            if (selectable) {
+              onToggleSelect(task.id);
+              return;
+            }
+            onFocusTask(task.id);
+          }}
         >
-          {onToggleSelect && (
+          {selectable && (
             <label className="task-row-select" onClick={(event) => event.stopPropagation()}>
               <input
                 type="checkbox"
@@ -103,12 +136,20 @@ export function TaskList({
               />
             </label>
           )}
-          <button onClick={() => onSelectTask(task)}>{task.title}</button>
+          <button onClick={(event) => {
+            event.stopPropagation();
+            if (selectable) {
+              onToggleSelect(task.id);
+              return;
+            }
+            onFocusTask(task.id);
+            onSelectTask(task);
+          }}>{task.title}</button>
           <span>{statusLabel(task.status)}</span>
           <span><AgentBadge agent={task.agent} /></span>
           <span className="task-list-badges">{isDiscordTask(task) && <DiscordBadge />}<WorkspaceBadge mode={task.workspaceMode} />{task.allMighty ? <AllMightyBadge /> : 'Standard'}</span>
           <span>{relativeTime(task.updatedAt)}</span>
-          <TaskActions task={task} busy={busy} onAction={onAction} />
+          {!selectable && <TaskActions task={task} busy={busy} onAction={onAction} />}
         </div>
       ))}
     </section>

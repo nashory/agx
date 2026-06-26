@@ -49,9 +49,29 @@ describe('TaskBoardItems', () => {
     const onToggleSelect = vi.fn();
     const onOpen = vi.fn();
     const onFocus = vi.fn();
-    render(<TaskCard task={task} busy={false} focused={false} selected={false} onFocus={onFocus} onOpen={onOpen} onAction={vi.fn()} onToggleSelect={onToggleSelect} />);
+    render(<TaskCard task={task} busy={false} focused={false} selected={false} selectionMode onFocus={onFocus} onOpen={onOpen} onAction={vi.fn()} onToggleSelect={onToggleSelect} />);
 
     await user.click(screen.getByRole('checkbox', { name: 'Select Ship it' }));
+
+    expect(onToggleSelect).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(onFocus).not.toHaveBeenCalled();
+  });
+
+  it('hides selection controls until selection mode is active', () => {
+    render(<TaskCard task={task} busy={false} focused={false} selected={false} onFocus={vi.fn()} onOpen={vi.fn()} onAction={vi.fn()} onToggleSelect={vi.fn()} />);
+
+    expect(screen.queryByRole('checkbox', { name: 'Select Ship it' })).toBeNull();
+  });
+
+  it('uses card clicks for selection while selection mode is active', async () => {
+    const user = userEvent.setup();
+    const onToggleSelect = vi.fn();
+    const onOpen = vi.fn();
+    const onFocus = vi.fn();
+    render(<TaskCard task={task} busy={false} focused={false} selected={false} selectionMode onFocus={onFocus} onOpen={onOpen} onAction={vi.fn()} onToggleSelect={onToggleSelect} />);
+
+    await user.click(screen.getByRole('button', { name: /Ship it/ }));
 
     expect(onToggleSelect).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
@@ -75,7 +95,7 @@ describe('TaskBoardItems', () => {
     const onToggleSelect = vi.fn();
     const onSelectTask = vi.fn();
     const onFocusTask = vi.fn();
-    render(<TaskList tasks={[task]} busy={false} focusedTaskID={null} selectedTaskIDs={new Set()} onFocusTask={onFocusTask} onSelectTask={onSelectTask} onAction={vi.fn()} onToggleSelect={onToggleSelect} />);
+    render(<TaskList tasks={[task]} busy={false} focusedTaskID={null} selectedTaskIDs={new Set()} selectionMode onFocusTask={onFocusTask} onSelectTask={onSelectTask} onAction={vi.fn()} onToggleSelect={onToggleSelect} />);
 
     await user.click(screen.getByRole('checkbox', { name: 'Select Ship it' }));
 
