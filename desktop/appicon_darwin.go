@@ -6,13 +6,16 @@ package main
 #cgo CFLAGS: -x objective-c
 #cgo LDFLAGS: -framework AppKit
 #import <AppKit/AppKit.h>
+#import <dispatch/dispatch.h>
 
 static void agxSetApplicationIcon(void *bytes, long length) {
 	@autoreleasepool {
 		NSData *data = [NSData dataWithBytes:bytes length:(NSUInteger)length];
 		NSImage *image = [[NSImage alloc] initWithData:data];
 		if (image != nil) {
-			[[NSApplication sharedApplication] setApplicationIconImage:image];
+			dispatch_async(dispatch_get_main_queue(), ^{
+				[[NSApplication sharedApplication] setApplicationIconImage:image];
+			});
 		}
 	}
 }

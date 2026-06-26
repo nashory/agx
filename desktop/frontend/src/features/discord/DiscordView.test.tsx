@@ -103,6 +103,16 @@ describe('DiscordView', () => {
     expect(screen.getByText('synced')).not.toBeNull();
   });
 
+  it('shows connected status errors as sync warnings instead of connection failures', () => {
+    renderDiscord({ ...connectedStatus, error: 'context deadline exceeded' });
+
+    expect(screen.getByText('connected')).not.toBeNull();
+    expect(screen.getByText('Connected to AGX Test')).not.toBeNull();
+    expect(screen.queryByText('Connection failed')).toBeNull();
+    expect(screen.getByText('Last sync issue')).not.toBeNull();
+    expect(screen.getByText('context deadline exceeded')).not.toBeNull();
+  });
+
   it('surfaces hard sync API failures through the view error callback', async () => {
     const user = userEvent.setup();
     const error = new Error('sync timeout');

@@ -33,7 +33,9 @@ export function DiscordView({
   const [confirmingReset, setConfirmingReset] = useState(false);
   const busy = busyAction !== null;
   const discordRunningElsewhere = status.error?.includes('discord bridge already running') ?? false;
-  const checkingConnection = statusLoading || (status.enabled && !status.connected && !status.error && !discordRunningElsewhere);
+  const connectionError = !status.connected ? status.error : '';
+  const syncWarning = status.connected ? status.error : '';
+  const checkingConnection = statusLoading || (status.enabled && !status.connected && !connectionError && !discordRunningElsewhere);
   const hasStoredToken = Boolean(status.maskedBotToken);
   const shouldShowDisconnect = status.connected || discordRunningElsewhere;
   const hardSyncRunning = status.sync?.running && status.sync.kind === 'hard';
@@ -41,7 +43,7 @@ export function DiscordView({
   const statusTone = status.connected ? 'active' : checkingConnection || status.enabled || discordRunningElsewhere ? 'waiting' : 'offline';
   const statusDetail = checkingConnection
     ? 'Checking Discord connection...'
-    : status.error || (status.connected ? `Connected${status.guildName ? ` to ${status.guildName}` : ''}` : status.enabled ? 'Enabled but disconnected' : 'Not configured');
+    : connectionError || (status.connected ? `Connected${status.guildName ? ` to ${status.guildName}` : ''}` : status.enabled ? 'Enabled but disconnected' : 'Not configured');
   const canReuseStoredToken = hasStoredToken && status.enabled;
   const missingRequiredToken = token.trim() === '' && !canReuseStoredToken;
   const tokenLocked = hasStoredToken && (checkingConnection || shouldShowDisconnect) && token.trim() === '';
@@ -54,9 +56,9 @@ export function DiscordView({
   }, [status.guildId, status.allowedUserIds]);
 
   useEffect(() => {
-    const detail = checkingConnection ? 'Checking connection' : status.error || (status.connected ? 'Connected' : status.enabled ? 'Disconnected' : 'Disabled');
+    const detail = checkingConnection ? 'Checking connection' : status.connected ? (syncWarning ? `Sync warning: ${syncWarning}` : 'Connected') : connectionError || (status.enabled ? 'Disconnected' : 'Disabled');
     setEvents((value) => [`${timestamp()} ${detail}`, ...value].slice(0, 20));
-  }, [checkingConnection, status.connected, status.enabled, status.error]);
+  }, [checkingConnection, status.connected, status.enabled, connectionError, syncWarning]);
 
   useEffect(() => {
     if (!status.sync?.stage) return;
@@ -184,10 +186,10 @@ export function DiscordView({
       <section className="settings-grid discord-grid">
         <section className="settings-panel discord-connection-panel">
           <h2>Connection</h2>
-          {status.error && (
+          {connectionError && (
             <div className="discord-error">
               <strong>{discordRunningElsewhere ? 'Connection already active' : 'Connection failed'}</strong>
-              <span>{status.error}</span>
+              <span>{connectionError}</span>
             </div>
           )}
           <div className="setting-row">
@@ -265,6 +267,12 @@ export function DiscordView({
               <div>
                 <strong>Hard Sync</strong>
                 <span>{status.sync.stage}{status.sync.error ? `: ${status.sync.error}` : ''}</span>
+              </div>
+            )}
+            {syncWarning && (
+              <div>
+                <strong>Last sync issue</strong>
+                <span>{syncWarning}</span>
               </div>
             )}
             <div>

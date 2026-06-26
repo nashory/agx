@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"log"
+	"time"
 
 	desktopapp "github.com/nashory/agx/internal/desktop"
 	"github.com/wailsapp/wails/v2"
@@ -16,6 +17,12 @@ import (
 
 //go:embed appicon.png
 var appIcon []byte
+
+func applyApplicationIcon() {
+	setApplicationIcon(appIcon)
+	time.AfterFunc(250*time.Millisecond, func() { setApplicationIcon(appIcon) })
+	time.AfterFunc(time.Second, func() { setApplicationIcon(appIcon) })
+}
 
 func main() {
 	app, err := desktopapp.NewApp()
@@ -40,9 +47,12 @@ func main() {
 			app,
 		},
 		OnStartup: func(ctx context.Context) {
-			setApplicationIcon(appIcon)
+			applyApplicationIcon()
 			wailsruntime.WindowSetAlwaysOnTop(ctx, false)
 			app.Startup(ctx)
+		},
+		OnDomReady: func(ctx context.Context) {
+			applyApplicationIcon()
 		},
 		OnShutdown: func(ctx context.Context) {
 			_ = app.Close()
