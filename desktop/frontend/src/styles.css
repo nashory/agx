@@ -2564,13 +2564,15 @@
 
 .discord-message-body.markdown-preview p,
 .discord-message-body.markdown-preview ul,
-.discord-message-body.markdown-preview pre {
+.discord-message-body.markdown-preview pre,
+.discord-message-body.markdown-preview table {
   margin: 0 0 10px;
 }
 
 .discord-message-body.markdown-preview p:last-child,
 .discord-message-body.markdown-preview ul:last-child,
-.discord-message-body.markdown-preview pre:last-child {
+.discord-message-body.markdown-preview pre:last-child,
+.discord-message-body.markdown-preview table:last-child {
   margin-bottom: 0;
 }
 
@@ -2602,6 +2604,10 @@
 
 .discord-message.user .discord-message-body.markdown-preview pre {
   background: color-mix(in srgb, var(--terminal-bg) 88%, var(--accent-bg));
+}
+
+.discord-message-body.markdown-preview table {
+  font-size: 12px;
 }
 
 .file-panel {
@@ -2971,7 +2977,8 @@
 
 .markdown-preview p,
 .markdown-preview ul,
-.markdown-preview pre {
+.markdown-preview pre,
+.markdown-preview table {
   margin: 0 0 14px;
 }
 
@@ -3004,6 +3011,48 @@
   border: 0;
   background: transparent;
   padding: 0;
+}
+
+.markdown-preview table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-spacing: 0;
+  border-collapse: collapse;
+}
+
+.markdown-preview th,
+.markdown-preview td {
+  border: 1px solid var(--border);
+  padding: 7px 10px;
+  vertical-align: top;
+  text-align: left;
+  white-space: normal;
+}
+
+.markdown-preview th {
+  color: var(--text-strong);
+  background: var(--surface-muted);
+  font-weight: 650;
+}
+
+.markdown-preview td {
+  background: var(--surface);
+}
+
+.markdown-preview th.align-left,
+.markdown-preview td.align-left {
+  text-align: left;
+}
+
+.markdown-preview th.align-center,
+.markdown-preview td.align-center {
+  text-align: center;
+}
+
+.markdown-preview th.align-right,
+.markdown-preview td.align-right {
+  text-align: right;
 }
 
 .hljs-keyword,

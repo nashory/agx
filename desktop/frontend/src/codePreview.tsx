@@ -101,6 +101,82 @@ function inlineMarkdown(value: string): string {
   return html;
 }
 
+function splitMarkdownTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  const cells: string[] = [];
+  let current = '';
+  let escaped = false;
+
+  for (const char of trimmed) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === '|') {
+      cells.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
+}
+
+function isMarkdownTableStart(lines: string[], index: number): boolean {
+  const header = lines[index]?.trim() ?? '';
+  const separator = lines[index + 1]?.trim() ?? '';
+  return header.includes('|') && isMarkdownTableSeparator(separator);
+}
+
+function tableAlignClass(separator: string): string {
+  const compact = separator.replace(/\s+/g, '');
+  if (compact.startsWith(':') && compact.endsWith(':')) return ' class="align-center"';
+  if (compact.endsWith(':')) return ' class="align-right"';
+  if (compact.startsWith(':')) return ' class="align-left"';
+  return '';
+}
+
+function renderMarkdownTable(lines: string[], start: number): { html: string; nextIndex: number } {
+  const headers = splitMarkdownTableRow(lines[start]);
+  const separators = splitMarkdownTableRow(lines[start + 1]);
+  const columnCount = Math.max(headers.length, separators.length);
+  const aligns = Array.from({ length: columnCount }, (_, index) => tableAlignClass(separators[index] ?? '---'));
+  const bodyRows: string[][] = [];
+  let nextIndex = start + 2;
+
+  while (nextIndex < lines.length) {
+    const line = lines[nextIndex];
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.includes('|') || trimmed.startsWith('```')) break;
+    bodyRows.push(splitMarkdownTableRow(line));
+    nextIndex += 1;
+  }
+
+  const normalizedCell = (cells: string[], index: number) => inlineMarkdown(cells[index] ?? '');
+  const headerCells = Array.from(
+    { length: columnCount },
+    (_, index) => `<th${aligns[index]}>${normalizedCell(headers, index)}</th>`,
+  ).join('');
+  const body = bodyRows
+    .map((row) => `<tr>${Array.from({ length: columnCount }, (_, index) => `<td${aligns[index]}>${normalizedCell(row, index)}</td>`).join('')}</tr>`)
+    .join('');
+  return {
+    html: `<table><thead><tr>${headerCells}</tr></thead>${body ? `<tbody>${body}</tbody>` : ''}</table>`,
+    nextIndex,
+  };
+}
+
 function cleanHighlightHTML(html: string): string {
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: ['span'],
@@ -146,7 +222,8 @@ export function renderMarkdown(content: string, options: { preserveLineBreaks?: 
     inList = false;
   };
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     const trimmed = line.trim();
     if (trimmed.startsWith('```')) {
       flushParagraph();
@@ -172,6 +249,14 @@ export function renderMarkdown(content: string, options: { preserveLineBreaks?: 
     if (trimmed === '') {
       flushParagraph();
       closeList();
+      continue;
+    }
+    if (isMarkdownTableStart(lines, index)) {
+      flushParagraph();
+      closeList();
+      const table = renderMarkdownTable(lines, index);
+      out.push(table.html);
+      index = table.nextIndex - 1;
       continue;
     }
     const heading = /^(#{1,6})\s+(.+)$/.exec(trimmed);
@@ -202,7 +287,7 @@ export function renderMarkdown(content: string, options: { preserveLineBreaks?: 
     out.push('</code></pre>');
   }
   return DOMPurify.sanitize(out.join('\n'), {
-    ALLOWED_TAGS: ['a', 'br', 'code', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'p', 'pre', 'span', 'strong', 'ul'],
+    ALLOWED_TAGS: ['a', 'br', 'code', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'p', 'pre', 'span', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul'],
     ALLOWED_ATTR: ['class', 'href', 'rel', 'target'],
   });
 }
