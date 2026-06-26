@@ -236,12 +236,17 @@ func remove(project db.Project, worktreePath, branchName *string, force bool) er
 		}
 	}
 	if branchName != nil && *branchName != "" {
+		if !branchExists(project.Path, *branchName) {
+			return firstErr
+		}
 		deleteFlag := "-d"
 		if force {
 			deleteFlag = "-D"
 		}
 		if err := runGit(project.Path, "branch", deleteFlag, "--", *branchName); err != nil && firstErr == nil {
-			firstErr = err
+			if branchExists(project.Path, *branchName) {
+				firstErr = err
+			}
 		}
 	}
 	return firstErr

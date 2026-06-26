@@ -139,6 +139,25 @@ func TestRemoveForceRemovesReadOnlyUntrackedCache(t *testing.T) {
 	}
 }
 
+func TestRemoveForceIgnoresAlreadyDeletedBranch(t *testing.T) {
+	root := initGitRepo(t)
+	project := db.Project{ID: "project", Name: "repo", Path: root}
+	prepared, err := Prepare(project, "12345678-aaaa", config.WorktreeConfig{Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveForce(project, prepared.Path, prepared.Branch); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveForce(project, prepared.Path, prepared.Branch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(prepared.WorkingDir); !os.IsNotExist(err) {
+		t.Fatalf("worktree still exists after force remove: %v", err)
+	}
+}
+
 func TestRemoveRefusesUnmergedBranch(t *testing.T) {
 	root := initGitRepo(t)
 	project := db.Project{ID: "project", Name: "repo", Path: root}
