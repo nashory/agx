@@ -11,6 +11,7 @@ import (
 )
 
 var tinyPNG = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}
+var tinyOgg = []byte{'O', 'g', 'g', 'S', 0, 2, 0, 0, 0, 0, 0, 0}
 
 func TestAttachmentDownloaderStoresSupportedImage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -24,6 +25,26 @@ func TestAttachmentDownloaderStoresSupportedImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if downloaded.ContentType != "image/png" || downloaded.SizeBytes != int64(len(tinyPNG)) || downloaded.SHA256 == "" {
+		t.Fatalf("downloaded = %#v", downloaded)
+	}
+	if _, err := os.Stat(finalPath); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAttachmentDownloaderStoresDiscordVoiceMessage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/ogg")
+		_, _ = w.Write(tinyOgg)
+	}))
+	defer server.Close()
+	downloader := newAttachmentDownloader(server.Client(), map[string]bool{testServerHost(t, server.URL): true}, true, 1024)
+	finalPath := filepath.Join(t.TempDir(), "voice-message.ogg")
+	downloaded, err := downloader.download(context.Background(), server.URL+"/voice-message.ogg", finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if downloaded.ContentType != "audio/ogg" || downloaded.SizeBytes != int64(len(tinyOgg)) || downloaded.SHA256 == "" {
 		t.Fatalf("downloaded = %#v", downloaded)
 	}
 	if _, err := os.Stat(finalPath); err != nil {

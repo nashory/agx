@@ -144,7 +144,7 @@ func (d attachmentDownloader) download(ctx context.Context, sourceURL, finalPath
 			return downloadedAttachment{}, fmt.Errorf("read attachment: %w", readErr)
 		}
 	}
-	contentType := sniffSupportedImage(first.Bytes())
+	contentType := sniffSupportedAttachment(first.Bytes())
 	if contentType == "" {
 		_ = tmp.Close()
 		return downloadedAttachment{}, fmt.Errorf("unsupported attachment content type")
@@ -177,7 +177,7 @@ func (d attachmentDownloader) validateURL(parsed *url.URL) error {
 	return nil
 }
 
-func sniffSupportedImage(data []byte) string {
+func sniffSupportedAttachment(data []byte) string {
 	if len(data) >= 8 && bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
 		return "image/png"
 	}
@@ -189,6 +189,9 @@ func sniffSupportedImage(data []byte) string {
 	}
 	if len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP")) {
 		return "image/webp"
+	}
+	if len(data) >= 4 && bytes.Equal(data[:4], []byte("OggS")) {
+		return "audio/ogg"
 	}
 	return ""
 }
