@@ -24,8 +24,10 @@ const agents: Agent[] = [
 function renderSettings(overrides: Partial<{
   runtimeConfig: RuntimeConfigInfo;
   onDefaultAgentChange: (agentName: string) => Promise<void>;
+  onVoiceSTTChange: (voiceStt: RuntimeConfigInfo['voiceStt']) => Promise<void>;
 }> = {}) {
   const onDefaultAgentChange = overrides.onDefaultAgentChange ?? vi.fn().mockResolvedValue(undefined);
+  const onVoiceSTTChange = overrides.onVoiceSTTChange ?? vi.fn().mockResolvedValue(undefined);
 
   render(
     <SettingsView
@@ -36,9 +38,10 @@ function renderSettings(overrides: Partial<{
       onToggleTheme={vi.fn()}
       onResetDatabase={vi.fn().mockResolvedValue(undefined)}
       runtimeStatus={runtimeStatus}
-      runtimeConfig={overrides.runtimeConfig ?? { defaultAgent: 'codex' }}
+      runtimeConfig={overrides.runtimeConfig ?? { defaultAgent: 'codex', voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' } }}
       agents={agents}
       onDefaultAgentChange={onDefaultAgentChange}
+      onVoiceSTTChange={onVoiceSTTChange}
       onRefreshRuntime={vi.fn().mockResolvedValue(runtimeStatus)}
       onStartRuntime={vi.fn().mockResolvedValue(runtimeStatus)}
       onInstallRuntimeService={vi.fn().mockResolvedValue(runtimeStatus)}
@@ -47,7 +50,7 @@ function renderSettings(overrides: Partial<{
     />,
   );
 
-  return { onDefaultAgentChange };
+  return { onDefaultAgentChange, onVoiceSTTChange };
 }
 
 describe('SettingsView', () => {
@@ -79,8 +82,33 @@ describe('SettingsView', () => {
   });
 
   it('shows an unavailable configured default agent instead of silently replacing it', () => {
-    renderSettings({ runtimeConfig: { defaultAgent: 'opencode' } });
+    renderSettings({ runtimeConfig: { defaultAgent: 'opencode', voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' } } });
 
     expect(screen.getByDisplayValue('OpenCode (not installed)')).not.toBeNull();
+  });
+
+  it('saves optional voice STT settings', async () => {
+    const user = userEvent.setup();
+    const onVoiceSTTChange = vi.fn().mockResolvedValue(undefined);
+    renderSettings({ onVoiceSTTChange });
+
+    const selects = screen.getAllByDisplayValue('Auto') as HTMLSelectElement[];
+    await user.selectOptions(selects[0], 'enabled');
+    await user.type(screen.getByPlaceholderText('ffmpeg'), 'ffmpeg');
+    await user.type(screen.getByPlaceholderText('whisper-cli'), 'whisper-cli');
+    await user.type(screen.getByPlaceholderText('/path/to/ggml-base.bin'), '/models/base.bin');
+    await user.selectOptions(selects[1], 'ko');
+    await user.clear(screen.getByPlaceholderText('60s'));
+    await user.type(screen.getByPlaceholderText('60s'), '90s');
+    await user.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(onVoiceSTTChange).toHaveBeenCalledWith({
+      mode: 'enabled',
+      ffmpegPath: 'ffmpeg',
+      whisperPath: 'whisper-cli',
+      modelPath: '/models/base.bin',
+      language: 'ko',
+      timeout: '90s',
+    }));
   });
 });

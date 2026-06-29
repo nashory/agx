@@ -40,7 +40,7 @@ import { QuickTaskModal } from './features/tasks/QuickTaskModal';
 import { TaskCreateToolbar } from './features/tasks/TaskCreateToolbar';
 import { TaskInterfaceTabs } from './features/tasks/TaskInterfaceTabs';
 import { addUniquePaths, appendPromptPaths, pathsFromDrop } from './pathDrag';
-import type { Agent, DiscordStatusInfo, Project, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskStatus, ViewMode, WorkspaceMode } from './types';
+import type { Agent, DiscordStatusInfo, Project, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskStatus, ViewMode, VoiceSTTConfig, WorkspaceMode } from './types';
 import { EmptyState, ErrorBar, Header, IconButton, Segmented, type ThemeMode } from './ui';
 import {
   agentLabel,
@@ -96,7 +96,10 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [monitorTasks, setMonitorTasks] = useState<MonitorTask[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusInfo>({ running: false, uptimeSeconds: 0, socketPath: '', lockPath: '', recovery: {} });
-  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigInfo>({ defaultAgent: 'codex' });
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigInfo>({
+    defaultAgent: 'codex',
+    voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' },
+  });
   const [globalAgents, setGlobalAgents] = useState<Agent[]>([]);
   const [runtimeChecked, setRuntimeChecked] = useState(false);
   const [discordStatus, setDiscordStatus] = useState<DiscordStatusInfo>({ enabled: false, connected: false, uptimeSeconds: 0, sync: { running: false } });
@@ -301,6 +304,24 @@ export default function App() {
       const message = errorMessage(err);
       setError(message);
       appendLog(`[error] default agent: ${message}`);
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  }, [appendLog]);
+
+  const updateVoiceSTT = useCallback(async (voiceStt: VoiceSTTConfig) => {
+    setBusy(true);
+    setError('');
+    appendLog(`$ set voice stt ${voiceStt.mode}`);
+    try {
+      const cfg = await api.UpdateVoiceSTT(voiceStt.mode, voiceStt.ffmpegPath, voiceStt.whisperPath, voiceStt.modelPath, voiceStt.language, voiceStt.timeout);
+      setRuntimeConfig(cfg);
+      appendLog(`[ok] voice stt ${cfg.voiceStt.mode}`);
+    } catch (err) {
+      const message = errorMessage(err);
+      setError(message);
+      appendLog(`[error] voice stt: ${message}`);
       throw err;
     } finally {
       setBusy(false);
@@ -526,6 +547,7 @@ export default function App() {
         runtimeConfig={runtimeConfig}
         agents={globalAgents}
         onDefaultAgentChange={updateDefaultAgent}
+        onVoiceSTTChange={updateVoiceSTT}
         onRefreshRuntime={loadRuntimeStatus}
         onStartRuntime={() => runRuntimeAction(api.RuntimeStart, 'start runtime')}
         onInstallRuntimeService={() => runRuntimeAction(api.RuntimeInstallService, 'install runtime service')}

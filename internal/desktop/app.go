@@ -236,7 +236,17 @@ type RuntimeStatusInfo struct {
 
 // RuntimeConfigInfo exposes non-secret global runtime configuration to Desktop.
 type RuntimeConfigInfo struct {
-	DefaultAgent string `json:"defaultAgent"`
+	DefaultAgent string             `json:"defaultAgent"`
+	VoiceSTT     VoiceSTTConfigInfo `json:"voiceStt"`
+}
+
+type VoiceSTTConfigInfo struct {
+	Mode        string `json:"mode"`
+	FFmpegPath  string `json:"ffmpegPath"`
+	WhisperPath string `json:"whisperPath"`
+	ModelPath   string `json:"modelPath"`
+	Language    string `json:"language"`
+	Timeout     string `json:"timeout"`
 }
 
 const maxReadFileBytes = 1 << 20
@@ -256,6 +266,7 @@ type runtimeClient interface {
 	Shutdown(context.Context) error
 	Config(context.Context) (agxruntime.RuntimeConfig, error)
 	UpdateDefaultAgent(context.Context, string) (agxruntime.RuntimeConfig, error)
+	UpdateVoiceSTT(context.Context, agxruntime.VoiceSTTConfig) (agxruntime.RuntimeConfig, error)
 	Events(context.Context) (<-chan agxruntime.Event, error)
 	ListAgents(context.Context, string) ([]agxruntime.Agent, error)
 	ListProjects(context.Context) ([]agxruntime.Project, error)
@@ -795,13 +806,16 @@ func (a *App) RuntimeConfig() (RuntimeConfigInfo, error) {
 		if err != nil {
 			return RuntimeConfigInfo{}, err
 		}
-		return RuntimeConfigInfo{DefaultAgent: cfg.DefaultAgent}, nil
+		return runtimeConfigInfoDTO(cfg), nil
 	}
 	cfg, warnings := config.LoadGlobal()
 	if len(warnings) > 0 {
 		return RuntimeConfigInfo{}, warnings[0]
 	}
-	return RuntimeConfigInfo{DefaultAgent: cfg.DefaultAgent}, nil
+	return RuntimeConfigInfo{
+		DefaultAgent: cfg.DefaultAgent,
+		VoiceSTT:     voiceSTTConfigInfoDTO(cfg.Discord.VoiceSTT),
+	}, nil
 }
 
 func (a *App) UpdateDefaultAgent(agentName string) (RuntimeConfigInfo, error) {
@@ -813,7 +827,7 @@ func (a *App) UpdateDefaultAgent(agentName string) (RuntimeConfigInfo, error) {
 			return RuntimeConfigInfo{}, err
 		}
 		a.emitMetadataEvent("")
-		return RuntimeConfigInfo{DefaultAgent: cfg.DefaultAgent}, nil
+		return runtimeConfigInfoDTO(cfg), nil
 	}
 	agentName = strings.TrimSpace(agentName)
 	if agentName == "" {
@@ -826,7 +840,79 @@ func (a *App) UpdateDefaultAgent(agentName string) (RuntimeConfigInfo, error) {
 		return RuntimeConfigInfo{}, err
 	}
 	a.emitMetadataEvent("")
-	return RuntimeConfigInfo{DefaultAgent: agentName}, nil
+	cfg, warnings := config.LoadGlobal()
+	if len(warnings) > 0 {
+		return RuntimeConfigInfo{}, warnings[0]
+	}
+	return RuntimeConfigInfo{
+		DefaultAgent: cfg.DefaultAgent,
+		VoiceSTT:     voiceSTTConfigInfoDTO(cfg.Discord.VoiceSTT),
+	}, nil
+}
+
+func (a *App) UpdateVoiceSTT(mode, ffmpegPath, whisperPath, modelPath, language, timeout string) (RuntimeConfigInfo, error) {
+	voice := agxruntime.VoiceSTTConfig{
+		Mode:        mode,
+		FFmpegPath:  ffmpegPath,
+		WhisperPath: whisperPath,
+		ModelPath:   modelPath,
+		Language:    language,
+		Timeout:     timeout,
+	}
+	if !a.directMode {
+		ctx, cancel := a.runtimeRequestContext(runtimeClientTimeout)
+		defer cancel()
+		cfg, err := a.runtimeClient().UpdateVoiceSTT(ctx, voice)
+		if err != nil {
+			return RuntimeConfigInfo{}, err
+		}
+		a.emitMetadataEvent("")
+		return runtimeConfigInfoDTO(cfg), nil
+	}
+	if err := config.SaveVoiceSTT(config.VoiceSTTConfig{
+		Mode:        mode,
+		FFmpegPath:  ffmpegPath,
+		WhisperPath: whisperPath,
+		ModelPath:   modelPath,
+		Language:    language,
+		Timeout:     timeout,
+	}); err != nil {
+		return RuntimeConfigInfo{}, err
+	}
+	cfg, warnings := config.LoadGlobal()
+	if len(warnings) > 0 {
+		return RuntimeConfigInfo{}, warnings[0]
+	}
+	a.emitMetadataEvent("")
+	return RuntimeConfigInfo{
+		DefaultAgent: cfg.DefaultAgent,
+		VoiceSTT:     voiceSTTConfigInfoDTO(cfg.Discord.VoiceSTT),
+	}, nil
+}
+
+func runtimeConfigInfoDTO(cfg agxruntime.RuntimeConfig) RuntimeConfigInfo {
+	return RuntimeConfigInfo{
+		DefaultAgent: cfg.DefaultAgent,
+		VoiceSTT: VoiceSTTConfigInfo{
+			Mode:        cfg.VoiceSTT.Mode,
+			FFmpegPath:  cfg.VoiceSTT.FFmpegPath,
+			WhisperPath: cfg.VoiceSTT.WhisperPath,
+			ModelPath:   cfg.VoiceSTT.ModelPath,
+			Language:    cfg.VoiceSTT.Language,
+			Timeout:     cfg.VoiceSTT.Timeout,
+		},
+	}
+}
+
+func voiceSTTConfigInfoDTO(cfg config.VoiceSTTConfig) VoiceSTTConfigInfo {
+	return VoiceSTTConfigInfo{
+		Mode:        cfg.Mode,
+		FFmpegPath:  cfg.FFmpegPath,
+		WhisperPath: cfg.WhisperPath,
+		ModelPath:   cfg.ModelPath,
+		Language:    cfg.Language,
+		Timeout:     cfg.Timeout,
+	}
 }
 
 func (a *App) RuntimeStart() (RuntimeStatusInfo, error) {

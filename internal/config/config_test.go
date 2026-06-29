@@ -138,6 +138,65 @@ allowed_user_ids = ["user"]
 	}
 }
 
+func TestSaveVoiceSTTPreservesGlobalConfig(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(`
+default_agent = "custom"
+
+[agents.custom]
+command = "custom-cli"
+
+[discord]
+enabled = true
+bot_token = "token"
+guild_id = "guild"
+allowed_user_ids = ["user"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveVoiceSTT(VoiceSTTConfig{
+		Mode:        "enabled",
+		FFmpegPath:  " /opt/bin/ffmpeg ",
+		WhisperPath: " /opt/bin/whisper-cli ",
+		ModelPath:   " /models/ggml-base.bin ",
+		Language:    " ko ",
+		Timeout:     "90s",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, warnings := LoadGlobal()
+	if len(warnings) > 0 {
+		t.Fatalf("LoadGlobal warnings = %v", warnings)
+	}
+	if cfg.DefaultAgent != "custom" || cfg.Agents["custom"].Command != "custom-cli" {
+		t.Fatalf("global config was not preserved: %#v", cfg)
+	}
+	if !cfg.Discord.Enabled || cfg.Discord.BotToken != "token" || cfg.Discord.GuildID != "guild" {
+		t.Fatalf("Discord = %#v, want preserved connection config", cfg.Discord)
+	}
+	voice := cfg.Discord.VoiceSTT
+	if voice.Mode != VoiceSTTEnabled || voice.FFmpegPath != "/opt/bin/ffmpeg" || voice.WhisperPath != "/opt/bin/whisper-cli" || voice.ModelPath != "/models/ggml-base.bin" || voice.Language != "ko" || voice.Timeout != "90s" {
+		t.Fatalf("VoiceSTT = %#v, want normalized enabled config", voice)
+	}
+}
+
+func TestVoiceSTTDefaultsToAuto(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+
+	cfg, warnings := LoadGlobal()
+	if len(warnings) > 0 {
+		t.Fatalf("LoadGlobal warnings = %v", warnings)
+	}
+	if cfg.Discord.VoiceSTT.Mode != VoiceSTTAuto || cfg.Discord.VoiceSTT.Language != "auto" || cfg.Discord.VoiceSTT.Timeout != "60s" {
+		t.Fatalf("VoiceSTT defaults = %#v, want auto language and timeout", cfg.Discord.VoiceSTT)
+	}
+}
+
 func TestLoadPreservesGlobalWorktreeWhenProjectOmitsWorktree(t *testing.T) {
 	configDir := t.TempDir()
 	projectRoot := t.TempDir()

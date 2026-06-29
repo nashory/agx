@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nashory/agx/internal/config"
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
 	agxruntime "github.com/nashory/agx/internal/runtime"
@@ -123,7 +124,10 @@ func TestRuntimeConfigUsesRuntimeClient(t *testing.T) {
 	app := NewAppWithStore(nil)
 	client := &fakeRuntimeClient{
 		configFunc: func(context.Context) (agxruntime.RuntimeConfig, error) {
-			return agxruntime.RuntimeConfig{DefaultAgent: "gemini"}, nil
+			return agxruntime.RuntimeConfig{
+				DefaultAgent: "gemini",
+				VoiceSTT:     agxruntime.VoiceSTTConfig{Mode: config.VoiceSTTEnabled, Language: "ko", Timeout: "90s"},
+			}, nil
 		},
 	}
 	withFakeRuntimeClient(t, client)
@@ -134,6 +138,9 @@ func TestRuntimeConfigUsesRuntimeClient(t *testing.T) {
 	}
 	if cfg.DefaultAgent != "gemini" {
 		t.Fatalf("DefaultAgent = %q, want gemini", cfg.DefaultAgent)
+	}
+	if cfg.VoiceSTT.Mode != config.VoiceSTTEnabled || cfg.VoiceSTT.Language != "ko" || cfg.VoiceSTT.Timeout != "90s" {
+		t.Fatalf("VoiceSTT = %#v, want runtime config", cfg.VoiceSTT)
 	}
 }
 
@@ -154,6 +161,29 @@ func TestUpdateDefaultAgentUsesRuntimeClient(t *testing.T) {
 	}
 	if gotAgent != "codex" || cfg.DefaultAgent != "codex" {
 		t.Fatalf("UpdateDefaultAgent = (%q, %#v), want codex", gotAgent, cfg)
+	}
+}
+
+func TestUpdateVoiceSTTUsesRuntimeClient(t *testing.T) {
+	app := NewAppWithStore(nil)
+	var got agxruntime.VoiceSTTConfig
+	client := &fakeRuntimeClient{
+		updateVoiceSTTFunc: func(_ context.Context, voice agxruntime.VoiceSTTConfig) (agxruntime.RuntimeConfig, error) {
+			got = voice
+			return agxruntime.RuntimeConfig{DefaultAgent: "codex", VoiceSTT: agxruntime.VoiceSTTConfig{Mode: config.VoiceSTTEnabled, Language: "ko", Timeout: "90s"}}, nil
+		},
+	}
+	withFakeRuntimeClient(t, client)
+
+	cfg, err := app.UpdateVoiceSTT("enabled", "ffmpeg", "whisper-cli", "model.bin", "ko", "90s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode != config.VoiceSTTEnabled || got.FFmpegPath != "ffmpeg" || got.WhisperPath != "whisper-cli" || got.ModelPath != "model.bin" || got.Language != "ko" || got.Timeout != "90s" {
+		t.Fatalf("UpdateVoiceSTT args = %#v, want provided config", got)
+	}
+	if cfg.VoiceSTT.Mode != config.VoiceSTTEnabled || cfg.VoiceSTT.Language != "ko" || cfg.VoiceSTT.Timeout != "90s" {
+		t.Fatalf("UpdateVoiceSTT result = %#v, want runtime config", cfg)
 	}
 }
 
@@ -1138,6 +1168,7 @@ func entryNames(entries []FileEntry) []string {
 type fakeRuntimeClient struct {
 	configFunc                               func(context.Context) (agxruntime.RuntimeConfig, error)
 	updateDefaultAgentFunc                   func(context.Context, string) (agxruntime.RuntimeConfig, error)
+	updateVoiceSTTFunc                       func(context.Context, agxruntime.VoiceSTTConfig) (agxruntime.RuntimeConfig, error)
 	discordStatusFunc                        func(context.Context) (agxdiscord.Status, error)
 	discordConnectFunc                       func(context.Context, string, string, string) (agxdiscord.Status, error)
 	discordTaskSyncFunc                      func(context.Context, string) (agxdiscord.Status, error)
@@ -1169,6 +1200,13 @@ func (f *fakeRuntimeClient) Config(ctx context.Context) (agxruntime.RuntimeConfi
 func (f *fakeRuntimeClient) UpdateDefaultAgent(ctx context.Context, agentName string) (agxruntime.RuntimeConfig, error) {
 	if f.updateDefaultAgentFunc != nil {
 		return f.updateDefaultAgentFunc(ctx, agentName)
+	}
+	return agxruntime.RuntimeConfig{}, nil
+}
+
+func (f *fakeRuntimeClient) UpdateVoiceSTT(ctx context.Context, voice agxruntime.VoiceSTTConfig) (agxruntime.RuntimeConfig, error) {
+	if f.updateVoiceSTTFunc != nil {
+		return f.updateVoiceSTTFunc(ctx, voice)
 	}
 	return agxruntime.RuntimeConfig{}, nil
 }

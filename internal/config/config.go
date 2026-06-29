@@ -11,6 +11,12 @@ import (
 
 const DefaultAgent = "codex"
 
+const (
+	VoiceSTTDisabled = "disabled"
+	VoiceSTTAuto     = "auto"
+	VoiceSTTEnabled  = "enabled"
+)
+
 type Config struct {
 	DefaultAgent string                 `toml:"default_agent"`
 	Agents       map[string]AgentConfig `toml:"agents"`
@@ -43,6 +49,16 @@ type DiscordConfig struct {
 	BotToken       string   `toml:"bot_token"`
 	GuildID        string   `toml:"guild_id"`
 	AllowedUserIDs []string `toml:"allowed_user_ids"`
+	VoiceSTT       VoiceSTTConfig `toml:"voice_stt"`
+}
+
+type VoiceSTTConfig struct {
+	Mode        string `toml:"mode"`
+	FFmpegPath  string `toml:"ffmpeg_path"`
+	WhisperPath string `toml:"whisper_path"`
+	ModelPath   string `toml:"model_path"`
+	Language    string `toml:"language"`
+	Timeout     string `toml:"timeout"`
 }
 
 func Load(projectRoot string) Config {
@@ -64,6 +80,7 @@ func LoadWithWarnings(projectRoot string) (Config, []error) {
 	if cfg.DefaultAgent == "" {
 		cfg.DefaultAgent = DefaultAgent
 	}
+	cfg.Discord.VoiceSTT = normalizeVoiceSTTConfig(cfg.Discord.VoiceSTT)
 	return cfg, warnings
 }
 
@@ -97,6 +114,7 @@ func LoadGlobal() (Config, []error) {
 	if cfg.DefaultAgent == "" {
 		cfg.DefaultAgent = DefaultAgent
 	}
+	cfg.Discord.VoiceSTT = normalizeVoiceSTTConfig(cfg.Discord.VoiceSTT)
 	return cfg, warnings
 }
 
@@ -118,6 +136,15 @@ func SaveDefaultAgent(defaultAgent string) error {
 	return saveGlobalConfig(cfg)
 }
 
+func SaveVoiceSTT(voiceSTT VoiceSTTConfig) error {
+	cfg, warnings := LoadGlobal()
+	if len(warnings) > 0 {
+		return warnings[0]
+	}
+	cfg.Discord.VoiceSTT = normalizeVoiceSTTConfig(voiceSTT)
+	return saveGlobalConfig(cfg)
+}
+
 func saveGlobalConfig(cfg Config) error {
 	if cfg.DefaultAgent == "" {
 		cfg.DefaultAgent = DefaultAgent
@@ -125,6 +152,7 @@ func saveGlobalConfig(cfg Config) error {
 	if cfg.Agents == nil {
 		cfg.Agents = map[string]AgentConfig{}
 	}
+	cfg.Discord.VoiceSTT = normalizeVoiceSTTConfig(cfg.Discord.VoiceSTT)
 	data, err := toml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -140,6 +168,33 @@ func saveGlobalConfig(cfg Config) error {
 		return fmt.Errorf("chmod config %s: %w", path, err)
 	}
 	return nil
+}
+
+func normalizeVoiceSTTConfig(cfg VoiceSTTConfig) VoiceSTTConfig {
+	cfg.Mode = normalizeVoiceSTTMode(cfg.Mode)
+	cfg.FFmpegPath = strings.TrimSpace(cfg.FFmpegPath)
+	cfg.WhisperPath = strings.TrimSpace(cfg.WhisperPath)
+	cfg.ModelPath = strings.TrimSpace(cfg.ModelPath)
+	cfg.Language = strings.TrimSpace(cfg.Language)
+	if cfg.Language == "" {
+		cfg.Language = "auto"
+	}
+	cfg.Timeout = strings.TrimSpace(cfg.Timeout)
+	if cfg.Timeout == "" {
+		cfg.Timeout = "60s"
+	}
+	return cfg
+}
+
+func normalizeVoiceSTTMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case VoiceSTTDisabled:
+		return VoiceSTTDisabled
+	case VoiceSTTEnabled:
+		return VoiceSTTEnabled
+	default:
+		return VoiceSTTAuto
+	}
 }
 
 func globalConfigPath() string {

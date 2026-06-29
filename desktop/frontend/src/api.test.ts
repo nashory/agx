@@ -14,7 +14,10 @@ const discordStatus: DiscordStatusInfo = {
 describe('api bridge', () => {
   it('falls back to safe defaults when Wails is unavailable', async () => {
     await expect(api.ListProjects()).resolves.toHaveLength(1);
-    await expect(api.RuntimeConfig()).resolves.toEqual({ defaultAgent: 'codex' });
+    await expect(api.RuntimeConfig()).resolves.toEqual({
+      defaultAgent: 'codex',
+      voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' },
+    });
     await expect(api.DiscordStatus()).resolves.toEqual({
       enabled: false,
       connected: false,
@@ -27,13 +30,29 @@ describe('api bridge', () => {
   });
 
   it('delegates default agent changes to Wails and preserves returned config', async () => {
-    const returned: RuntimeConfigInfo = { defaultAgent: 'gemini' };
+    const returned: RuntimeConfigInfo = {
+      defaultAgent: 'gemini',
+      voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' },
+    };
     const UpdateDefaultAgent = vi.fn().mockResolvedValue(returned);
     installWailsAppMock({ UpdateDefaultAgent });
 
     await expect(api.UpdateDefaultAgent('gemini')).resolves.toBe(returned);
 
     expect(UpdateDefaultAgent).toHaveBeenCalledWith('gemini');
+  });
+
+  it('delegates voice STT changes to Wails', async () => {
+    const returned: RuntimeConfigInfo = {
+      defaultAgent: 'codex',
+      voiceStt: { mode: 'enabled', ffmpegPath: 'ffmpeg', whisperPath: 'whisper-cli', modelPath: '/models/base.bin', language: 'ko', timeout: '90s' },
+    };
+    const UpdateVoiceSTT = vi.fn().mockResolvedValue(returned);
+    installWailsAppMock({ UpdateVoiceSTT });
+
+    await expect(api.UpdateVoiceSTT('enabled', 'ffmpeg', 'whisper-cli', '/models/base.bin', 'ko', '90s')).resolves.toBe(returned);
+
+    expect(UpdateVoiceSTT).toHaveBeenCalledWith('enabled', 'ffmpeg', 'whisper-cli', '/models/base.bin', 'ko', '90s');
   });
 
   it('trims Discord allowed user ID before calling Wails connect', async () => {

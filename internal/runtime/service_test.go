@@ -199,6 +199,36 @@ func TestServiceConfigDefaultAgentEndpoints(t *testing.T) {
 	}
 }
 
+func TestServiceConfigVoiceSTTEndpoints(t *testing.T) {
+	configDir := shortTempDir(t)
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+	service, _ := newRuntimeAPITestService(t)
+
+	req := patchConfigRequest{VoiceSTT: &VoiceSTTConfig{
+		Mode:        "enabled",
+		FFmpegPath:  " /opt/bin/ffmpeg ",
+		WhisperPath: " /opt/bin/whisper-cli ",
+		ModelPath:   " /models/ggml-base.bin ",
+		Language:    " ko ",
+		Timeout:     "90s",
+	}}
+	var cfg RuntimeConfig
+	if code := runtimeAPIRequest(t, service, http.MethodPatch, "/v1/config", req, &cfg); code != http.StatusOK {
+		t.Fatalf("patch config status = %d, want 200", code)
+	}
+	if cfg.VoiceSTT.Mode != config.VoiceSTTEnabled || cfg.VoiceSTT.FFmpegPath != "/opt/bin/ffmpeg" || cfg.VoiceSTT.WhisperPath != "/opt/bin/whisper-cli" || cfg.VoiceSTT.ModelPath != "/models/ggml-base.bin" || cfg.VoiceSTT.Language != "ko" || cfg.VoiceSTT.Timeout != "90s" {
+		t.Fatalf("VoiceSTT = %#v, want normalized enabled config", cfg.VoiceSTT)
+	}
+
+	saved, warnings := config.LoadGlobal()
+	if len(warnings) > 0 {
+		t.Fatalf("LoadGlobal warnings = %v", warnings)
+	}
+	if saved.Discord.VoiceSTT.Mode != config.VoiceSTTEnabled {
+		t.Fatalf("saved VoiceSTT = %#v, want enabled", saved.Discord.VoiceSTT)
+	}
+}
+
 func TestServiceConfigRejectsUnknownDefaultAgent(t *testing.T) {
 	configDir := shortTempDir(t)
 	t.Setenv("AGX_CONFIG_DIR", configDir)

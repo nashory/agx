@@ -92,6 +92,15 @@ func (c *Client) UpdateDefaultAgent(ctx context.Context, agentName string) (Runt
 	return cfg, nil
 }
 
+func (c *Client) UpdateVoiceSTT(ctx context.Context, voiceSTT VoiceSTTConfig) (RuntimeConfig, error) {
+	var cfg RuntimeConfig
+	req := patchConfigRequest{VoiceSTT: &voiceSTT}
+	if err := c.do(ctx, http.MethodPatch, "/v1/config", req, &cfg); err != nil {
+		return RuntimeConfig{}, err
+	}
+	return cfg, nil
+}
+
 // Events opens the runtime server-sent event stream. The returned channel closes
 // when the stream ends or ctx is canceled.
 func (c *Client) Events(ctx context.Context) (<-chan Event, error) {

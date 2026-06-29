@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   CircleHelp,
+  Mic,
   Play,
   RefreshCw,
   ShieldCheck,
@@ -15,7 +16,7 @@ import {
   defaultPreferences,
   type UserPreferences,
 } from '../../appLogic';
-import type { Agent, RuntimeConfigInfo, RuntimeStatusInfo } from '../../types';
+import type { Agent, RuntimeConfigInfo, RuntimeStatusInfo, VoiceSTTConfig } from '../../types';
 import { Header, type ThemeMode } from '../../ui';
 
 type RuntimeAction = () => Promise<RuntimeStatusInfo>;
@@ -98,6 +99,7 @@ type SettingsViewProps = {
   runtimeConfig: RuntimeConfigInfo;
   agents: Agent[];
   onDefaultAgentChange: (agentName: string) => Promise<void>;
+  onVoiceSTTChange: (voiceStt: VoiceSTTConfig) => Promise<void>;
   onRefreshRuntime: () => Promise<void>;
   onStartRuntime: RuntimeAction;
   onInstallRuntimeService: RuntimeAction;
@@ -116,6 +118,7 @@ export function SettingsView({
   runtimeConfig,
   agents,
   onDefaultAgentChange,
+  onVoiceSTTChange,
   onRefreshRuntime,
   onStartRuntime,
   onInstallRuntimeService,
@@ -124,6 +127,8 @@ export function SettingsView({
 }: SettingsViewProps) {
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [savingDefaultAgent, setSavingDefaultAgent] = useState(false);
+  const [savingVoiceSTT, setSavingVoiceSTT] = useState(false);
+  const [localVoiceSTT, setLocalVoiceSTT] = useState<VoiceSTTConfig>(() => runtimeConfig.voiceStt ?? defaultVoiceSTTConfig());
   const defaultAgentName = runtimeConfig.defaultAgent || 'codex';
   const defaultAgentOptions = agents.some((agent) => agent.name === defaultAgentName)
     ? agents
@@ -133,12 +138,29 @@ export function SettingsView({
     onPreferencesChange({ ...preferences, [key]: value });
   }
 
+  useEffect(() => {
+    setLocalVoiceSTT(runtimeConfig.voiceStt ?? defaultVoiceSTTConfig());
+  }, [runtimeConfig.voiceStt]);
+
+  function updateVoiceSTT<K extends keyof VoiceSTTConfig>(key: K, value: VoiceSTTConfig[K]) {
+    setLocalVoiceSTT((current) => ({ ...current, [key]: value }));
+  }
+
   async function saveDefaultAgent(agentName: string) {
     setSavingDefaultAgent(true);
     try {
       await onDefaultAgentChange(agentName);
     } finally {
       setSavingDefaultAgent(false);
+    }
+  }
+
+  async function saveVoiceSTT() {
+    setSavingVoiceSTT(true);
+    try {
+      await onVoiceSTTChange(localVoiceSTT);
+    } finally {
+      setSavingVoiceSTT(false);
     }
   }
 
@@ -288,6 +310,99 @@ export function SettingsView({
           </div>
         </section>
         <section className="settings-panel">
+          <h2>Voice Transcription</h2>
+          <div className="setting-row">
+            <div>
+              <SettingHeading label="Mode" help="Local Whisper is optional. Auto uses it only when the local ffmpeg, Whisper binary, and model are configured." />
+              <span>{voiceSTTStatus(localVoiceSTT)}</span>
+            </div>
+            <select
+              value={localVoiceSTT.mode}
+              disabled={busy || savingVoiceSTT}
+              onChange={(event) => updateVoiceSTT('mode', voiceSTTMode(event.target.value))}
+            >
+              <option value="disabled">Disabled</option>
+              <option value="auto">Auto</option>
+              <option value="enabled">Enabled</option>
+            </select>
+          </div>
+          <div className="setting-row">
+            <div>
+              <strong>ffmpeg</strong>
+              <span>Command or absolute path used to convert Discord Ogg voice messages.</span>
+            </div>
+            <input
+              type="text"
+              value={localVoiceSTT.ffmpegPath}
+              disabled={busy || savingVoiceSTT}
+              placeholder="ffmpeg"
+              onChange={(event) => updateVoiceSTT('ffmpegPath', event.target.value)}
+            />
+          </div>
+          <div className="setting-row">
+            <div>
+              <strong>Whisper binary</strong>
+              <span>Command or absolute path for local whisper.cpp transcription.</span>
+            </div>
+            <input
+              type="text"
+              value={localVoiceSTT.whisperPath}
+              disabled={busy || savingVoiceSTT}
+              placeholder="whisper-cli"
+              onChange={(event) => updateVoiceSTT('whisperPath', event.target.value)}
+            />
+          </div>
+          <div className="setting-row">
+            <div>
+              <strong>Model path</strong>
+              <span>Local Whisper model file. Leave empty to keep STT unavailable.</span>
+            </div>
+            <input
+              type="text"
+              value={localVoiceSTT.modelPath}
+              disabled={busy || savingVoiceSTT}
+              placeholder="/path/to/ggml-base.bin"
+              onChange={(event) => updateVoiceSTT('modelPath', event.target.value)}
+            />
+          </div>
+          <div className="setting-row">
+            <div>
+              <strong>Language</strong>
+              <span>Use auto unless you want to bias transcription toward a language.</span>
+            </div>
+            <select value={localVoiceSTT.language || 'auto'} disabled={busy || savingVoiceSTT} onChange={(event) => updateVoiceSTT('language', event.target.value)}>
+              <option value="auto">Auto</option>
+              <option value="ko">Korean</option>
+              <option value="en">English</option>
+              <option value="ja">Japanese</option>
+              <option value="zh">Chinese</option>
+            </select>
+          </div>
+          <div className="setting-row">
+            <div>
+              <strong>Timeout</strong>
+              <span>Maximum time to spend on one local voice transcription.</span>
+            </div>
+            <input
+              type="text"
+              value={localVoiceSTT.timeout}
+              disabled={busy || savingVoiceSTT}
+              placeholder="60s"
+              onChange={(event) => updateVoiceSTT('timeout', event.target.value)}
+            />
+          </div>
+          <div className="setting-row">
+            <div>
+              <strong>Local only</strong>
+              <span>Audio is stored locally and never sent to a cloud STT service by AGX.</span>
+            </div>
+            <button className="text-button" disabled={busy || savingVoiceSTT} onClick={() => void saveVoiceSTT()}>
+              <Mic size={15} />
+              Save
+            </button>
+          </div>
+        </section>
+        <section className="settings-panel">
           <h2>Monitor</h2>
           <div className="setting-row">
             <div>
@@ -330,6 +445,31 @@ export function SettingsView({
       ), document.body)}
     </main>
   );
+}
+
+function defaultVoiceSTTConfig(): VoiceSTTConfig {
+  return {
+    mode: 'auto',
+    ffmpegPath: '',
+    whisperPath: '',
+    modelPath: '',
+    language: 'auto',
+    timeout: '60s',
+  };
+}
+
+function voiceSTTMode(value: string): VoiceSTTConfig['mode'] {
+  return value === 'disabled' || value === 'enabled' ? value : 'auto';
+}
+
+function voiceSTTStatus(config: VoiceSTTConfig): string {
+  if (config.mode === 'disabled') return 'Voice messages are saved, but not transcribed.';
+  const missing = [];
+  if (!config.ffmpegPath.trim()) missing.push('ffmpeg');
+  if (!config.whisperPath.trim()) missing.push('Whisper');
+  if (!config.modelPath.trim()) missing.push('model');
+  if (missing.length > 0) return `Local STT ${config.mode}; missing ${missing.join(', ')}.`;
+  return `Local STT ${config.mode}; ready to transcribe voice messages.`;
 }
 
 function runtimeDetail(status: RuntimeStatusInfo): string {

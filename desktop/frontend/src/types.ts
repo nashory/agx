@@ -119,6 +119,16 @@ export type RuntimeStatusInfo = {
 
 export type RuntimeConfigInfo = {
   defaultAgent: string;
+  voiceStt: VoiceSTTConfig;
+};
+
+export type VoiceSTTConfig = {
+  mode: 'disabled' | 'auto' | 'enabled';
+  ffmpegPath: string;
+  whisperPath: string;
+  modelPath: string;
+  language: string;
+  timeout: string;
 };
 
 export type FileEntry = {

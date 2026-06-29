@@ -1,4 +1,4 @@
-import type { Agent, DirectoryEntry, DiscordStatusInfo, FileEntry, Project, ProjectCandidate, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskTranscriptMessage, WorkspaceMode } from './types';
+import type { Agent, DirectoryEntry, DiscordStatusInfo, FileEntry, Project, ProjectCandidate, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskTranscriptMessage, VoiceSTTConfig, WorkspaceMode } from './types';
 
 export type MonitorTask = Task & {
   projectName: string;
@@ -21,6 +21,7 @@ export type WailsApp = {
   RuntimeStatus(): Promise<RuntimeStatusInfo>;
   RuntimeConfig(): Promise<RuntimeConfigInfo>;
   UpdateDefaultAgent(agentName: string): Promise<RuntimeConfigInfo>;
+  UpdateVoiceSTT(mode: string, ffmpegPath: string, whisperPath: string, modelPath: string, language: string, timeout: string): Promise<RuntimeConfigInfo>;
   RuntimeStart(): Promise<RuntimeStatusInfo>;
   RuntimeInstallService(): Promise<RuntimeStatusInfo>;
   RuntimeStop(): Promise<RuntimeStatusInfo>;
@@ -110,6 +111,20 @@ function app(): WailsApp | undefined {
   return window.go?.desktop?.App;
 }
 
+function defaultRuntimeConfig(): RuntimeConfigInfo {
+  return {
+    defaultAgent: 'codex',
+    voiceStt: {
+      mode: 'auto',
+      ffmpegPath: '',
+      whisperPath: '',
+      modelPath: '',
+      language: 'auto',
+      timeout: '60s',
+    },
+  };
+}
+
 const activeLogStreams = new Map<string, number>();
 
 async function startSharedLogStream(taskID: string, lines: number): Promise<void> {
@@ -197,10 +212,14 @@ export const api: WailsApp = {
     };
   },
   async RuntimeConfig() {
-    return app()?.RuntimeConfig() ?? { defaultAgent: 'codex' };
+    return app()?.RuntimeConfig() ?? defaultRuntimeConfig();
   },
   async UpdateDefaultAgent(agentName) {
-    return app()?.UpdateDefaultAgent(agentName) ?? { defaultAgent: agentName || 'codex' };
+    return app()?.UpdateDefaultAgent(agentName) ?? { ...defaultRuntimeConfig(), defaultAgent: agentName || 'codex' };
+  },
+  async UpdateVoiceSTT(mode, ffmpegPath, whisperPath, modelPath, language, timeout) {
+    const voiceStt: VoiceSTTConfig = { mode: mode === 'disabled' || mode === 'enabled' ? mode : 'auto', ffmpegPath, whisperPath, modelPath, language, timeout };
+    return app()?.UpdateVoiceSTT(voiceStt.mode, voiceStt.ffmpegPath, voiceStt.whisperPath, voiceStt.modelPath, voiceStt.language, voiceStt.timeout) ?? { ...defaultRuntimeConfig(), voiceStt };
   },
   async RuntimeStart() {
     const status = await app()?.RuntimeStart();

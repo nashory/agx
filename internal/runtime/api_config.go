@@ -16,7 +16,7 @@ func (s *Service) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, warnings[0])
 		return
 	}
-	writeJSON(w, RuntimeConfig{DefaultAgent: cfg.DefaultAgent})
+	writeJSON(w, runtimeConfigDTO(cfg))
 }
 
 func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
@@ -30,6 +30,7 @@ func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, warnings[0])
 		return
 	}
+	changed := false
 	if req.DefaultAgent != nil {
 		agentName := strings.TrimSpace(*req.DefaultAgent)
 		if agentName == "" {
@@ -44,8 +45,46 @@ func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
-		s.bus.Publish("config.changed", RuntimeConfig{DefaultAgent: cfg.DefaultAgent})
 		logRuntimeOperation("config_update", "default_agent", cfg.DefaultAgent)
+		changed = true
 	}
-	writeJSON(w, RuntimeConfig{DefaultAgent: cfg.DefaultAgent})
+	if req.VoiceSTT != nil {
+		cfg.Discord.VoiceSTT = config.VoiceSTTConfig{
+			Mode:        req.VoiceSTT.Mode,
+			FFmpegPath:  req.VoiceSTT.FFmpegPath,
+			WhisperPath: req.VoiceSTT.WhisperPath,
+			ModelPath:   req.VoiceSTT.ModelPath,
+			Language:    req.VoiceSTT.Language,
+			Timeout:     req.VoiceSTT.Timeout,
+		}
+		if err := config.SaveVoiceSTT(cfg.Discord.VoiceSTT); err != nil {
+			writeError(w, err)
+			return
+		}
+		logRuntimeOperation("config_update", "voice_stt_mode", cfg.Discord.VoiceSTT.Mode)
+		changed = true
+	}
+	cfg, warnings = config.LoadGlobal()
+	if len(warnings) > 0 {
+		writeError(w, warnings[0])
+		return
+	}
+	if changed {
+		s.bus.Publish("config.changed", runtimeConfigDTO(cfg))
+	}
+	writeJSON(w, runtimeConfigDTO(cfg))
+}
+
+func runtimeConfigDTO(cfg config.Config) RuntimeConfig {
+	return RuntimeConfig{
+		DefaultAgent: cfg.DefaultAgent,
+		VoiceSTT: VoiceSTTConfig{
+			Mode:        cfg.Discord.VoiceSTT.Mode,
+			FFmpegPath:  cfg.Discord.VoiceSTT.FFmpegPath,
+			WhisperPath: cfg.Discord.VoiceSTT.WhisperPath,
+			ModelPath:   cfg.Discord.VoiceSTT.ModelPath,
+			Language:    cfg.Discord.VoiceSTT.Language,
+			Timeout:     cfg.Discord.VoiceSTT.Timeout,
+		},
+	}
 }

@@ -82,11 +82,22 @@ type Agent struct {
 }
 
 type RuntimeConfig struct {
-	DefaultAgent string `json:"defaultAgent"`
+	DefaultAgent string         `json:"defaultAgent"`
+	VoiceSTT     VoiceSTTConfig `json:"voiceStt"`
+}
+
+type VoiceSTTConfig struct {
+	Mode        string `json:"mode"`
+	FFmpegPath  string `json:"ffmpegPath"`
+	WhisperPath string `json:"whisperPath"`
+	ModelPath   string `json:"modelPath"`
+	Language    string `json:"language"`
+	Timeout     string `json:"timeout"`
 }
 
 type patchConfigRequest struct {
 	DefaultAgent *string `json:"defaultAgent"`
+	VoiceSTT     *VoiceSTTConfig `json:"voiceStt"`
 }
 
 type createProjectRequest struct {
