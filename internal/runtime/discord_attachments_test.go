@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nashory/agx/internal/config"
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
 )
@@ -62,6 +63,47 @@ func TestPrepareDiscordAttachmentsDownloadsAndPersists(t *testing.T) {
 	}
 	if stored.ID != prepared[0].ID {
 		t.Fatalf("stored ID = %q, want %q", stored.ID, prepared[0].ID)
+	}
+}
+
+func TestTranscribeVoiceAttachmentsUsesConfiguredTranscriber(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+	if err := config.SaveVoiceSTT(config.VoiceSTTConfig{Mode: config.VoiceSTTEnabled}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.voice = fakeVoiceTranscriber{text: "start the main task"}
+	transcripts, warnings := service.transcribeVoiceAttachments(context.Background(), []db.TaskAttachment{{
+		Filename:    "voice-message.ogg",
+		ContentType: "audio/ogg",
+		LocalPath:   filepath.Join(t.TempDir(), "voice-message.ogg"),
+	}})
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none", warnings)
+	}
+	if len(transcripts) != 1 || transcripts[0].Transcript.Text != "start the main task" {
+		t.Fatalf("transcripts = %#v, want fake transcript", transcripts)
+	}
+}
+
+func TestTranscribeVoiceAttachmentsReportsUnavailable(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+	if err := config.SaveVoiceSTT(config.VoiceSTTConfig{Mode: config.VoiceSTTDisabled}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	transcripts, warnings := service.transcribeVoiceAttachments(context.Background(), []db.TaskAttachment{{
+		Filename:    "voice-message.ogg",
+		ContentType: "audio/ogg",
+		LocalPath:   filepath.Join(t.TempDir(), "voice-message.ogg"),
+	}})
+	if len(transcripts) != 0 {
+		t.Fatalf("transcripts = %#v, want none", transcripts)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "local voice transcription is not available") {
+		t.Fatalf("warnings = %#v, want unavailable warning", warnings)
 	}
 }
 
@@ -316,7 +358,7 @@ func TestBuildDiscordAttachmentPromptSupportsAttachmentOnly(t *testing.T) {
 		SizeBytes:   12,
 		LocalPath:   "/tmp/screen.png",
 		SourceURL:   "https://cdn.discordapp.com/attachments/1/2/screen.png?ex=secret#fragment",
-	}})
+	}}, nil, nil)
 	for _, want := range []string{"User sent 1 attachment.", "Attachments:", "saved: /tmp/screen.png", "source: https://cdn.discordapp.com"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt = %q, want %q", prompt, want)
@@ -325,4 +367,34 @@ func TestBuildDiscordAttachmentPromptSupportsAttachmentOnly(t *testing.T) {
 	if strings.Contains(prompt, "secret") || strings.Contains(prompt, "fragment") {
 		t.Fatalf("prompt = %q, want source URL query and fragment stripped", prompt)
 	}
+}
+
+func TestBuildDiscordAttachmentPromptIncludesVoiceTranscript(t *testing.T) {
+	attachment := db.TaskAttachment{
+		Filename:    "voice-message.ogg",
+		ContentType: "audio/ogg",
+		SizeBytes:   12,
+		LocalPath:   "/tmp/voice-message.ogg",
+	}
+	prompt := buildDiscordAttachmentPrompt("", []db.TaskAttachment{attachment}, []voiceAttachmentTranscript{{
+		Attachment: attachment,
+		Transcript: voiceTranscript{Text: "create a task from main"},
+	}}, nil)
+	for _, want := range []string{"Voice transcript:", `"create a task from main"`, "Attachments:", "voice-message.ogg audio/ogg"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt = %q, want %q", prompt, want)
+		}
+	}
+}
+
+type fakeVoiceTranscriber struct {
+	text string
+	err  error
+}
+
+func (f fakeVoiceTranscriber) Transcribe(context.Context, string) (voiceTranscript, error) {
+	if f.err != nil {
+		return voiceTranscript{}, f.err
+	}
+	return voiceTranscript{Text: f.text, Engine: "fake"}, nil
 }

@@ -40,6 +40,7 @@ type Service struct {
 	discord     *agxdiscord.Bridge
 	agents      *agentEventService
 	attachments attachmentDownloader
+	voice       voiceTranscriber
 
 	discordSyncMu      sync.Mutex
 	discordSyncRunning bool

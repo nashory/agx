@@ -47,12 +47,19 @@ func (s *Service) sendDiscordTaskMessage(ctx context.Context, taskID string, mes
 	if err != nil {
 		return agxdiscord.SendTaskMessageResult{}, err
 	}
-	prompt := buildDiscordAttachmentPrompt(message.Text, prepared)
+	voiceTranscripts, voiceWarnings := s.transcribeVoiceAttachments(ctx, prepared)
+	prompt := buildDiscordAttachmentPrompt(message.Text, prepared, voiceTranscripts, voiceWarnings)
 	if strings.TrimSpace(prompt) == "" {
 		if len(skipped) > 0 {
 			return agxdiscord.SendTaskMessageResult{}, fmt.Errorf("all attachments were skipped: %s", strings.Join(skipped, "; "))
 		}
 		return agxdiscord.SendTaskMessageResult{}, fmt.Errorf("message is empty")
+	}
+	if strings.TrimSpace(message.Text) == "" && nonVoiceAttachmentCount(prepared) == 0 && len(voiceTranscripts) == 0 {
+		if len(voiceWarnings) > 0 {
+			return agxdiscord.SendTaskMessageResult{}, fmt.Errorf("AGX received your voice message, but local voice transcription is not available. %s", strings.Join(voiceWarnings, "; "))
+		}
+		return agxdiscord.SendTaskMessageResult{}, fmt.Errorf("AGX received your voice message, but no voice transcript was available. Enable local STT in AGX Desktop settings, or send the message as text")
 	}
 	if isRuntimeStructuredDBTask(task) {
 		s.syncDiscordTaskBestEffort(task.ID)
@@ -73,6 +80,14 @@ func (s *Service) sendDiscordTaskMessage(ctx context.Context, taskID string, mes
 			result.Notice += "\n\n" + skippedNotice
 		} else {
 			result.Notice = skippedNotice
+		}
+	}
+	if len(voiceWarnings) > 0 {
+		voiceNotice := "Message sent, but voice transcription had warnings:\n- " + strings.Join(voiceWarnings, "\n- ")
+		if result.Notice != "" {
+			result.Notice += "\n\n" + voiceNotice
+		} else {
+			result.Notice = voiceNotice
 		}
 	}
 	return result, nil
@@ -217,11 +232,35 @@ func (s *Service) deliverTaskMessage(ctx context.Context, task db.Task, project 
 	return s.managerForProject(project).SendMessage(task, prompt)
 }
 
-func buildDiscordAttachmentPrompt(text string, attachments []db.TaskAttachment) string {
+func buildDiscordAttachmentPrompt(text string, attachments []db.TaskAttachment, voiceTranscripts []voiceAttachmentTranscript, voiceWarnings []string) string {
 	text = strings.TrimSpace(text)
 	var b strings.Builder
 	if text != "" {
 		b.WriteString(text)
+	}
+	if len(voiceTranscripts) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		if len(voiceTranscripts) == 1 {
+			b.WriteString("Voice transcript:")
+			fmt.Fprintf(&b, "\n%q", voiceTranscripts[0].Transcript.Text)
+		} else {
+			b.WriteString("Voice transcripts:")
+			for i, item := range voiceTranscripts {
+				fmt.Fprintf(&b, "\n%d. %s", i+1, item.Attachment.Filename)
+				fmt.Fprintf(&b, "\n   %q", item.Transcript.Text)
+			}
+		}
+	}
+	if len(voiceWarnings) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("Voice transcription warnings:")
+		for _, warning := range voiceWarnings {
+			fmt.Fprintf(&b, "\n- %s", warning)
+		}
 	}
 	if len(attachments) == 0 {
 		return strings.TrimSpace(b.String())
