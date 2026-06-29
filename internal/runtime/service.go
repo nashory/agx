@@ -84,6 +84,7 @@ func NewService(version string) *Service {
 		locks:            map[string]*sync.Mutex{},
 		states:           map[string]runtimeTaskState{},
 		attachments:      defaultAttachmentDownloader(),
+		voice:            defaultVoiceTranscriber(),
 		backgroundCtx:    backgroundCtx,
 		backgroundCancel: backgroundCancel,
 		shutdownCh:       make(chan struct{}),
