@@ -155,15 +155,15 @@ func TestBridgeStartValidationRecordsStatusError(t *testing.T) {
 
 func TestBridgeSoftSyncReturnsInProgress(t *testing.T) {
 	bridge := NewBridge(config.DiscordConfig{})
-	bridge.syncMu.Lock()
-	defer bridge.syncMu.Unlock()
+	bridge.maintSync <- struct{}{}
+	defer func() { <-bridge.maintSync }()
 
 	if err := bridge.SoftSync(context.Background()); !errors.Is(err, ErrSyncInProgress) {
 		t.Fatalf("SoftSync() error = %v, want ErrSyncInProgress", err)
 	}
 }
 
-func TestBridgeSyncTaskChannelReturnsInProgress(t *testing.T) {
+func TestBridgeSyncTaskChannelReturnsInProgressDuringHardSync(t *testing.T) {
 	store, err := db.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -173,8 +173,8 @@ func TestBridgeSyncTaskChannelReturnsInProgress(t *testing.T) {
 	bridge.connected = true
 	bridge.bot = &Bot{}
 	bridge.store = store
-	bridge.syncMu.Lock()
-	defer bridge.syncMu.Unlock()
+	bridge.hardSync.Lock()
+	defer bridge.hardSync.Unlock()
 
 	if err := bridge.SyncTaskChannel(context.Background(), "task-1"); !errors.Is(err, ErrSyncInProgress) {
 		t.Fatalf("SyncTaskChannel() error = %v, want ErrSyncInProgress", err)

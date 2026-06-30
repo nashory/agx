@@ -403,7 +403,11 @@ func (s *Service) emitMetadataEvent(projectID string) {
 
 func (s *Service) discordStatus() agxdiscord.Status {
 	status := s.discord.Status()
-	status.Sync = s.discordSyncStatus()
+	hardSync := s.discordSyncStatus()
+	if status.Sync.Running {
+		return status
+	}
+	status.Sync = hardSync
 	return status
 }
 

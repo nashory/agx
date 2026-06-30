@@ -393,6 +393,40 @@ func TestSyncTaskChannelCreatesOnlyRequestedTaskChannel(t *testing.T) {
 	}
 }
 
+func TestSyncTaskChannelFastSkipsControlAndPermissions(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "active task", nil, "claude", false, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := newFakeSyncClient()
+	if err := NewSyncer(store, client, "guild-1").SyncTaskChannelFast(context.Background(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if client.control != "" {
+		t.Fatalf("control = %q, want no control channel work on fast path", client.control)
+	}
+	if client.permissionControl != "" || len(client.permissionTasks) != 0 {
+		t.Fatalf("permissions = %q %#v, want deferred permission refresh", client.permissionControl, client.permissionTasks)
+	}
+	if client.ensureTextCalls != 1 {
+		t.Fatalf("ensure text calls = %d, want one task channel", client.ensureTextCalls)
+	}
+	if _, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID); err != nil {
+		t.Fatalf("requested task mapping error = %v", err)
+	}
+}
+
 func TestSyncTaskChannelRecordsFailureState(t *testing.T) {
 	store, err := db.OpenMemory()
 	if err != nil {

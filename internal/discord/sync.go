@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nashory/agx/internal/db"
@@ -82,6 +84,18 @@ func NewRebuildSyncer(store *db.Store, client SyncClient, guildID string) *Synce
 // tasks are treated as delete requests so low-latency task updates do not leave
 // orphan channels behind.
 func (s *Syncer) SyncTaskChannel(ctx context.Context, taskID string) error {
+	return s.syncTaskChannel(ctx, taskID, true)
+}
+
+// SyncTaskChannelFast reconciles the one task channel needed for latency
+// sensitive task creation. It intentionally defers command permission refresh.
+func (s *Syncer) SyncTaskChannelFast(ctx context.Context, taskID string) error {
+	return s.syncTaskChannel(ctx, taskID, false)
+}
+
+func (s *Syncer) syncTaskChannel(ctx context.Context, taskID string, refreshPermissions bool) error {
+	started := time.Now()
+	logDiscordSyncStep("discord_task_sync", taskID, "start", started, nil)
 	if s.store == nil {
 		return fmt.Errorf("discord sync store is not configured")
 	}
@@ -91,7 +105,9 @@ func (s *Syncer) SyncTaskChannel(ctx context.Context, taskID string) error {
 	if strings.TrimSpace(s.guild) == "" {
 		return fmt.Errorf("discord guild id is required")
 	}
+	step := time.Now()
 	task, err := s.store.GetTask(taskID)
+	logDiscordSyncStep("discord_task_sync_step", taskID, "load_task", step, err)
 	if err != nil {
 		if errors.Is(err, db.ErrTaskNotFound) {
 			return s.DeleteTaskChannel(ctx, taskID)
@@ -101,35 +117,67 @@ func (s *Syncer) SyncTaskChannel(ctx context.Context, taskID string) error {
 	if !shouldMirrorTask(task) {
 		return s.DeleteTaskChannel(ctx, taskID)
 	}
+	step = time.Now()
 	if _, err := s.store.UpsertDiscordTaskSyncPending(task.ID); err != nil {
 		return err
 	}
+	logDiscordSyncStep("discord_task_sync_step", taskID, "mark_pending", step, nil)
+	step = time.Now()
 	project, err := s.store.GetProject(task.ProjectID)
+	logDiscordSyncStep("discord_task_sync_step", taskID, "load_project", step, err)
 	if err != nil {
 		return s.recordTaskSyncFailure(task.ID, err)
 	}
-	controlChannelID, err := s.client.EnsureControlChannel(ctx, s.guild, controlChannelName)
-	if err != nil {
-		return s.recordTaskSyncFailure(task.ID, err)
+	controlChannelID := ""
+	if refreshPermissions {
+		step = time.Now()
+		controlChannelID, err = s.client.EnsureControlChannel(ctx, s.guild, controlChannelName)
+		logDiscordSyncStep("discord_task_sync_step", taskID, "ensure_control", step, err)
+		if err != nil {
+			return s.recordTaskSyncFailure(task.ID, err)
+		}
+		step = time.Now()
+		if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXControl, db.DiscordControlAGXID, db.DiscordTypeChannel, controlChannelID); err != nil {
+			logDiscordSyncStep("discord_task_sync_step", taskID, "store_control_mapping", step, err)
+			return s.recordTaskSyncFailure(task.ID, err)
+		}
+		logDiscordSyncStep("discord_task_sync_step", taskID, "store_control_mapping", step, nil)
 	}
-	if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXControl, db.DiscordControlAGXID, db.DiscordTypeChannel, controlChannelID); err != nil {
-		return s.recordTaskSyncFailure(task.ID, err)
-	}
+	step = time.Now()
 	categoryID, err := s.ensureProjectCategory(ctx, project)
+	logDiscordSyncStep("discord_task_sync_step", taskID, "ensure_category", step, err)
 	if err != nil {
 		return s.recordTaskSyncFailure(task.ID, err)
 	}
+	step = time.Now()
 	channelID, err := s.ensureTaskChannel(ctx, project, task, categoryID)
+	logDiscordSyncStep("discord_task_sync_step", taskID, "ensure_channel", step, err)
 	if err != nil {
 		return s.recordTaskSyncFailure(task.ID, err)
 	}
+	step = time.Now()
 	if _, err := s.store.MarkDiscordTaskSyncSuccess(task.ID, channelID); err != nil {
+		logDiscordSyncStep("discord_task_sync_step", taskID, "mark_success", step, err)
 		return err
 	}
-	if permissions, ok := s.client.(CommandPermissionClient); ok {
-		_ = permissions.ConfigureCommandPermissions(ctx, s.guild, controlChannelID, s.mappedTaskChannelIDs())
+	logDiscordSyncStep("discord_task_sync_step", taskID, "mark_success", step, nil)
+	if refreshPermissions {
+		if permissions, ok := s.client.(CommandPermissionClient); ok {
+			step = time.Now()
+			_ = permissions.ConfigureCommandPermissions(ctx, s.guild, controlChannelID, s.mappedTaskChannelIDs())
+			logDiscordSyncStep("discord_task_sync_step", taskID, "refresh_permissions", step, nil)
+		}
 	}
+	logDiscordSyncStep("discord_task_sync", taskID, "complete", started, nil)
 	return nil
+}
+
+func logDiscordSyncStep(operation, taskID, step string, started time.Time, err error) {
+	if err != nil {
+		log.Printf("operation=%q task=%q step=%q elapsed_ms=%d error=%q", operation, display.ShortID(taskID), step, time.Since(started).Milliseconds(), err.Error())
+		return
+	}
+	log.Printf("operation=%q task=%q step=%q elapsed_ms=%d", operation, display.ShortID(taskID), step, time.Since(started).Milliseconds())
 }
 
 func (s *Syncer) recordTaskSyncFailure(taskID string, syncErr error) error {

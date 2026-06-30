@@ -34,7 +34,11 @@ type Status struct {
 type Bridge struct {
 	lifecycle sync.Mutex
 	mu        sync.Mutex
-	syncMu    sync.Mutex
+	hardSync  sync.RWMutex
+	taskSync  chan struct{}
+	maintSync chan struct{}
+	syncState sync.Mutex
+	active    map[string]activeSync
 	cfg       config.DiscordConfig
 	bot       *Bot
 	lock      *Lock
@@ -54,10 +58,48 @@ type taskStream struct {
 
 var ErrSyncInProgress = errors.New("discord sync is already running")
 
+type activeSync struct {
+	SyncID      string
+	Kind        string
+	Priority    string
+	TaskID      string
+	CurrentStep string
+	StartedAt   time.Time
+}
+
+type syncInProgressError struct {
+	owners []activeSync
+}
+
+func (e syncInProgressError) Error() string {
+	if len(e.owners) == 0 {
+		return ErrSyncInProgress.Error()
+	}
+	owner := e.owners[0]
+	detail := owner.Kind
+	if owner.TaskID != "" {
+		detail += " " + owner.TaskID
+	}
+	if owner.CurrentStep != "" {
+		detail += " at " + owner.CurrentStep
+	}
+	return ErrSyncInProgress.Error() + ": " + detail
+}
+
+func (e syncInProgressError) Unwrap() error {
+	return ErrSyncInProgress
+}
+
 // NewBridge constructs a disconnected bridge with cfg. Dependencies such as the
 // store and command service can be attached before Start.
 func NewBridge(cfg config.DiscordConfig) *Bridge {
-	return &Bridge{cfg: cfg, streams: map[string]taskStream{}}
+	return &Bridge{
+		cfg:       cfg,
+		taskSync:  make(chan struct{}, 1),
+		maintSync: make(chan struct{}, 1),
+		active:    map[string]activeSync{},
+		streams:   map[string]taskStream{},
+	}
 }
 
 // Configure replaces the bridge config and clears the last error. It does not
@@ -168,11 +210,12 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error
 }
 
 func (b *Bridge) syncActiveTasksAfterStart(store *db.Store, bot *Bot, guildID string) {
-	if !b.syncMu.TryLock() {
+	release, err := b.beginMaintenanceSync(context.Background(), "initial")
+	if err != nil {
 		return
 	}
-	defer b.syncMu.Unlock()
-	err := NewSyncer(store, bot, guildID).SyncActiveTasks(context.Background())
+	defer release()
+	err = NewSyncer(store, bot, guildID).SyncActiveTasks(context.Background())
 	if err != nil {
 		b.setError(err)
 		return
@@ -263,7 +306,27 @@ func (b *Bridge) Status() Status {
 	if bot != nil {
 		status.GuildName = bot.GuildName(cfg.GuildID)
 	}
+	status.Sync = b.activeSyncStatus()
 	return status
+}
+
+func (b *Bridge) activeSyncStatus() SyncStatusSummary {
+	owners := b.activeSyncOwners()
+	if len(owners) == 0 {
+		return SyncStatusSummary{}
+	}
+	owner := owners[0]
+	startedAt := owner.StartedAt
+	return SyncStatusSummary{
+		Running:     true,
+		Kind:        owner.Kind,
+		SyncID:      owner.SyncID,
+		Priority:    owner.Priority,
+		TaskID:      owner.TaskID,
+		CurrentStep: owner.CurrentStep,
+		StartedAt:   &startedAt,
+		ElapsedMs:   time.Since(owner.StartedAt).Milliseconds(),
+	}
 }
 
 func maskedSecretPrefix(value string) string {
@@ -277,14 +340,98 @@ func maskedSecretPrefix(value string) string {
 	return value[:4] + "..."
 }
 
+func (b *Bridge) beginTaskSync(ctx context.Context, taskID string) (func(), error) {
+	return b.beginLaneSync(ctx, b.taskSync, activeSync{
+		SyncID:   db.NewTaskID(),
+		Kind:     "task",
+		Priority: "high",
+		TaskID:   strings.TrimSpace(taskID),
+	}, true)
+}
+
+func (b *Bridge) beginMaintenanceSync(ctx context.Context, kind string) (func(), error) {
+	return b.beginLaneSync(ctx, b.maintSync, activeSync{
+		SyncID:   db.NewTaskID(),
+		Kind:     strings.TrimSpace(kind),
+		Priority: "low",
+	}, false)
+}
+
+func (b *Bridge) beginLaneSync(ctx context.Context, lane chan struct{}, owner activeSync, wait bool) (func(), error) {
+	if wait {
+		select {
+		case lane <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	} else {
+		select {
+		case lane <- struct{}{}:
+		default:
+			return nil, syncInProgressError{owners: b.activeSyncOwners()}
+		}
+	}
+	if !b.hardSync.TryRLock() {
+		<-lane
+		return nil, syncInProgressError{owners: b.activeSyncOwners()}
+	}
+	owner.StartedAt = time.Now()
+	b.setActiveSync(owner)
+	return func() {
+		b.clearActiveSync(owner.SyncID)
+		<-lane
+		b.hardSync.RUnlock()
+	}, nil
+}
+
+func (b *Bridge) beginHardSync(kind string) (func(), error) {
+	if !b.hardSync.TryLock() {
+		return nil, syncInProgressError{owners: b.activeSyncOwners()}
+	}
+	owner := activeSync{
+		SyncID:    db.NewTaskID(),
+		Kind:      strings.TrimSpace(kind),
+		Priority:  "exclusive",
+		StartedAt: time.Now(),
+	}
+	b.setActiveSync(owner)
+	return func() {
+		b.clearActiveSync(owner.SyncID)
+		b.hardSync.Unlock()
+	}, nil
+}
+
+func (b *Bridge) setActiveSync(owner activeSync) {
+	b.syncState.Lock()
+	defer b.syncState.Unlock()
+	b.active[owner.SyncID] = owner
+}
+
+func (b *Bridge) clearActiveSync(syncID string) {
+	b.syncState.Lock()
+	defer b.syncState.Unlock()
+	delete(b.active, syncID)
+}
+
+func (b *Bridge) activeSyncOwners() []activeSync {
+	b.syncState.Lock()
+	defer b.syncState.Unlock()
+	owners := make([]activeSync, 0, len(b.active))
+	for _, owner := range b.active {
+		owners = append(owners, owner)
+	}
+	return owners
+}
+
 // SoftSync reconciles current AGX task/project state into Discord and removes
 // orphaned mapped task channels. It preserves expected channels and avoids the
 // full destructive rebuild performed by HardSync.
 func (b *Bridge) SoftSync(ctx context.Context) error {
-	if !b.syncMu.TryLock() {
-		return ErrSyncInProgress
+	release, err := b.beginMaintenanceSync(ctx, "soft")
+	if err != nil {
+		return err
 	}
-	defer b.syncMu.Unlock()
+	defer release()
 
 	b.mu.Lock()
 	cfg := b.cfg
@@ -324,11 +471,12 @@ func (b *Bridge) SyncTaskChannel(ctx context.Context, taskID string) error {
 	if !connected || bot == nil || store == nil {
 		return nil
 	}
-	if !b.syncMu.TryLock() {
-		return ErrSyncInProgress
+	release, err := b.beginTaskSync(ctx, taskID)
+	if err != nil {
+		return err
 	}
-	defer b.syncMu.Unlock()
-	if err := NewSyncer(store, bot, cfg.GuildID).SyncTaskChannel(ctx, taskID); err != nil {
+	defer release()
+	if err := NewSyncer(store, bot, cfg.GuildID).SyncTaskChannelFast(ctx, taskID); err != nil {
 		b.setError(err)
 		return err
 	}
@@ -363,8 +511,11 @@ func (b *Bridge) DeleteTaskChannelWithFallback(ctx context.Context, taskID, fall
 	if !connected || bot == nil || store == nil {
 		return nil
 	}
-	b.syncMu.Lock()
-	defer b.syncMu.Unlock()
+	release, err := b.beginTaskSync(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := NewSyncer(store, bot, cfg.GuildID).DeleteTaskChannelWithFallback(ctx, taskID, fallbackChannelID); err != nil {
 		b.setError(err)
 		return err
@@ -382,8 +533,11 @@ func (b *Bridge) HardSync(ctx context.Context) error {
 // rebuilds categories/channels, and optionally preserves a known control
 // channel. Use this when Discord state is suspected to be inconsistent.
 func (b *Bridge) HardSyncPreserving(ctx context.Context, preserveControlChannelID string) error {
-	b.syncMu.Lock()
-	defer b.syncMu.Unlock()
+	release, err := b.beginHardSync("hard")
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	b.mu.Lock()
 	cfg := b.cfg

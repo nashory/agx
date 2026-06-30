@@ -56,6 +56,11 @@ type SyncStatusSummary struct {
 	Running     bool       `json:"running"`
 	Kind        string     `json:"kind,omitempty"`
 	Stage       string     `json:"stage,omitempty"`
+	SyncID      string     `json:"syncId,omitempty"`
+	Priority    string     `json:"priority,omitempty"`
+	TaskID      string     `json:"taskId,omitempty"`
+	CurrentStep string     `json:"currentStep,omitempty"`
+	ElapsedMs   int64      `json:"elapsedMs,omitempty"`
 	StartedAt   *time.Time `json:"startedAt,omitempty"`
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 	Error       string     `json:"error,omitempty"`
