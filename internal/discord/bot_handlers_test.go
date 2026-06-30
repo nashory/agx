@@ -132,6 +132,37 @@ func TestBotPlainMessageHandlerIgnoresDuplicateDiscordMessageID(t *testing.T) {
 	}
 }
 
+func TestBotPlainMessageHandlerSendsTaskNoticeAsChannelMessage(t *testing.T) {
+	bot := &Bot{}
+	session := &recordingBotSession{}
+	service := &fakeCommandService{
+		channel:    map[string]string{"channel-1": "task-1"},
+		sendResult: SendTaskMessageResult{Notice: "Voice transcribed:\n> hello"},
+	}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user-1"}}, service)
+
+	bot.handlePlainMessage(session, router, &discordgo.MessageCreate{Message: &discordgo.Message{
+		ID:        "message-1",
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Attachments: []*discordgo.MessageAttachment{{
+			ID:          "attachment-1",
+			Filename:    "voice-message.ogg",
+			ContentType: "audio/ogg",
+			Size:        123,
+			URL:         "https://cdn.example/voice-message.ogg",
+		}},
+		Author: &discordgo.User{ID: "user-1"},
+	}})
+
+	if len(session.sent) != 1 {
+		t.Fatalf("sent messages = %#v, want one transcript notice", session.sent)
+	}
+	if session.sent[0].content != "Voice transcribed:\n> hello" {
+		t.Fatalf("notice content = %q, want transcript notice", session.sent[0].content)
+	}
+}
+
 func TestBotComponentHandlerDisablesSelectedChoiceAndSendsChoice(t *testing.T) {
 	bot := &Bot{session: &discordgo.Session{}}
 	session := &recordingBotSession{}
