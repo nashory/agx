@@ -76,19 +76,14 @@ func (s *Service) sendDiscordTaskMessage(ctx context.Context, taskID string, mes
 	}
 	if len(skipped) > 0 {
 		skippedNotice := "Message sent, but skipped attachments:\n- " + strings.Join(skipped, "\n- ")
-		if result.Notice != "" {
-			result.Notice += "\n\n" + skippedNotice
-		} else {
-			result.Notice = skippedNotice
-		}
+		result.Notice = appendDiscordNotice(result.Notice, skippedNotice)
+	}
+	if len(voiceTranscripts) > 0 {
+		result.Notice = appendDiscordNotice(result.Notice, buildVoiceTranscriptNotice(voiceTranscripts))
 	}
 	if len(voiceWarnings) > 0 {
 		voiceNotice := "Message sent, but voice transcription had warnings:\n- " + strings.Join(voiceWarnings, "\n- ")
-		if result.Notice != "" {
-			result.Notice += "\n\n" + voiceNotice
-		} else {
-			result.Notice = voiceNotice
-		}
+		result.Notice = appendDiscordNotice(result.Notice, voiceNotice)
 	}
 	return result, nil
 }
@@ -117,6 +112,50 @@ func (s *Service) recordDeliveredDiscordTaskMessage(taskID, prompt string, disco
 		}
 	}
 	return agxdiscord.SendTaskMessageResult{}
+}
+
+func appendDiscordNotice(existing, next string) string {
+	existing = strings.TrimSpace(existing)
+	next = strings.TrimSpace(next)
+	if existing == "" {
+		return next
+	}
+	if next == "" {
+		return existing
+	}
+	return existing + "\n\n" + next
+}
+
+func buildVoiceTranscriptNotice(transcripts []voiceAttachmentTranscript) string {
+	if len(transcripts) == 0 {
+		return ""
+	}
+	if len(transcripts) == 1 {
+		return "Voice transcribed:\n" + quoteDiscordTranscript(transcripts[0].Transcript.Text)
+	}
+	var b strings.Builder
+	b.WriteString("Voice transcribed:")
+	for i, item := range transcripts {
+		fmt.Fprintf(&b, "\n%d. %s\n%s", i+1, item.Attachment.Filename, quoteDiscordTranscript(item.Transcript.Text))
+	}
+	return b.String()
+}
+
+func quoteDiscordTranscript(text string) string {
+	text = strings.TrimSpace(text)
+	const maxTranscriptNoticeRunes = 900
+	runes := []rune(text)
+	if len(runes) > maxTranscriptNoticeRunes {
+		text = string(runes[:maxTranscriptNoticeRunes]) + "..."
+	}
+	if text == "" {
+		return "> (empty transcript)"
+	}
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = "> " + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (s *Service) prepareDiscordAttachments(ctx context.Context, task db.Task, message agxdiscord.IncomingTaskMessage) ([]db.TaskAttachment, []string, error) {

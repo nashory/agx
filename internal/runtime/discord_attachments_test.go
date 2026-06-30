@@ -387,6 +387,26 @@ func TestBuildDiscordAttachmentPromptIncludesVoiceTranscript(t *testing.T) {
 	}
 }
 
+func TestBuildVoiceTranscriptNotice(t *testing.T) {
+	notice := buildVoiceTranscriptNotice([]voiceAttachmentTranscript{{
+		Attachment: db.TaskAttachment{Filename: "voice-message.ogg"},
+		Transcript: voiceTranscript{Text: "create a task\nfrom main"},
+	}})
+	if !strings.Contains(notice, "Voice transcribed:") || !strings.Contains(notice, "> create a task") || !strings.Contains(notice, "> from main") {
+		t.Fatalf("notice = %q, want quoted transcript", notice)
+	}
+}
+
+func TestBuildVoiceTranscriptNoticeTruncatesLongText(t *testing.T) {
+	notice := buildVoiceTranscriptNotice([]voiceAttachmentTranscript{{
+		Attachment: db.TaskAttachment{Filename: "voice-message.ogg"},
+		Transcript: voiceTranscript{Text: strings.Repeat("가", 950)},
+	}})
+	if len([]rune(notice)) > 930 || !strings.Contains(notice, "...") {
+		t.Fatalf("notice length = %d, notice = %q; want truncated notice", len([]rune(notice)), notice)
+	}
+}
+
 type fakeVoiceTranscriber struct {
 	text string
 	err  error
