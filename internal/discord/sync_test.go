@@ -25,6 +25,7 @@ type fakeSyncClient struct {
 	permissionControl   string
 	permissionTasks     []string
 	ensureTextErr       error
+	invalidCategoryIDs  map[string]error
 	deleteErrs          map[string]error
 }
 
@@ -73,6 +74,11 @@ func (f *fakeSyncClient) CreateTextChannel(ctx context.Context, guildID, categor
 }
 
 func (f *fakeSyncClient) createTextChannel(categoryID, name, topic, prefix string) (string, error) {
+	if f.invalidCategoryIDs != nil {
+		if err := f.invalidCategoryIDs[categoryID]; err != nil {
+			return "", err
+		}
+	}
 	key := categoryID + "/" + name
 	if id := f.text[key]; id != "" {
 		f.topics[id] = topic
@@ -424,6 +430,46 @@ func TestSyncTaskChannelFastSkipsControlAndPermissions(t *testing.T) {
 	}
 	if _, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID); err != nil {
 		t.Fatalf("requested task mapping error = %v", err)
+	}
+}
+
+func TestSyncTaskChannelFastReusesProjectMappingAndRepairsStaleCategory(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "active task", nil, "claude", false, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertDiscordMapping(db.DiscordAGXProject, project.ID, db.DiscordTypeCategory, "stale-category"); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newFakeSyncClient()
+	client.invalidCategoryIDs = map[string]error{"stale-category": errors.New("unknown parent")}
+	if err := NewSyncer(store, client, "guild-1").SyncTaskChannelFast(context.Background(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := store.GetDiscordMapping(db.DiscordAGXProject, project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mapping.DiscordID == "stale-category" {
+		t.Fatalf("project category mapping = %q, want repaired category", mapping.DiscordID)
+	}
+	taskMapping, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.names[taskMapping.DiscordID] != TaskChannelName(task) {
+		t.Fatalf("task channel name = %q, want %q", client.names[taskMapping.DiscordID], TaskChannelName(task))
 	}
 }
 

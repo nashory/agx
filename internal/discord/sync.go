@@ -144,7 +144,7 @@ func (s *Syncer) syncTaskChannel(ctx context.Context, taskID string, refreshPerm
 		logDiscordSyncStep("discord_task_sync_step", taskID, "store_control_mapping", step, nil)
 	}
 	step = time.Now()
-	categoryID, err := s.ensureProjectCategory(ctx, project)
+	categoryID, trustedCategory, err := s.ensureProjectCategoryForTaskSync(ctx, project, refreshPermissions)
 	logDiscordSyncStep("discord_task_sync_step", taskID, "ensure_category", step, err)
 	if err != nil {
 		return s.recordTaskSyncFailure(task.ID, err)
@@ -152,6 +152,16 @@ func (s *Syncer) syncTaskChannel(ctx context.Context, taskID string, refreshPerm
 	step = time.Now()
 	channelID, err := s.ensureTaskChannel(ctx, project, task, categoryID)
 	logDiscordSyncStep("discord_task_sync_step", taskID, "ensure_channel", step, err)
+	if err != nil && !trustedCategory {
+		step = time.Now()
+		categoryID, err = s.ensureProjectCategory(ctx, project)
+		logDiscordSyncStep("discord_task_sync_step", taskID, "repair_category", step, err)
+		if err == nil {
+			step = time.Now()
+			channelID, err = s.ensureTaskChannel(ctx, project, task, categoryID)
+			logDiscordSyncStep("discord_task_sync_step", taskID, "ensure_channel_after_category_repair", step, err)
+		}
+	}
 	if err != nil {
 		return s.recordTaskSyncFailure(task.ID, err)
 	}
@@ -170,6 +180,16 @@ func (s *Syncer) syncTaskChannel(ctx context.Context, taskID string, refreshPerm
 	}
 	logDiscordSyncStep("discord_task_sync", taskID, "complete", started, nil)
 	return nil
+}
+
+func (s *Syncer) ensureProjectCategoryForTaskSync(ctx context.Context, project db.Project, refreshPermissions bool) (string, bool, error) {
+	if !refreshPermissions {
+		if mapping, err := s.store.GetDiscordMapping(db.DiscordAGXProject, project.ID); err == nil && strings.TrimSpace(mapping.DiscordID) != "" {
+			return mapping.DiscordID, false, nil
+		}
+	}
+	categoryID, err := s.ensureProjectCategory(ctx, project)
+	return categoryID, true, err
 }
 
 func logDiscordSyncStep(operation, taskID, step string, started time.Time, err error) {
