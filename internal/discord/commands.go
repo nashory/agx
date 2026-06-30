@@ -100,6 +100,7 @@ type CommandInput struct {
 type CommandResponse struct {
 	Content   string
 	Ephemeral bool
+	React     bool
 }
 
 func CommandInputFromInteraction(i *discordgo.InteractionCreate) CommandInput {
@@ -403,13 +404,13 @@ func (r *CommandRouter) handlePlainTaskMessage(ctx context.Context, taskID strin
 		return CommandResponse{}, err
 	}
 	if strings.TrimSpace(result.Notice) != "" {
-		return CommandResponse{Content: result.Notice}, nil
+		return CommandResponse{Content: result.Notice, React: true}, nil
 	}
 	task, err := r.service.GetTask(ctx, taskID)
 	if err == nil && !isStructuredStreamTask(task) {
-		return CommandResponse{Content: fmt.Sprintf("Message sent to %s. Open AGX Desktop to follow progress for this task.", displayAgentName(task.Agent))}, nil
+		return CommandResponse{Content: fmt.Sprintf("Message sent to %s. Open AGX Desktop to follow progress for this task.", displayAgentName(task.Agent)), React: true}, nil
 	}
-	return CommandResponse{}, nil
+	return CommandResponse{React: true}, nil
 }
 
 func taskNotLiveMessage(err TaskNotLiveError) string {

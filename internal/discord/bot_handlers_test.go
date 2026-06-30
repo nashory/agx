@@ -161,6 +161,9 @@ func TestBotPlainMessageHandlerSendsTaskNoticeAsChannelMessage(t *testing.T) {
 	if session.sent[0].content != "Voice transcribed:\n> hello" {
 		t.Fatalf("notice content = %q, want transcript notice", session.sent[0].content)
 	}
+	if len(session.reactions) != 1 || session.reactions[0].messageID != "message-1" || session.reactions[0].emoji != "🚀" {
+		t.Fatalf("reactions = %#v, want rocket on original voice message", session.reactions)
+	}
 }
 
 func TestBotComponentHandlerDisablesSelectedChoiceAndSendsChoice(t *testing.T) {

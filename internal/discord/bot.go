@@ -974,11 +974,13 @@ func (b *Bot) handlePlainMessage(session plainMessageHandlerSession, router *Com
 		_ = b.sendMessageWithSession(ctx, session, m.ChannelID, "AGX message failed: "+err.Error())
 		return
 	}
+	if response.React {
+		_ = session.MessageReactionAdd(m.ChannelID, m.ID, "🚀")
+	}
 	if strings.TrimSpace(response.Content) != "" {
 		_ = b.sendMessageWithSession(ctx, session, m.ChannelID, response.Content)
 		return
 	}
-	_ = session.MessageReactionAdd(m.ChannelID, m.ID, "🚀")
 }
 
 func (b *Bot) rememberIncomingMessage(messageID string) bool {
