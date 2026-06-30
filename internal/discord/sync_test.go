@@ -427,6 +427,46 @@ func TestSyncTaskChannelFastSkipsControlAndPermissions(t *testing.T) {
 	}
 }
 
+func TestRefreshCommandPermissionsUsesMappedTaskChannels(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "first", nil, "claude", false, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "second", nil, "claude", false, db.TaskInterfaceDiscord, db.StatusWaiting, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertDiscordMapping(db.DiscordAGXTask, first.ID, db.DiscordTypeChannel, "channel-first"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertDiscordMapping(db.DiscordAGXTask, second.ID, db.DiscordTypeChannel, "channel-second"); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newFakeSyncClient()
+	if err := NewSyncer(store, client, "guild-1").RefreshCommandPermissions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if client.permissionControl != "control-1" {
+		t.Fatalf("permission control = %q, want control-1", client.permissionControl)
+	}
+	for _, channelID := range []string{"channel-first", "channel-second"} {
+		if !containsString(client.permissionTasks, channelID) {
+			t.Fatalf("permission task channels = %#v, missing %s", client.permissionTasks, channelID)
+		}
+	}
+}
+
 func TestSyncTaskChannelRecordsFailureState(t *testing.T) {
 	store, err := db.OpenMemory()
 	if err != nil {

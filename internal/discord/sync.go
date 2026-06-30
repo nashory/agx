@@ -264,6 +264,34 @@ func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) e
 	return nil
 }
 
+// RefreshCommandPermissions updates slash-command visibility for the current
+// control channel and mapped task channels. It is intentionally separate from
+// fast task-channel sync so channel creation is not delayed by permission REST
+// calls.
+func (s *Syncer) RefreshCommandPermissions(ctx context.Context) error {
+	permissions, ok := s.client.(CommandPermissionClient)
+	if !ok {
+		return nil
+	}
+	if s.store == nil {
+		return fmt.Errorf("discord sync store is not configured")
+	}
+	if s.client == nil {
+		return fmt.Errorf("discord sync client is not configured")
+	}
+	if strings.TrimSpace(s.guild) == "" {
+		return fmt.Errorf("discord guild id is required")
+	}
+	controlChannelID, err := s.client.EnsureControlChannel(ctx, s.guild, controlChannelName)
+	if err != nil {
+		return err
+	}
+	if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXControl, db.DiscordControlAGXID, db.DiscordTypeChannel, controlChannelID); err != nil {
+		return err
+	}
+	return permissions.ConfigureCommandPermissions(ctx, s.guild, controlChannelID, s.mappedTaskChannelIDs())
+}
+
 func (s *Syncer) ensureProjectCategory(ctx context.Context, project db.Project) (string, error) {
 	name := FormatCategoryName(project.Name)
 	categoryID, err := s.createOrEnsureCategory(ctx, name)

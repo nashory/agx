@@ -39,6 +39,9 @@ type Bridge struct {
 	maintSync chan struct{}
 	syncState sync.Mutex
 	active    map[string]activeSync
+	permMu    sync.Mutex
+	permRun   bool
+	permNext  bool
 	cfg       config.DiscordConfig
 	bot       *Bot
 	lock      *Lock
@@ -423,6 +426,72 @@ func (b *Bridge) activeSyncOwners() []activeSync {
 	return owners
 }
 
+func (b *Bridge) queuePermissionRefresh() {
+	b.permMu.Lock()
+	if b.permRun {
+		b.permNext = true
+		b.permMu.Unlock()
+		return
+	}
+	b.permRun = true
+	b.permMu.Unlock()
+
+	go b.permissionRefreshLoop()
+}
+
+func (b *Bridge) permissionRefreshLoop() {
+	for {
+		b.refreshCommandPermissionsBestEffort()
+
+		b.permMu.Lock()
+		if !b.permNext {
+			b.permRun = false
+			b.permMu.Unlock()
+			return
+		}
+		b.permNext = false
+		b.permMu.Unlock()
+	}
+}
+
+func (b *Bridge) refreshCommandPermissionsBestEffort() {
+	const attempts = 3
+	for attempt := 0; attempt < attempts; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := b.refreshCommandPermissions(ctx)
+		cancel()
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, ErrSyncInProgress) {
+			b.setError(err)
+			return
+		}
+		time.Sleep(time.Duration(attempt+1) * time.Second)
+	}
+}
+
+func (b *Bridge) refreshCommandPermissions(ctx context.Context) error {
+	b.mu.Lock()
+	cfg := b.cfg
+	bot := b.bot
+	store := b.store
+	connected := b.connected
+	b.mu.Unlock()
+	if !connected || bot == nil || store == nil {
+		return nil
+	}
+	release, err := b.beginMaintenanceSync(ctx, "permissions")
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := NewSyncer(store, bot, cfg.GuildID).RefreshCommandPermissions(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
 // SoftSync reconciles current AGX task/project state into Discord and removes
 // orphaned mapped task channels. It preserves expected channels and avoids the
 // full destructive rebuild performed by HardSync.
@@ -482,6 +551,7 @@ func (b *Bridge) SyncTaskChannel(ctx context.Context, taskID string) error {
 	}
 	b.setError(nil)
 	b.syncTaskStreams(ctx)
+	b.queuePermissionRefresh()
 	return nil
 }
 
@@ -521,6 +591,7 @@ func (b *Bridge) DeleteTaskChannelWithFallback(ctx context.Context, taskID, fall
 		return err
 	}
 	b.setError(nil)
+	b.queuePermissionRefresh()
 	return nil
 }
 
