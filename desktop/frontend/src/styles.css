@@ -264,7 +264,7 @@
 .monitor-summary {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(5, minmax(130px, 1fr));
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
   gap: 12px;
   padding: 18px 22px 0;
 }
@@ -341,11 +341,16 @@
     minmax(110px, 0.7fr)
     minmax(116px, 0.75fr)
     minmax(82px, 0.55fr)
-    minmax(64px, max-content);
+    minmax(100px, 0.65fr)
+    minmax(112px, max-content);
   align-items: center;
   gap: 12px;
   border-bottom: 1px solid var(--border);
   padding: 10px 12px;
+}
+
+.monitor-row-stale {
+  background: color-mix(in srgb, var(--danger-bg) 34%, transparent);
 }
 
 .monitor-row:last-child {
@@ -395,6 +400,21 @@
   gap: 4px;
   justify-items: start;
   overflow: visible;
+}
+
+.monitor-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  overflow: visible;
+}
+
+.monitor-actions .compact,
+.monitor-clear-stale {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .settings-grid,
@@ -2259,6 +2279,11 @@
   background: #1d314d;
 }
 
+.status-pill.stale {
+  color: #fca5a5;
+  background: #421a1d;
+}
+
 :root[data-theme='light'] .status-pill.active {
   color: #0f5f47;
   background: #daf8ec;
@@ -2282,6 +2307,11 @@
 :root[data-theme='light'] .status-pill.complete {
   color: #174b8f;
   background: #e3efff;
+}
+
+:root[data-theme='light'] .status-pill.stale {
+  color: #991b1b;
+  background: #fee2e2;
 }
 
 .task-table {

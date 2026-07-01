@@ -589,7 +589,30 @@ export default function App() {
         projects={projects}
         error={error}
         refreshSeconds={preferences.monitorRefreshSeconds}
+        busy={busy}
         onRefresh={loadMonitorTasks}
+        onDeleteTask={(task) => {
+          void runAction(async () => {
+            await api.DeleteTask(task.id);
+            await loadMonitorTasks();
+          }, `delete stale task "${task.title}"`);
+        }}
+        onClearStaleTasks={(staleTasks) => {
+          void runAction(async () => {
+            const failures: string[] = [];
+            for (const task of staleTasks) {
+              try {
+                await api.DeleteTask(task.id);
+              } catch (err) {
+                failures.push(`${task.title}: ${errorMessage(err)}`);
+              }
+            }
+            await loadMonitorTasks();
+            if (failures.length > 0) {
+              throw new Error(`Failed to delete ${failures.length} of ${staleTasks.length} stale tasks:\n${failures.join('\n')}`);
+            }
+          }, `clear ${staleTasks.length} stale tasks`);
+        }}
         onOpenWorkspace={(projectID, taskID) => {
           const nextProject = projects.find((item) => item.id === projectID);
           if (!nextProject) return;

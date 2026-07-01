@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { MonitorTask } from '../../api';
@@ -36,19 +37,26 @@ const task: MonitorTask = {
   updatedAt: '2026-01-01T00:05:00.000Z',
 };
 
-function renderMonitor(tasks: MonitorTask[] = []) {
+function renderMonitor(tasks: MonitorTask[] = [], overrides: Partial<ComponentProps<typeof MonitorView>> = {}) {
+  const props = {
+    tasks,
+    projects: [project],
+    error: '',
+    refreshSeconds: 5,
+    busy: false,
+    onRefresh: vi.fn(),
+    onDeleteTask: vi.fn(),
+    onClearStaleTasks: vi.fn(),
+    onOpenWorkspace: vi.fn(),
+    theme: 'dark' as const,
+    onToggleTheme: vi.fn(),
+    nowMs: Date.parse('2026-01-03T01:05:00.000Z'),
+    ...overrides,
+  };
   render(
-    <MonitorView
-      tasks={tasks}
-      projects={[project]}
-      error=""
-      refreshSeconds={5}
-      onRefresh={vi.fn()}
-      onOpenWorkspace={vi.fn()}
-      theme="dark"
-      onToggleTheme={vi.fn()}
-    />,
+    <MonitorView {...props} />,
   );
+  return props;
 }
 
 describe('MonitorView', () => {
@@ -66,5 +74,22 @@ describe('MonitorView', () => {
     expect(screen.getByText('⚡ active')).not.toBeNull();
     expect(screen.getByText('agx-task-1')).not.toBeNull();
     expect(screen.getByText('/repo/agx')).not.toBeNull();
+    expect(screen.getByText('Lifetime')).not.toBeNull();
+    expect(screen.getByText('2d 1h')).not.toBeNull();
+  });
+
+  it('marks stale sessions and exposes stale cleanup actions', () => {
+    const onDeleteTask = vi.fn();
+    const onClearStaleTasks = vi.fn();
+    renderMonitor([task], { onDeleteTask, onClearStaleTasks });
+
+    expect(screen.getAllByText('Stale').length).toBeGreaterThan(0);
+    expect(screen.getByText('2d 1h ago')).not.toBeNull();
+
+    fireEvent.click(screen.getByText('Clear stale'));
+    expect(onClearStaleTasks).toHaveBeenCalledWith([task]);
+
+    fireEvent.click(screen.getByText('Delete'));
+    expect(onDeleteTask).toHaveBeenCalledWith(task);
   });
 });
