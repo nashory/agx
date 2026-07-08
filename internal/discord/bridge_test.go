@@ -181,6 +181,27 @@ func TestBridgeSyncTaskChannelReturnsInProgressDuringHardSync(t *testing.T) {
 	}
 }
 
+func TestBridgeChannelSyncSerializesChannelMutations(t *testing.T) {
+	bridge := NewBridge(config.DiscordConfig{})
+	release, err := bridge.beginChannelSync(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := bridge.beginChannelSync(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("beginChannelSync while held error = %v, want deadline exceeded", err)
+	}
+
+	release()
+	releaseAgain, err := bridge.beginChannelSync(context.Background())
+	if err != nil {
+		t.Fatalf("beginChannelSync after release error = %v", err)
+	}
+	releaseAgain()
+}
+
 func TestRefreshTaskStreamsStartsMappedStructuredTask(t *testing.T) {
 	bridge := NewBridge(config.DiscordConfig{})
 	bridge.connected = true

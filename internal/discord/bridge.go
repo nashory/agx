@@ -37,6 +37,7 @@ type Bridge struct {
 	hardSync  sync.RWMutex
 	taskSync  chan struct{}
 	maintSync chan struct{}
+	chanSync  chan struct{}
 	syncState sync.Mutex
 	active    map[string]activeSync
 	permMu    sync.Mutex
@@ -100,6 +101,7 @@ func NewBridge(cfg config.DiscordConfig) *Bridge {
 		cfg:       cfg,
 		taskSync:  make(chan struct{}, 1),
 		maintSync: make(chan struct{}, 1),
+		chanSync:  make(chan struct{}, 1),
 		active:    map[string]activeSync{},
 		streams:   map[string]taskStream{},
 	}
@@ -360,6 +362,15 @@ func (b *Bridge) beginMaintenanceSync(ctx context.Context, kind string) (func(),
 	}, false)
 }
 
+func (b *Bridge) beginChannelSync(ctx context.Context) (func(), error) {
+	select {
+	case b.chanSync <- struct{}{}:
+		return func() { <-b.chanSync }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func (b *Bridge) beginLaneSync(ctx context.Context, lane chan struct{}, owner activeSync, wait bool) (func(), error) {
 	if wait {
 		select {
@@ -501,6 +512,11 @@ func (b *Bridge) SoftSync(ctx context.Context) error {
 		return err
 	}
 	defer release()
+	releaseChannels, err := b.beginChannelSync(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseChannels()
 
 	b.mu.Lock()
 	cfg := b.cfg
@@ -545,6 +561,11 @@ func (b *Bridge) SyncTaskChannel(ctx context.Context, taskID string) error {
 		return err
 	}
 	defer release()
+	releaseChannels, err := b.beginChannelSync(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseChannels()
 	if err := NewSyncer(store, bot, cfg.GuildID).SyncTaskChannelFast(ctx, taskID); err != nil {
 		b.setError(err)
 		return err
@@ -586,6 +607,11 @@ func (b *Bridge) DeleteTaskChannelWithFallback(ctx context.Context, taskID, fall
 		return err
 	}
 	defer release()
+	releaseChannels, err := b.beginChannelSync(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseChannels()
 	if err := NewSyncer(store, bot, cfg.GuildID).DeleteTaskChannelWithFallback(ctx, taskID, fallbackChannelID); err != nil {
 		b.setError(err)
 		return err
