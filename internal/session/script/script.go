@@ -1,7 +1,6 @@
 package script
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,40 +13,23 @@ func BuildTmuxCommand(ag agent.Agent, prompt, taskID string) (string, error) {
 	return BuildTmuxCommandMode(ag, prompt, taskID, true)
 }
 
+// BuildTmuxCommandMode writes a temporary run script for the agent and returns the
+// command line that executes it. The script contents and wrapping command are
+// platform-specific: a POSIX shell script on Unix (run under tmux) and a
+// PowerShell script on native Windows (run under ConPTY). See buildRunScript and
+// wrapScriptCommand in the platform files.
 func BuildTmuxCommandMode(ag agent.Agent, prompt, taskID string, allMighty bool) (string, error) {
-	argv := ag.BuildRunCommandMode(prompt, allMighty)
 	statusPath := TaskExitStatusPath(taskID)
 	_ = os.Remove(statusPath)
-	interactiveInjectedPrompt := ag.ShouldInjectInitialPrompt()
-	content := "#!/bin/sh\n"
-	content += "rm -f \"$0\"\n"
-	if !interactiveInjectedPrompt {
-		content += "status_file=" + ShellQuote(statusPath) + "\n"
-		content += "record_exit() {\n"
-		content += "  code=$?\n"
-		content += "  printf '%s\\n' \"$code\" > \"$status_file\"\n"
-		content += "  exit \"$code\"\n"
-		content += "}\n"
-		content += "trap record_exit EXIT\n"
+	content, err := buildRunScript(ag, prompt, statusPath, allMighty)
+	if err != nil {
+		return "", err
 	}
-	content += "unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT\n"
-	for key, value := range ag.Env {
-		if !isShellIdentifier(key) {
-			return "", fmt.Errorf("invalid environment variable name %q", key)
-		}
-		content += "export " + key + "=" + ShellQuote(value) + "\n"
-	}
-	if interactiveInjectedPrompt {
-		content += "script -q /dev/null " + ShellJoin(argv) + "\n"
-	} else {
-		content += ShellJoin(argv) + "\n"
-	}
-
 	path, err := WriteTempScript(taskID, content)
 	if err != nil {
 		return "", err
 	}
-	return "sh " + ShellQuote(path) + "; exec ${SHELL:-/bin/sh}", nil
+	return wrapScriptCommand(path), nil
 }
 
 func RemoveCommandScript(command string) {
@@ -58,17 +40,10 @@ func RemoveCommandScript(command string) {
 	_ = os.Remove(path)
 }
 
+// CommandScriptPath extracts the temporary script path from a command produced by
+// BuildTmuxCommandMode, using the platform-specific wrapping format.
 func CommandScriptPath(command string) (string, bool) {
-	const prefix = "sh '"
-	const suffix = "'; exec ${SHELL:-/bin/sh}"
-	if !strings.HasPrefix(command, prefix) || !strings.HasSuffix(command, suffix) {
-		return "", false
-	}
-	path := strings.TrimSuffix(strings.TrimPrefix(command, prefix), suffix)
-	if strings.Contains(path, "'") {
-		return "", false
-	}
-	return filepath.Clean(path), true
+	return scriptCommandPath(command)
 }
 
 func WriteTempScript(taskID, content string) (string, error) {
@@ -76,7 +51,7 @@ func WriteTempScript(taskID, content string) (string, error) {
 	if len(taskID) >= 8 {
 		prefix += taskID[:8] + "-"
 	}
-	f, err := os.CreateTemp("", prefix+"*.sh")
+	f, err := os.CreateTemp("", prefix+"*"+scriptFileExtension())
 	if err != nil {
 		return "", err
 	}
