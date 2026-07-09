@@ -310,6 +310,7 @@ func (b *Bot) ListGuildChannels(ctx context.Context, guildID string) ([]GuildCha
 			ID:       channel.ID,
 			Name:     channel.Name,
 			ParentID: channel.ParentID,
+			Topic:    channel.Topic,
 			Type:     channelType,
 		})
 	}

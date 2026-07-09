@@ -50,6 +50,8 @@ type Bridge struct {
 	events    AgentEventSubscriber
 	store     *db.Store
 	streams   map[string]taskStream
+	owner     string
+	ownerChan string
 	startedAt time.Time
 	lastErr   string
 	connected bool
@@ -191,8 +193,17 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error
 		b.setError(err)
 		return err
 	}
+	owner := newGuildOwner(mode)
+	ownerChannelID, err := claimGuildOwner(ctx, bot, cfg.GuildID, owner)
+	if err != nil {
+		_ = bot.Close()
+		_ = lock.Release()
+		b.setError(err)
+		return err
+	}
 	if service != nil {
 		if err := bot.RegisterCommands(cfg.GuildID); err != nil {
+			_ = releaseGuildOwner(context.Background(), bot, cfg.GuildID, ownerChannelID, owner)
 			_ = bot.Close()
 			_ = lock.Release()
 			b.setError(err)
@@ -204,6 +215,8 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error
 	b.lock = lock
 	b.startedAt = time.Now()
 	b.connected = true
+	b.owner = owner
+	b.ownerChan = ownerChannelID
 	b.lastErr = ""
 	b.mu.Unlock()
 	if store != nil && initialSync {
@@ -237,9 +250,14 @@ func (b *Bridge) Stop() error {
 	b.mu.Lock()
 	bot := b.bot
 	lock := b.lock
+	cfg := b.cfg
+	owner := b.owner
+	ownerChannelID := b.ownerChan
 	b.cancelTaskStreamsLocked()
 	b.bot = nil
 	b.lock = nil
+	b.owner = ""
+	b.ownerChan = ""
 	b.connected = false
 	b.startedAt = time.Time{}
 	b.lastErr = ""
@@ -247,7 +265,10 @@ func (b *Bridge) Stop() error {
 
 	var err error
 	if bot != nil {
-		err = bot.Close()
+		err = releaseGuildOwner(context.Background(), bot, cfg.GuildID, ownerChannelID, owner)
+		if closeErr := bot.Close(); err == nil {
+			err = closeErr
+		}
 	}
 	if lock != nil {
 		if lockErr := lock.Release(); err == nil {

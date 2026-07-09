@@ -63,6 +63,12 @@ func TestRuntimeErrorResponseCodes(t *testing.T) {
 			wantRetryable: true,
 		},
 		{
+			name:     "discord owner conflict",
+			status:   http.StatusInternalServerError,
+			err:      agxdiscord.ErrGuildOwnerConflict,
+			wantCode: ErrorCodeConflict,
+		},
+		{
 			name:        "cleanup failed",
 			status:      http.StatusInternalServerError,
 			err:         session.TaskCleanupError{TaskID: "task-123", Err: errors.New("remove worktree")},

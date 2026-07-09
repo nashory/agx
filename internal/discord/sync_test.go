@@ -146,7 +146,7 @@ func (f *fakeSyncClient) ListGuildChannels(ctx context.Context, guildID string) 
 			parentID = parts[0]
 			name = parts[1]
 		}
-		out = append(out, GuildChannel{ID: id, Name: name, ParentID: parentID, Type: GuildChannelText})
+		out = append(out, GuildChannel{ID: id, Name: name, ParentID: parentID, Topic: f.topics[id], Type: GuildChannelText})
 	}
 	out = append(out, f.extraChannels...)
 	return out, nil

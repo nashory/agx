@@ -41,6 +41,9 @@ func writeError(w http.ResponseWriter, err error) {
 	if err == db.ErrProjectNotFound || err == db.ErrTaskNotFound {
 		status = http.StatusNotFound
 	}
+	if errors.Is(err, agxdiscord.ErrGuildOwnerConflict) {
+		status = http.StatusConflict
+	}
 	writeErrorStatus(w, status, err)
 }
 
@@ -65,6 +68,8 @@ func runtimeErrorResponse(status int, err error) errorResponse {
 	case errors.Is(err, agxdiscord.ErrSyncInProgress):
 		response.Code = ErrorCodeSyncInProgress
 		response.Retryable = true
+	case errors.Is(err, agxdiscord.ErrGuildOwnerConflict):
+		response.Code = ErrorCodeConflict
 	case errors.Is(err, context.DeadlineExceeded):
 		response.Code = ErrorCodeTimeout
 		response.Retryable = true

@@ -42,6 +42,7 @@ type GuildChannel struct {
 	ID       string
 	Name     string
 	ParentID string
+	Topic    string
 	Type     GuildChannelType
 }
 
