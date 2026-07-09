@@ -6,18 +6,19 @@ import (
 
 	"github.com/nashory/agx/internal/db"
 	"github.com/nashory/agx/internal/session/script"
-	"github.com/nashory/agx/internal/tmux"
 )
 
-func DetectTaskStatus(ctrl *tmux.Controller, target, taskID, lastOutput string, lastActivity time.Time, ignoreExitStatus bool) (db.TaskStatus, string) {
-	if !ctrl.WindowExists(target) {
+// DetectTaskStatus classifies a task by sampling its backend window: whether the
+// window exists, its foreground command, and its recent output.
+func DetectTaskStatus(backend Backend, target, taskID, lastOutput string, lastActivity time.Time, ignoreExitStatus bool) (db.TaskStatus, string) {
+	if !backend.WindowExists(target) {
 		return db.StatusOffline, ""
 	}
-	cmd, err := ctrl.PaneCurrentCommand(target)
+	cmd, err := backend.PaneCurrentCommand(target)
 	if err != nil {
 		return db.StatusOffline, lastOutput
 	}
-	currentOutput, err := ctrl.CapturePane(target)
+	currentOutput, err := backend.CapturePane(target)
 	if err != nil {
 		return db.StatusOffline, lastOutput
 	}

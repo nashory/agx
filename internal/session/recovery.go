@@ -21,7 +21,7 @@ func (m *Manager) RecoverLiveTasks() (RecoveryResult, error) {
 	if len(tasks) == 0 {
 		return result, m.finishRecovery(&result)
 	}
-	if !m.tmux.HasTmux() || !m.tmux.HasServer() {
+	if !m.backend.HasTmux() || !m.backend.HasServer() {
 		for _, live := range tasks {
 			if hasStructuredRuntime(live.Task) {
 				continue
@@ -51,7 +51,7 @@ func (m *Manager) RecoverLiveTasks() (RecoveryResult, error) {
 			return result, err
 		}
 		sessionName := projectSessionName(project)
-		if !m.tmux.HasSession(sessionName) {
+		if !m.backend.HasSession(sessionName) {
 			if err := m.recoverTaskWithoutSession(task); err != nil {
 				return result, err
 			}
@@ -59,7 +59,7 @@ func (m *Manager) RecoverLiveTasks() (RecoveryResult, error) {
 			continue
 		}
 		target := tmux.Target(sessionName, *task.SessionName)
-		if !m.tmux.WindowExists(target) {
+		if !m.backend.WindowExists(target) {
 			if err := m.recoverTaskWithoutSession(task); err != nil {
 				return result, err
 			}
@@ -99,7 +99,7 @@ func (m *Manager) clearStaleInactiveSessions(result *RecoveryResult) error {
 		}
 		sessionName := projectSessionName(project)
 		target := tmux.Target(sessionName, *task.SessionName)
-		if !m.tmux.HasSession(sessionName) || !m.tmux.WindowExists(target) {
+		if !m.backend.HasSession(sessionName) || !m.backend.WindowExists(target) {
 			if err := m.store.UpdateTaskSession(task.ID, nil); err != nil {
 				return err
 			}

@@ -19,11 +19,11 @@ import (
 )
 
 // Manager coordinates legacy terminal-backed tasks for one runtime process. It
-// translates task rows into tmux sessions/windows and keeps generated worktrees
-// in sync with task lifecycle changes.
+// translates task rows into backend sessions/windows and keeps generated
+// worktrees in sync with task lifecycle changes.
 type Manager struct {
 	store          *db.Store
-	tmux           *tmux.Controller
+	backend        Backend
 	registry       *agent.Registry
 	forceWorktrees bool
 }
@@ -57,11 +57,12 @@ type RunOptions struct {
 	WorkspaceMode db.WorkspaceMode
 }
 
-// NewManager creates a session manager using the provided store, tmux
-// controller, and agent registry. Callers are expected to pass project-specific
-// registries when agent configuration can vary by repository.
-func NewManager(store *db.Store, tmuxCtrl *tmux.Controller, registry *agent.Registry) *Manager {
-	return &Manager{store: store, tmux: tmuxCtrl, registry: registry}
+// NewManager creates a session manager using the provided store, session
+// backend, and agent registry. Callers are expected to pass project-specific
+// registries when agent configuration can vary by repository. A *tmux.Controller
+// satisfies Backend, so existing callers pass one unchanged.
+func NewManager(store *db.Store, backend Backend, registry *agent.Registry) *Manager {
+	return &Manager{store: store, backend: backend, registry: registry}
 }
 
 // ForceTaskWorktrees makes subsequent workspace preparation create task
@@ -131,7 +132,7 @@ func (m *Manager) RunNewTaskWithOptions(project db.Project, title string, descri
 		return db.Task{}, m.withTaskStartupCleanupError(err, "create task window", func() error {
 			return errors.Join(
 				removePreparedWorktreeForCleanup(project, prepared),
-				killTaskWindowForCleanup(m.tmux, target),
+				killTaskWindowForCleanup(m.backend, target),
 				deleteTaskRowForCleanup(m.store, taskID),
 			)
 		})
@@ -184,8 +185,8 @@ func (m *Manager) restartTask(task db.Task, promptOverride *string) error {
 	sessionName := projectSessionName(project)
 	windowName := taskWindowName(task.ID)
 	target := tmux.Target(sessionName, windowName)
-	if m.tmux.WindowExists(target) {
-		if err := m.tmux.KillWindow(target); err != nil {
+	if m.backend.WindowExists(target) {
+		if err := m.backend.KillWindow(target); err != nil {
 			return fmt.Errorf("clear stale task window %s: %w", target, err)
 		}
 	}
@@ -219,7 +220,7 @@ func (m *Manager) restartTask(task db.Task, promptOverride *string) error {
 		return m.withTaskStartupCleanupError(err, "restart task window", func() error {
 			return errors.Join(
 				removePreparedWorktreeForCleanup(project, prepared),
-				killTaskWindowForCleanup(m.tmux, target),
+				killTaskWindowForCleanup(m.backend, target),
 				restoreTaskRuntimeForCleanup(m.store, task),
 			)
 		})
@@ -302,13 +303,13 @@ func (m *Manager) SendMessage(task db.Task, text string) error {
 	if err != nil {
 		return m.restartTask(task, &text)
 	}
-	if !m.tmux.WindowExists(target) {
+	if !m.backend.WindowExists(target) {
 		return m.restartTask(task, &text)
 	}
 	if err := m.validateTaskTargetCWD(task, target); err != nil {
 		return err
 	}
-	return m.tmux.SendKeys(target, text)
+	return m.backend.SendKeys(target, text)
 }
 
 func (m *Manager) ResizeTaskTerminal(task db.Task, cols, rows int) error {
@@ -316,10 +317,10 @@ func (m *Manager) ResizeTaskTerminal(task db.Task, cols, rows int) error {
 	if err != nil {
 		return err
 	}
-	if !m.tmux.WindowExists(target) {
+	if !m.backend.WindowExists(target) {
 		return nil
 	}
-	return m.tmux.ResizeWindow(target, cols, rows)
+	return m.backend.ResizeWindow(target, cols, rows)
 }
 
 func (m *Manager) SendInput(task db.Task, data string) error {
@@ -327,13 +328,13 @@ func (m *Manager) SendInput(task db.Task, data string) error {
 	if err != nil {
 		return err
 	}
-	if !m.tmux.WindowExists(target) {
+	if !m.backend.WindowExists(target) {
 		return fmt.Errorf("task window does not exist: %s", target)
 	}
 	if err := m.validateTaskTargetCWD(task, target); err != nil {
 		return err
 	}
-	return m.tmux.SendInput(target, data)
+	return m.backend.SendInput(target, data)
 }
 
 func (m *Manager) InterruptTask(task db.Task) error {
@@ -341,10 +342,10 @@ func (m *Manager) InterruptTask(task db.Task) error {
 	if err != nil {
 		return err
 	}
-	if !m.tmux.WindowExists(target) {
+	if !m.backend.WindowExists(target) {
 		return fmt.Errorf("task window does not exist: %s", target)
 	}
-	return m.tmux.SendKey(target, "C-c")
+	return m.backend.SendKey(target, "C-c")
 }
 
 func (m *Manager) GetLogs(task db.Task, lines int) (string, error) {
@@ -353,9 +354,9 @@ func (m *Manager) GetLogs(task db.Task, lines int) (string, error) {
 		return "", err
 	}
 	if lines > 0 {
-		return m.tmux.CapturePaneWithHistory(target, lines)
+		return m.backend.CapturePaneWithHistory(target, lines)
 	}
-	return m.tmux.CapturePane(target)
+	return m.backend.CapturePane(target)
 }
 
 // StreamLogs captures the current pane into path and attaches tmux pipe-pane so
@@ -366,7 +367,7 @@ func (m *Manager) StreamLogs(task db.Task, path string, lines int) (string, erro
 	if err != nil {
 		return "", err
 	}
-	if !m.tmux.WindowExists(target) {
+	if !m.backend.WindowExists(target) {
 		return m.GetLogs(task, lines)
 	}
 	initial, captureErr := m.GetLogs(task, lines)
@@ -375,7 +376,7 @@ func (m *Manager) StreamLogs(task db.Task, path string, lines int) (string, erro
 	} else if _, err := os.Stat(path); os.IsNotExist(err) {
 		return "", captureErr
 	}
-	if err := m.tmux.ReplacePipePane(target, "cat >> "+script.ShellQuote(path)); err != nil {
+	if err := m.backend.ReplacePipePane(target, "cat >> "+script.ShellQuote(path)); err != nil {
 		return "", err
 	}
 	data, err := os.ReadFile(path)
@@ -400,7 +401,7 @@ func (m *Manager) DetectStatus(task db.Task, lastOutput string, lastActivity tim
 	if ag, err := m.registry.Get(task.Agent); err == nil {
 		ignoreExitStatus = ag.ShouldInjectInitialPrompt()
 	}
-	status, output := DetectTaskStatus(m.tmux, target, task.ID, lastOutput, lastActivity, ignoreExitStatus)
+	status, output := DetectTaskStatus(m.backend, target, task.ID, lastOutput, lastActivity, ignoreExitStatus)
 	return status, output, nil
 }
 
@@ -458,8 +459,8 @@ func (m *Manager) StopProject(project db.Project) error {
 		}
 	}
 	sessionName := projectSessionName(project)
-	if m.tmux.HasSession(sessionName) {
-		if err := m.tmux.KillSession(sessionName); err != nil {
+	if m.backend.HasSession(sessionName) {
+		if err := m.backend.KillSession(sessionName); err != nil {
 			errs = append(errs, fmt.Errorf("kill session %s: %w", sessionName, err))
 		}
 	}
@@ -489,11 +490,11 @@ func deleteTaskRowForCleanup(store *db.Store, taskID string) error {
 	return nil
 }
 
-func killTaskWindowForCleanup(ctrl *tmux.Controller, target string) error {
-	if !ctrl.WindowExists(target) {
+func killTaskWindowForCleanup(backend Backend, target string) error {
+	if !backend.WindowExists(target) {
 		return nil
 	}
-	if err := ctrl.KillWindow(target); err != nil {
+	if err := backend.KillWindow(target); err != nil {
 		return fmt.Errorf("kill task window %s: %w", target, err)
 	}
 	return nil
@@ -532,7 +533,7 @@ func (m *Manager) validateTaskTargetCWD(task db.Task, target string) error {
 	if err != nil {
 		return fmt.Errorf("task worktree is missing; run the task again to recreate it: %s", *task.WorktreePath)
 	}
-	actualRaw, err := m.tmux.PaneCurrentPath(target)
+	actualRaw, err := m.backend.PaneCurrentPath(target)
 	if err != nil {
 		return fmt.Errorf("read task pane cwd: %w", err)
 	}
@@ -566,29 +567,29 @@ func canonicalExistingPath(path string) (string, error) {
 }
 
 func (m *Manager) ensureSession(sessionName, workingDir string) error {
-	if m.tmux.HasSession(sessionName) {
+	if m.backend.HasSession(sessionName) {
 		return nil
 	}
-	if err := m.tmux.CreateSession(sessionName, workingDir); err != nil {
+	if err := m.backend.CreateSession(sessionName, workingDir); err != nil {
 		return err
 	}
-	return m.tmux.SetOption("history-limit", "50000")
+	return m.backend.SetOption("history-limit", "50000")
 }
 
 func (m *Manager) createTaskWindow(sessionName, windowName, workingDir, command string) error {
-	return m.tmux.CreateWindow(sessionName, windowName, workingDir, command)
+	return m.backend.CreateWindow(sessionName, windowName, workingDir, command)
 }
 
 func (m *Manager) verifyTaskWindowStarted(task db.Task, target string, ignoreExitStatus bool) error {
 	started := time.Now()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if !m.tmux.WindowExists(target) {
+		if !m.backend.WindowExists(target) {
 			return fmt.Errorf("task session exited immediately: tmux window %s is not running", target)
 		}
 		if !ignoreExitStatus {
 			if code, ok := script.ReadTaskExitStatus(task.ID); ok {
-				logs, _ := m.tmux.CapturePaneWithHistory(target, 80)
+				logs, _ := m.backend.CapturePaneWithHistory(target, 80)
 				logs = strings.TrimSpace(logs)
 				if logs == "" {
 					return fmt.Errorf("task agent exited immediately with status %d", code)
@@ -613,11 +614,11 @@ func (m *Manager) prepareInjectedPromptSession(target, prompt string) error {
 	if prompt == "" {
 		return nil
 	}
-	if err := m.tmux.SendKeys(target, prompt); err != nil {
+	if err := m.backend.SendKeys(target, prompt); err != nil {
 		return fmt.Errorf("send initial prompt: %w", err)
 	}
 	time.Sleep(250 * time.Millisecond)
-	if err := m.tmux.SendEnter(target); err != nil {
+	if err := m.backend.SendEnter(target); err != nil {
 		return fmt.Errorf("confirm initial prompt: %w", err)
 	}
 	return nil
@@ -628,17 +629,17 @@ func (m *Manager) waitForInjectedPromptReady(target string) error {
 	var lastLogs string
 	acceptedTrustPrompt := false
 	for {
-		if !m.tmux.WindowExists(target) {
+		if !m.backend.WindowExists(target) {
 			return fmt.Errorf("task session exited immediately: tmux window %s is not running", target)
 		}
-		logs, err := m.tmux.CapturePaneWithHistory(target, 80)
+		logs, err := m.backend.CapturePaneWithHistory(target, 80)
 		if err == nil {
 			lastLogs = strings.TrimSpace(logs)
 			if injectedPromptReady(logs) {
 				return nil
 			}
 			if !acceptedTrustPrompt && claudeTrustPromptReady(logs) {
-				if err := m.tmux.SendEnter(target); err != nil {
+				if err := m.backend.SendEnter(target); err != nil {
 					return fmt.Errorf("confirm Claude workspace trust prompt: %w", err)
 				}
 				acceptedTrustPrompt = true
@@ -668,26 +669,26 @@ func claudeTrustPromptReady(logs string) bool {
 }
 
 func (m *Manager) closeBootstrapWindow(sessionName string) error {
-	count, err := m.tmux.WindowCount(sessionName)
+	count, err := m.backend.WindowCount(sessionName)
 	if err != nil || count <= 1 {
 		return err
 	}
-	name, err := m.tmux.WindowName(sessionName + ":0")
+	name, err := m.backend.WindowName(sessionName + ":0")
 	if err != nil {
 		return err
 	}
 	if strings.HasPrefix(name, "task-") {
 		return nil
 	}
-	return m.tmux.KillWindow(sessionName + ":0")
+	return m.backend.KillWindow(sessionName + ":0")
 }
 
 func (m *Manager) stopTaskWindow(target string) error {
-	if !m.tmux.WindowExists(target) {
+	if !m.backend.WindowExists(target) {
 		return nil
 	}
-	_ = m.tmux.StopPipePane(target)
-	return m.tmux.KillWindow(target)
+	_ = m.backend.StopPipePane(target)
+	return m.backend.KillWindow(target)
 }
 
 func (m *Manager) prepareWorktree(project db.Project, taskID string, workspaceMode db.WorkspaceMode) (worktree.Prepared, error) {
