@@ -37,7 +37,11 @@ func (s *Service) handleDiscordConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	s.discord.Configure(next)
 	s.discord.SetStore(s.store)
-	if err := s.discord.Start(r.Context(), "runtime"); err != nil {
+	start := s.discord.Start
+	if req.Takeover {
+		start = s.discord.StartWithTakeover
+	}
+	if err := start(r.Context(), "runtime"); err != nil {
 		writeError(w, err)
 		return
 	}

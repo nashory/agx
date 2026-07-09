@@ -96,7 +96,7 @@ type VoiceSTTConfig struct {
 }
 
 type patchConfigRequest struct {
-	DefaultAgent *string `json:"defaultAgent"`
+	DefaultAgent *string         `json:"defaultAgent"`
 	VoiceSTT     *VoiceSTTConfig `json:"voiceStt"`
 }
 
@@ -161,6 +161,7 @@ type discordConnectRequest struct {
 	Token         string `json:"token"`
 	GuildID       string `json:"guildId"`
 	AllowedUserID string `json:"allowedUserId"`
+	Takeover      bool   `json:"takeover,omitempty"`
 }
 
 type discordInviteRequest struct {

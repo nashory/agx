@@ -459,8 +459,18 @@ func (c *Client) DiscordStatus(ctx context.Context) (agxdiscord.Status, error) {
 }
 
 func (c *Client) DiscordConnect(ctx context.Context, token, guildID, allowedUserID string) (agxdiscord.Status, error) {
+	return c.discordConnect(ctx, token, guildID, allowedUserID, false)
+}
+
+// DiscordConnectWithTakeover connects and, if the guild is owned by a stale
+// runtime, explicitly takes ownership instead of failing.
+func (c *Client) DiscordConnectWithTakeover(ctx context.Context, token, guildID, allowedUserID string) (agxdiscord.Status, error) {
+	return c.discordConnect(ctx, token, guildID, allowedUserID, true)
+}
+
+func (c *Client) discordConnect(ctx context.Context, token, guildID, allowedUserID string, takeover bool) (agxdiscord.Status, error) {
 	var status agxdiscord.Status
-	req := discordConnectRequest{Token: token, GuildID: guildID, AllowedUserID: allowedUserID}
+	req := discordConnectRequest{Token: token, GuildID: guildID, AllowedUserID: allowedUserID, Takeover: takeover}
 	if err := c.do(ctx, http.MethodPost, "/v1/discord/connect", req, &status); err != nil {
 		return agxdiscord.Status{}, err
 	}

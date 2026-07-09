@@ -141,17 +141,24 @@ func (b *Bridge) SetStore(store *db.Store) {
 // Task-channel sync can involve many Discord REST calls, so it runs after the
 // bridge is marked connected instead of blocking the connect/status path.
 func (b *Bridge) Start(ctx context.Context, mode string) error {
-	return b.start(ctx, mode, true)
+	return b.start(ctx, mode, true, false)
 }
 
 // StartWithoutInitialSync opens the bot without launching the background full
 // channel sync. It is used by foreground sync operations that already know the
 // exact sync work they need to perform.
 func (b *Bridge) StartWithoutInitialSync(ctx context.Context, mode string) error {
-	return b.start(ctx, mode, false)
+	return b.start(ctx, mode, false, false)
 }
 
-func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error {
+// StartWithTakeover behaves like Start but, when the guild is owned by a stale
+// runtime, explicitly takes ownership instead of failing. It never takes over
+// from an owner that still looks alive.
+func (b *Bridge) StartWithTakeover(ctx context.Context, mode string) error {
+	return b.start(ctx, mode, true, true)
+}
+
+func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover bool) error {
 	b.lifecycle.Lock()
 	defer b.lifecycle.Unlock()
 
@@ -195,7 +202,12 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error
 		return err
 	}
 	owner := newGuildOwner(mode)
-	ownerChannelID, err := claimGuildOwner(ctx, bot, cfg.GuildID, owner)
+	var ownerChannelID string
+	if takeover {
+		ownerChannelID, owner, err = takeoverGuildOwner(ctx, bot, cfg.GuildID, owner)
+	} else {
+		ownerChannelID, err = claimGuildOwner(ctx, bot, cfg.GuildID, owner)
+	}
 	if err != nil {
 		_ = bot.Close()
 		_ = lock.Release()

@@ -23,6 +23,7 @@ type launchOptions struct {
 	DiscordAllowedUserID string
 	SkipDiscord          bool
 	SkipDiscordSync      bool
+	TakeDiscordOwnership bool
 	Wait                 time.Duration
 }
 
@@ -56,6 +57,7 @@ func newLaunchCmdWithRunner(runner launchRunner) *cobra.Command {
 	cmd.Flags().StringVar(&opts.DiscordAllowedUserID, "allow-user", "", "Discord user ID allowed to control AGX; defaults to config.toml")
 	cmd.Flags().BoolVar(&opts.SkipDiscord, "skip-discord", false, "launch runtime without connecting Discord")
 	cmd.Flags().BoolVar(&opts.SkipDiscordSync, "skip-discord-sync", false, "connect Discord without running soft sync")
+	cmd.Flags().BoolVar(&opts.TakeDiscordOwnership, "take-discord-ownership", false, "if the Discord server is owned by a stale runtime, explicitly take ownership")
 	cmd.Flags().DurationVar(&opts.Wait, "wait", opts.Wait, "time to wait for runtime startup")
 	return cmd
 }
@@ -95,7 +97,11 @@ func runLaunch(ctx context.Context, cmd *cobra.Command, opts launchOptions) erro
 	if err != nil {
 		return err
 	}
-	status, err := client.DiscordConnect(ctx, token, guildID, allowedUserID)
+	connect := client.DiscordConnect
+	if opts.TakeDiscordOwnership {
+		connect = client.DiscordConnectWithTakeover
+	}
+	status, err := connect(ctx, token, guildID, allowedUserID)
 	if err != nil {
 		return err
 	}
