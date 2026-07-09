@@ -374,15 +374,38 @@ of overloading tmux session names with Windows-specific data.
 
 ### ConPTY Library Evaluation
 
-Before committing to a dependency, evaluate at least:
+Selected library: `github.com/UserExistsError/conpty`.
 
-- whether the library supports resize
-- whether it exposes stdin/stdout cleanly
-- whether it works under GitHub Actions Windows runners
-- whether it leaves child processes behind on forced termination
-- whether it has active maintenance and a small dependency graph
-- whether AGX can wrap it behind the backend interface without leaking library
-  types into runtime code
+Rationale:
+
+- Pure Go with no cgo, so `GOOS=windows` cross-compilation and the Windows CI
+  compile checks stay simple.
+- Supports resize, which satisfies the `Resize` capability.
+- Exposes the underlying process handle for wait/kill.
+- Small dependency graph and Windows-only, so it drops cleanly into
+  `conpty_backend_windows.go` without leaking into non-Windows builds.
+
+Critical separation of concerns:
+
+- No ConPTY wrapper cleans up a process tree. The wrapper only manages the
+  directly spawned process and its terminal I/O. Child processes (dev servers,
+  nested shells) survive if only the wrapper is used.
+- Process-tree termination is therefore handled by a Windows Job Object, not by
+  the ConPTY library. Each task runs inside a Job Object; kill/delete calls
+  `TerminateJobObject`. This keeps the "process cleanup is a correctness
+  requirement" rule independent of the ConPTY library choice, so the library can
+  be swapped later with low risk.
+
+Validation still required on a real Windows host before the library is
+considered final:
+
+- resize under Windows Terminal and a plain console host
+- clean stdin/stdout wiring
+- behavior under GitHub Actions Windows runners
+- no orphaned children after `TerminateJobObject`
+- guard against resize-after-exit (resizing an already-exited pty can crash)
+- interrupt path: confirm Ctrl+C via VT sequence vs `GenerateConsoleCtrlEvent`,
+  accounting for win32-input-mode encoding
 
 The selected dependency must stay isolated to Windows build-tagged files.
 
@@ -438,6 +461,47 @@ process id, AGX version, Discord server id when applicable, and last heartbeat.
 If a stale lock is detected, AGX should report the owner details and provide a
 clear recovery command rather than silently stealing ownership.
 
+### Breaking Stale Discord Ownership
+
+The Discord server owner guard is cross-machine, so it needs a shared source of
+truth that any AGX instance holding the bot token can read. Use Discord itself:
+a hidden runtime-lock channel holds a single owner record message that the owner
+edits in place. No extra infrastructure is required.
+
+Owner record fields:
+
+```json
+{
+  "host": "...",
+  "pid": 1234,
+  "agx_version": "...",
+  "server_id": "...",
+  "epoch": 7,
+  "heartbeat_ts": "..."
+}
+```
+
+The owner refreshes `heartbeat_ts` every N seconds. A record is stale when
+`now - heartbeat_ts > k*N` (for example k=3).
+
+Takeover flow (detection is automatic, takeover is always explicit):
+
+1. Detect: on connect, a new instance reading a stale record must NOT auto-steal.
+   It prints the old owner details and the exact recovery command.
+2. Explicit command: the operator runs a takeover command such as
+   `agx discord takeover --server-id <id> --confirm`. Silent steal is forbidden.
+3. Fencing grace: before claiming, the new instance records a takeover intent
+   with its own identity and waits one heartbeat interval. If the old owner
+   refreshes its heartbeat during the wait, it is alive; abort the takeover to
+   avoid split-brain.
+4. Compare-and-swap claim: overwrite the owner record only if it still equals the
+   stale record that was read, and increment `epoch`. This blocks two reviving
+   machines from both taking over.
+5. Self-fence: when a previous owner resumes and finds an `epoch` newer than its
+   own, it must disconnect gracefully instead of contending for the server.
+6. Audit: log the old owner metadata before replacement and post an ownership
+   transfer notice in the runtime-lock/control channel.
+
 Locking behavior must be tested separately from Discord behavior:
 
 - two runtimes using the same config on one Windows machine
@@ -445,6 +509,11 @@ Locking behavior must be tested separately from Discord behavior:
 - two machines trying to own the same Discord server
 - stale local lock with dead process
 - stale remote owner with expired heartbeat
+- explicit takeover of a stale remote owner succeeds and increments epoch
+- takeover aborts when the old owner refreshes its heartbeat during the grace
+  wait
+- concurrent takeover from two machines: compare-and-swap lets only one win
+- resumed old owner self-fences when it sees a newer epoch
 - corrupt lock metadata
 
 Any lock bypass should require an explicit command and should log the old owner
@@ -708,6 +777,8 @@ Logs must never include:
   target under normal Discord API conditions.
 - Verify a second machine is blocked from controlling an already-owned Discord
   server.
+- Implement the explicit stale-ownership takeover command with epoch increment,
+  fencing grace, and compare-and-swap claim. Never steal ownership silently.
 
 ### P5: Service And Packaging
 
@@ -844,9 +915,18 @@ Native Windows support is ready to advertise when:
   agent CLIs are best effort until validated on a real Windows host.
 - Direct/interactive attach is deferred. The MVP supports task create,
   log/snapshot, and kill only.
+- ConPTY wrapper: start with `github.com/UserExistsError/conpty` (pure Go, no
+  cgo, supports resize, exposes the process handle, small dependency graph),
+  isolated to Windows build-tagged files. Process-tree cleanup is NOT provided by
+  any ConPTY wrapper and is handled separately by a Windows Job Object. See
+  ConPTY Library Evaluation.
+- Stale Discord ownership: detection is automatic, takeover is always explicit.
+  AGX never silently steals ownership. Split-brain and concurrent takeover are
+  prevented by an epoch/generation counter, a compare-and-swap claim, and a
+  fencing grace wait. See Runtime And Discord Locks.
 
 ## Open Questions
 
-- Which ConPTY Go wrapper is the best fit after real Windows validation?
-- What is the safest operator flow for breaking stale Discord ownership from a
-  dead machine?
+None currently open. New Windows-specific constraints discovered during
+implementation should be added here and resolved before the phase that depends on
+them.
