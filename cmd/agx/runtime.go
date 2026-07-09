@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,7 +26,30 @@ func newRuntimeCmd() *cobra.Command {
 		newRuntimeResetCmd(),
 		newRuntimeInstallServiceCmd(),
 		newRuntimeUninstallServiceCmd(),
+		newRuntimeServiceRunCmd(),
 	)
+	return cmd
+}
+
+// newRuntimeServiceRunCmd is the hidden entry point the Windows Service Control
+// Manager launches. It runs the runtime under the SCM and is not meant to be run
+// by hand.
+func newRuntimeServiceRunCmd() *cobra.Command {
+	var configDir string
+	cmd := &cobra.Command{
+		Use:    "service-run",
+		Short:  "Run the runtime under the Windows Service Control Manager",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(configDir) != "" {
+				if err := os.Setenv("AGX_CONFIG_DIR", configDir); err != nil {
+					return err
+				}
+			}
+			return agxruntime.RunAsWindowsService(versionString())
+		},
+	}
+	cmd.Flags().StringVar(&configDir, "config-dir", "", "AGX config directory the service should use")
 	return cmd
 }
 
