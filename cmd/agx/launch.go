@@ -125,9 +125,6 @@ func normalizeLaunchPlatform(value, goos string) (string, error) {
 	if platform == "darwin" {
 		platform = "macos"
 	}
-	if platform == "lunux" {
-		platform = "linux"
-	}
 	switch platform {
 	case "windows":
 		if goos != "linux" {
