@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -771,6 +772,9 @@ func TestDiscordConnectRejectsEmptyTokenAfterDisconnect(t *testing.T) {
 
 func waitForSocket(t *testing.T, path string) {
 	t.Helper()
+	if goruntime.GOOS == "windows" {
+		t.Skip("Unix-socket end-to-end test; native Windows uses the TCP transport covered by transport_windows_test.go")
+	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {

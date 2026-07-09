@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,6 +49,11 @@ type Service struct {
 	lock   *Lock
 	server *http.Server
 	ln     net.Listener
+
+	// transportToken is the bearer token required by the localhost TCP
+	// transport. It is populated only on native Windows (see transport_windows.go)
+	// and left empty on Unix, where the socket permissions gate access.
+	transportToken string
 
 	backgroundCtx    context.Context
 	backgroundCancel context.CancelFunc
@@ -136,28 +140,15 @@ func (s *Service) Start(ctx context.Context) (err error) {
 		return err
 	}
 	s.lock = lock
-	if err := os.Remove(s.paths.Socket); err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = lock.Release()
-		return fmt.Errorf("remove stale socket: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(s.paths.Socket), 0o700); err != nil {
-		_ = lock.Release()
-		return fmt.Errorf("create socket dir: %w", err)
-	}
-	ln, err := net.Listen("unix", s.paths.Socket)
+	ln, err := s.bindListener()
 	if err != nil {
 		_ = lock.Release()
-		return fmt.Errorf("listen runtime socket: %w", err)
-	}
-	if err := os.Chmod(s.paths.Socket, 0o600); err != nil {
-		_ = ln.Close()
-		_ = lock.Release()
-		return fmt.Errorf("chmod runtime socket: %w", err)
+		return err
 	}
 	store, err := db.Open()
 	if err != nil {
 		_ = ln.Close()
-		_ = os.Remove(s.paths.Socket)
+		_ = s.cleanupListener()
 		_ = lock.Release()
 		return fmt.Errorf("open runtime database: %w", err)
 	}
@@ -165,7 +156,7 @@ func (s *Service) Start(ctx context.Context) (err error) {
 	if err := s.cleanupOrphanAttachments(); err != nil {
 		_ = store.Close()
 		_ = ln.Close()
-		_ = os.Remove(s.paths.Socket)
+		_ = s.cleanupListener()
 		_ = lock.Release()
 		return fmt.Errorf("cleanup orphan attachments: %w", err)
 	}
@@ -178,13 +169,13 @@ func (s *Service) Start(ctx context.Context) (err error) {
 	if err != nil {
 		_ = store.Close()
 		_ = ln.Close()
-		_ = os.Remove(s.paths.Socket)
+		_ = s.cleanupListener()
 		_ = lock.Release()
 		return fmt.Errorf("recover runtime tasks: %w", err)
 	}
 	s.recovery = recovery
 	s.ln = ln
-	s.server = &http.Server{Handler: s.routes()}
+	s.server = &http.Server{Handler: s.wrapTransportAuth(s.routes())}
 	s.bus.Publish("runtime.status", s.Status())
 	logRuntimeOperation("runtime_recovery",
 		"offline", recovery.Offline,
@@ -361,7 +352,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			}
 			s.store = nil
 		}
-		if removeErr := os.Remove(s.paths.Socket); err == nil && removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		if removeErr := s.cleanupListener(); err == nil && removeErr != nil {
 			err = removeErr
 		}
 		if s.lock != nil {

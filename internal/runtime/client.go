@@ -17,9 +17,10 @@ import (
 	agxdiscord "github.com/nashory/agx/internal/discord"
 )
 
-// Client talks to the local runtime daemon over its Unix socket. Methods are
-// thin wrappers around the runtime HTTP API and preserve server-side validation
-// errors in returned error messages.
+// Client talks to the local runtime daemon over its platform transport (a Unix
+// socket on macOS/Linux, authenticated localhost TCP on native Windows). Methods
+// are thin wrappers around the runtime HTTP API and preserve server-side
+// validation errors in returned error messages.
 type Client struct {
 	baseURL string
 	http    *http.Client
@@ -48,19 +49,10 @@ func (e *RuntimeError) Error() string {
 	return fmt.Sprintf("runtime API %s %s failed: %s: %s", e.Method, e.Path, e.Status, e.Message)
 }
 
-// NewClient returns a client configured for the default runtime socket.
+// NewClient returns a client configured for the default runtime transport.
 func NewClient() *Client {
-	paths := DefaultPaths()
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", paths.Socket)
-		},
-	}
-	return &Client{
-		baseURL: "http://agx-runtime",
-		http:    &http.Client{Transport: transport},
-	}
+	baseURL, httpClient := newClientHTTP(DefaultPaths())
+	return &Client{baseURL: baseURL, http: httpClient}
 }
 
 func (c *Client) Status(ctx context.Context) (Status, error) {
