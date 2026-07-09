@@ -529,10 +529,26 @@ func TestNormalizeLaunchPlatform(t *testing.T) {
 	}
 }
 
+func TestNormalizeLaunchWait(t *testing.T) {
+	wait, err := normalizeLaunchWait(5 * time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wait != 5*time.Second {
+		t.Fatalf("normalizeLaunchWait() = %s, want 5s", wait)
+	}
+	for _, value := range []time.Duration{0, -time.Second} {
+		if _, err := normalizeLaunchWait(value); err == nil || !strings.Contains(err.Error(), "--wait") {
+			t.Fatalf("normalizeLaunchWait(%s) error = %v, want wait validation error", value, err)
+		}
+	}
+}
+
 func TestLaunchDiscordInputsUseConfigAndEnv(t *testing.T) {
 	t.Setenv("DISCORD_BOT_TOKEN", "env-token")
 	token, guildID, allowedUserID, err := launchDiscordInputs(launchOptions{}, config.Config{
 		Discord: config.DiscordConfig{
+			BotToken:       "config-token",
 			GuildID:        "guild-1",
 			AllowedUserIDs: []string{" ", "user-1"},
 		},
@@ -541,6 +557,45 @@ func TestLaunchDiscordInputsUseConfigAndEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	if token != "env-token" || guildID != "guild-1" || allowedUserID != "user-1" {
+		t.Fatalf("launchDiscordInputs() = (%q, %q, %q)", token, guildID, allowedUserID)
+	}
+}
+
+func TestLaunchDiscordInputsUseConfigTokenWhenEnvMissing(t *testing.T) {
+	t.Setenv("DISCORD_BOT_TOKEN", "")
+	token, guildID, allowedUserID, err := launchDiscordInputs(launchOptions{}, config.Config{
+		Discord: config.DiscordConfig{
+			Enabled:        false,
+			BotToken:       "config-token",
+			GuildID:        "guild-1",
+			AllowedUserIDs: []string{"user-1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "config-token" || guildID != "guild-1" || allowedUserID != "user-1" {
+		t.Fatalf("launchDiscordInputs() = (%q, %q, %q)", token, guildID, allowedUserID)
+	}
+}
+
+func TestLaunchDiscordInputsFlagsOverrideEnvAndConfig(t *testing.T) {
+	t.Setenv("DISCORD_BOT_TOKEN", "env-token")
+	token, guildID, allowedUserID, err := launchDiscordInputs(launchOptions{
+		DiscordToken:         "flag-token",
+		DiscordGuildID:       "flag-guild",
+		DiscordAllowedUserID: "flag-user",
+	}, config.Config{
+		Discord: config.DiscordConfig{
+			BotToken:       "config-token",
+			GuildID:        "config-guild",
+			AllowedUserIDs: []string{"config-user"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "flag-token" || guildID != "flag-guild" || allowedUserID != "flag-user" {
 		t.Fatalf("launchDiscordInputs() = (%q, %q, %q)", token, guildID, allowedUserID)
 	}
 }

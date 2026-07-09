@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/nashory/agx/internal/config"
@@ -24,9 +23,12 @@ func AcquireLock(mode string) (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockFile(file); err != nil {
 		existing, _ := os.ReadFile(path)
 		_ = file.Close()
+		if len(existing) == 0 {
+			return nil, fmt.Errorf("acquire discord bridge lock: %w", err)
+		}
 		return nil, fmt.Errorf("discord bridge already running: %s", string(existing))
 	}
 	if err := file.Truncate(0); err != nil {
@@ -48,7 +50,7 @@ func (l *Lock) Release() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	err := unlockFile(l.file)
 	if closeErr := l.file.Close(); err == nil {
 		err = closeErr
 	}

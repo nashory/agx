@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/nashory/agx/internal/agent"
@@ -40,6 +39,11 @@ func newLaunchCmdWithRunner(runner launchRunner) *cobra.Command {
 		Short: "Sanity-check and launch AGX runtime plus Discord",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			wait, err := normalizeLaunchWait(opts.Wait)
+			if err != nil {
+				return err
+			}
+			opts.Wait = wait
 			ctx, cancel := context.WithTimeout(cmd.Context(), opts.Wait+60*time.Second)
 			defer cancel()
 			return runner(ctx, cmd, opts)
@@ -146,12 +150,22 @@ func normalizeLaunchPlatform(value, goos string) (string, error) {
 	}
 }
 
+func normalizeLaunchWait(wait time.Duration) (time.Duration, error) {
+	if wait <= 0 {
+		return 0, fmt.Errorf("--wait must be greater than 0")
+	}
+	return wait, nil
+}
+
 func launchDiscordInputs(opts launchOptions, cfg config.Config) (token, guildID, allowedUserID string, err error) {
 	token = strings.TrimSpace(opts.DiscordToken)
 	if token == "" {
 		token = strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
 	}
-	if token == "" && !(cfg.Discord.Enabled && strings.TrimSpace(cfg.Discord.BotToken) != "") {
+	if token == "" {
+		token = strings.TrimSpace(cfg.Discord.BotToken)
+	}
+	if token == "" {
 		return "", "", "", fmt.Errorf("discord bot token is required; set DISCORD_BOT_TOKEN or pass --discord-token")
 	}
 	guildID = strings.TrimSpace(opts.DiscordGuildID)
@@ -271,7 +285,7 @@ func startRuntimeDetached(executable string) (stdoutPath, stderrPath string, err
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
 	cmd.Stdin = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	configureDetachedRuntimeCommand(cmd)
 	if err := cmd.Start(); err != nil {
 		return "", "", err
 	}

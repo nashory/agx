@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -28,9 +27,12 @@ func AcquireLock(path string) (*Lock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open runtime lock: %w", err)
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockRuntimeFile(file); err != nil {
 		existing, _ := os.ReadFile(path)
 		_ = file.Close()
+		if len(existing) == 0 {
+			return nil, fmt.Errorf("acquire runtime lock: %w", err)
+		}
 		return nil, fmt.Errorf("agx runtime already running: %s", string(existing))
 	}
 	if err := file.Truncate(0); err != nil {
@@ -54,7 +56,7 @@ func (l *Lock) Release() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	err := unlockRuntimeFile(l.file)
 	if closeErr := l.file.Close(); err == nil {
 		err = closeErr
 	}
@@ -81,13 +83,13 @@ func LockHeld(path string) (bool, error) {
 		return false, fmt.Errorf("open runtime lock: %w", err)
 	}
 	defer func() { _ = file.Close() }()
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		if err == syscall.EWOULDBLOCK || err == syscall.EAGAIN {
+	if err := lockRuntimeFile(file); err != nil {
+		if isRuntimeLockHeldError(err) {
 			return true, nil
 		}
 		return false, fmt.Errorf("check runtime lock: %w", err)
 	}
-	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	_ = unlockRuntimeFile(file)
 	return false, nil
 }
 
