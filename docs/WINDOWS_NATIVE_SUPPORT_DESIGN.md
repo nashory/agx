@@ -80,6 +80,10 @@ Important current constraints:
 
 - Keep Unix behavior stable while adding Windows support behind platform
   backends.
+- Treat macOS/tmux behavior as the compatibility baseline. Native Windows work
+  is not allowed to change tmux session naming, tmux target naming, Desktop
+  terminal behavior, runtime Unix socket behavior, or existing recovery
+  semantics unless a separate migration plan is reviewed.
 - Start with the smallest native Windows feature set that can create, observe,
   and kill tasks reliably.
 - Prefer explicit capabilities over pretending all session backends behave like
@@ -88,6 +92,113 @@ Important current constraints:
   task is backed by tmux or Windows ConPTY.
 - Treat process cleanup as a correctness requirement, not best effort.
 - Keep local runtime transport authenticated when TCP is used.
+- Prefer additive build-tagged files and injected interfaces over platform
+  conditionals scattered through task logic.
+
+## macOS And tmux Compatibility Contract
+
+The first rule of native Windows work is that existing macOS/tmux support must
+keep working exactly as it works today.
+
+Protected behavior:
+
+- `tmux -L agx` remains the Unix session engine.
+- Existing tmux session names and window names remain stable.
+- Existing Desktop terminal streaming and task card status behavior remains
+  stable.
+- Existing `agx task attach` behavior remains tmux-backed on Unix platforms.
+- Existing Unix runtime socket path and permissions remain unchanged.
+- Existing launchd support remains unchanged.
+- Existing Linux, Docker, and WSL2 tmux behavior remains unchanged.
+- Existing task recovery rules for tmux windows remain unchanged.
+- Existing Discord channel sync behavior remains platform-neutral.
+
+Implementation guardrails:
+
+- Do not edit `internal/tmux` behavior while introducing Windows support unless
+  a tmux regression test is added in the same change.
+- Do not move tmux naming helpers into Windows-specific code.
+- Do not make the session backend choose behavior from global `runtime.GOOS`
+  checks inside business logic. Select the backend at runtime construction.
+- Do not add Windows-only fields to public API responses unless Unix clients can
+  ignore them safely.
+- Do not make TCP transport the default on macOS, Linux, Docker, or WSL2.
+- Do not make ConPTY packages part of non-Windows builds.
+- Do not remove or weaken tests that use fake tmux scripts.
+
+Every phase that touches shared task lifecycle code must prove the following
+before merge:
+
+```text
+go test ./...
+GOOS=windows GOARCH=amd64 go test -c ./cmd/agx
+```
+
+CI must also stay green for:
+
+- Unit Tests on ubuntu-latest.
+- Unit Tests on macos-latest.
+- Linux packaging.
+- Docker smoke.
+- Frontend tests and build.
+- Release verify.
+
+If a shared refactor causes any tmux behavior change, stop native Windows work
+and fix the tmux regression before continuing.
+
+## Current tmux Call Surface
+
+The initial backend interface should be derived from the operations already used
+by the runtime. This avoids designing an abstract terminal system that is larger
+than AGX needs.
+
+Current direct tmux operations include:
+
+| Area | Current operation | Backend meaning |
+| --- | --- | --- |
+| Startup | `HasTmux`, `HasServer` | Detect backend availability and recovery viability. |
+| Project session | `HasSession`, `CreateSession`, `KillSession` | Create or stop a project-scoped session container. |
+| Task start | `CreateWindow`, `WindowExists` | Start one task and verify it stayed alive. |
+| Input | `SendKeys`, `SendEnter`, `SendInput`, `SendKey("C-c")` | Send prompt text, raw bytes, enter, and interrupt. |
+| Terminal | `ResizeWindow`, `CapturePane`, `CapturePaneWithHistory` | Resize and snapshot recent output. |
+| Logging | `ReplacePipePane`, `StopPipePane` | Mirror terminal output into task log files. |
+| Cleanup | `KillWindow`, `WindowCount`, `WindowName` | Stop task windows and remove default project windows. |
+| Workspace | `PaneCurrentPath` | Validate that a task is still in the expected directory. |
+
+The tmux backend should initially be a thin adapter over these exact operations.
+Only after that adapter is covered by regression tests should the Windows
+backend be implemented.
+
+## Refactor Strategy
+
+The safe refactor sequence is:
+
+1. Add a small `session.Backend` interface without changing behavior.
+2. Implement `session.TmuxBackend` as a wrapper around the existing
+   `tmux.Controller`.
+3. Change `session.Manager` to depend on the interface while still constructing
+   the tmux backend on all supported Unix paths.
+4. Keep the public `NewManager` constructor compatible where possible. If a new
+   constructor is required, add it alongside the old one first and migrate call
+   sites in small commits.
+5. Move recovery logic behind backend methods only after the manager lifecycle
+   tests pass with the tmux backend.
+6. Add a fake backend for unit tests. Use it to test manager behavior without
+   real tmux.
+7. Add the Windows backend behind `//go:build windows` after the tmux backend
+   is stable.
+
+The first refactor should not:
+
+- add ConPTY
+- add Windows TCP transport
+- change database schema
+- change Desktop UI
+- change Discord behavior
+- change tmux command construction
+
+This keeps the highest-risk change, removing direct tmux coupling, reviewable
+and reversible.
 
 ## Target Architecture
 
@@ -154,6 +265,40 @@ Required capabilities:
 tmux-specific concepts such as socket names, tmux sessions, tmux windows, pane
 capture, and pipe-pane should not leak above this boundary.
 
+### Backend Capabilities
+
+Backends should expose capabilities because tmux and ConPTY will not be
+identical.
+
+Example capabilities:
+
+```go
+type Capabilities struct {
+    InteractiveAttach bool
+    Resize            bool
+    RecoverLiveTasks  bool
+    StreamToFile      bool
+    ProjectContainer  bool
+}
+```
+
+Expected initial capability matrix:
+
+| Capability | tmux backend | Windows ConPTY MVP |
+| --- | --- | --- |
+| Start task | yes | yes |
+| Send text | yes | yes |
+| Send raw input | yes | yes |
+| Interrupt | yes | yes |
+| Resize | yes | yes if ConPTY wrapper supports it |
+| Snapshot recent output | yes, pane capture | yes, log tail |
+| Stream logs | yes, pipe-pane | yes, append-only log writer |
+| Recover live tasks | yes | limited in MVP |
+| Direct attach | yes | not required in MVP |
+| Project session container | yes | no, task process tree only |
+
+Runtime and UI code should branch on capabilities, not on platform names.
+
 ## Windows Session Backend
 
 Native Windows should use ConPTY for interactive terminal behavior. ConPTY gives
@@ -173,6 +318,39 @@ The first Windows backend should support:
 The Windows backend should not try to implement tmux windows. A task session is
 one process tree plus one terminal stream.
 
+Recommended package shape:
+
+```text
+internal/session/backend.go
+    shared Backend interface and shared request/response structs
+
+internal/session/tmux_backend.go
+    tmux adapter, built on every current Unix runtime path
+
+internal/session/conpty_backend_windows.go
+    Windows ConPTY backend
+
+internal/session/conpty_backend_stub.go
+    non-Windows stub returning unsupported if accidentally selected
+```
+
+The Windows backend should be developed on a real Windows machine. GitHub
+Actions can compile and run unit tests, but it should not be treated as enough
+validation for interactive terminal behavior.
+
+Manual Windows development matrix:
+
+| Scenario | Why it matters |
+| --- | --- |
+| Windows Terminal + PowerShell | Primary native CLI environment. |
+| Plain PowerShell host | Catches console assumptions hidden by Windows Terminal. |
+| Project path with spaces | Validates quoting and working directory handling. |
+| Long-running command | Validates output streaming and process lifetime. |
+| Command spawning children | Validates Job Object cleanup. |
+| Agent interrupted mid-run | Validates Ctrl+C or equivalent interrupt. |
+| Runtime restart while task is running | Defines real recovery behavior. |
+| Discord task create/delete | Validates end-to-end bridge behavior. |
+
 Recommended state model:
 
 ```text
@@ -185,6 +363,20 @@ task row
 
 If the existing schema cannot store this cleanly, add a small migration instead
 of overloading tmux session names with Windows-specific data.
+
+### ConPTY Library Evaluation
+
+Before committing to a dependency, evaluate at least:
+
+- whether the library supports resize
+- whether it exposes stdin/stdout cleanly
+- whether it works under GitHub Actions Windows runners
+- whether it leaves child processes behind on forced termination
+- whether it has active maintenance and a small dependency graph
+- whether AGX can wrap it behind the backend interface without leaking library
+  types into runtime code
+
+The selected dependency must stay isolated to Windows build-tagged files.
 
 ## Runtime Transport
 
@@ -205,6 +397,20 @@ Longer term, Windows named pipes can be evaluated for a more native private IPC
 model. The MVP should prefer the simpler TCP path because it works with the
 existing HTTP runtime API, CLI, and future Desktop clients.
 
+Transport compatibility rules:
+
+- Unix builds continue using the Unix socket client by default.
+- Windows native builds use authenticated localhost TCP by default.
+- WSL2 continues using the Unix socket inside the WSL2 Linux environment.
+- The runtime API routes stay the same across transports.
+- Tests should verify auth failure, missing token, token rotation, and wrong
+  port behavior.
+- Logs should include the selected transport, bind address, token file path, and
+  explicit warnings when a client is rejected for auth failure.
+
+The TCP listener must bind to loopback only. It must never listen on `0.0.0.0`
+or a LAN interface unless a future explicit remote-control design is approved.
+
 ## Runtime And Discord Locks
 
 Native Windows needs real ownership locks. It must not use no-op locks.
@@ -224,6 +430,18 @@ process id, AGX version, Discord server id when applicable, and last heartbeat.
 If a stale lock is detected, AGX should report the owner details and provide a
 clear recovery command rather than silently stealing ownership.
 
+Locking behavior must be tested separately from Discord behavior:
+
+- two runtimes using the same config on one Windows machine
+- two Discord bridges using the same config on one Windows machine
+- two machines trying to own the same Discord server
+- stale local lock with dead process
+- stale remote owner with expired heartbeat
+- corrupt lock metadata
+
+Any lock bypass should require an explicit command and should log the old owner
+metadata before replacement.
+
 ## Discord Behavior
 
 Discord should remain runtime-owned and platform-neutral.
@@ -242,6 +460,21 @@ Native Windows support must preserve:
 Discord task creation should not care whether the session backend is tmux or
 ConPTY. It should receive normal task lifecycle errors from the runtime API and
 surface them to Discord users.
+
+Native Windows Discord support should be implemented after the runtime can
+create and kill local tasks without Discord. Otherwise Discord failures will
+hide lower-level session bugs.
+
+Slash-command behavior should be tested through fake Discord clients:
+
+| Command | Runtime dependency | Expected failure surface |
+| --- | --- | --- |
+| `/project create` | store, path validation | Discord ephemeral error and AGX log |
+| `/project remove` | store, task cleanup | Discord ephemeral error and AGX log |
+| `/task create` | session backend, worktree, store | Discord ephemeral error and AGX log |
+| `/task remove` | session backend cleanup | Discord ephemeral error and AGX log |
+
+The Discord bridge should not contain Windows-specific process logic.
 
 ## CLI And Launcher UX
 
@@ -274,6 +507,38 @@ future:
 - selected shell available
 - ConPTY backend available
 
+Native Windows launch should be explicit until it is proven:
+
+```text
+agx launch --platform windows
+    WSL2 Ubuntu path, current behavior
+
+agx launch --platform windows-native
+    native preview path, only valid on GOOS=windows
+```
+
+If the native preview is attempted on macOS, Linux, Docker, or WSL2, the command
+should fail with a clear message that development and validation must happen on
+a real Windows host.
+
+Launcher preflight should print a concise table:
+
+```text
+AGX native Windows preflight
+  config directory     ok
+  runtime lock         ok
+  runtime transport    ok, 127.0.0.1:<port>
+  discord server id    ok
+  discord owner guard  ok
+  git                  ok
+  agent: codex         missing
+  shell: powershell    ok
+  conpty               ok
+```
+
+Preflight should fail before starting Discord if required local execution
+dependencies are missing.
+
 ## Process Cleanup
 
 Native Windows task cleanup must be deliberate.
@@ -292,6 +557,20 @@ Delete and kill flows should:
 - only remove worktrees after process cleanup has completed or failed
   explicitly
 
+Cleanup error policy:
+
+| Step | If it fails |
+| --- | --- |
+| graceful interrupt | continue to forced stop after timeout; log warning |
+| forced process kill | return error; do not pretend task cleanup succeeded |
+| worktree delete | return warning/error through API and log exact path |
+| database status update | return error; preserve cleanup diagnostics |
+| Discord channel delete | retry asynchronously; do not block local process cleanup |
+
+This is intentionally stricter than best effort cleanup. Hidden cleanup failures
+create stale worktrees and orphaned processes, which are worse on Windows where
+file locks can make later deletes confusing.
+
 ## Path And Shell Rules
 
 Native Windows cannot reuse POSIX quoting rules.
@@ -306,15 +585,90 @@ Required behavior:
 - validate Git worktree behavior on Windows paths
 - keep WSL2 paths and native Windows paths separate in docs and config
 
+Shell execution should avoid constructing one large command string when
+possible. Prefer:
+
+- explicit executable path
+- explicit argument array
+- explicit working directory
+- explicit environment
+- script files for complex startup sequences
+
+When script files are required, write PowerShell scripts with Windows line
+endings and quote values through PowerShell-safe helpers, not POSIX shell
+helpers.
+
+Path compatibility tests should include:
+
+```text
+C:\Users\name\src\agx
+C:\Users\name\src\project with spaces
+C:\Users\name\.config\agx\worktrees\<task>
+```
+
+WSL paths such as `/mnt/c/...` are not native Windows paths and should not be
+accepted by native Windows project registration unless a future explicit
+interop mode is designed.
+
+## Database And Migration Rules
+
+Native Windows support may require storing backend metadata. Schema changes must
+be additive and backward compatible.
+
+Rules:
+
+- Existing rows with `session_name` continue to mean tmux-backed tasks.
+- Existing Desktop builds should not crash when reading rows created before the
+  migration.
+- New nullable fields are preferred over changing the meaning of existing tmux
+  fields.
+- Migrations must be idempotent and tested from an old schema fixture.
+- Downgrade behavior should be documented if a new schema cannot be read by an
+  older binary.
+
+Do not store Windows process ids in fields that currently mean tmux window
+names. That makes recovery and debugging ambiguous.
+
+## Observability
+
+Native Windows failures must be diagnosable from AGX logs without attaching a
+debugger.
+
+Required log events:
+
+- selected session backend and capabilities
+- selected runtime transport and bind address
+- runtime token file path, without printing token contents
+- lock acquisition, owner metadata, and stale lock decisions
+- project registration path normalization
+- task start request with backend, shell, working directory, and agent name
+- process start result with pid and log path
+- ConPTY attach/start failure details
+- input send failures
+- interrupt request and result
+- graceful stop timeout
+- forced kill request and result
+- worktree cleanup success/failure
+- Discord command request id and runtime task id correlation
+
+Logs must never include:
+
+- Discord bot token
+- runtime auth token
+- agent provider API keys
+- full prompt text unless the existing logging policy already records it
+
 ## Phased Plan
 
 ### P0: Design And Guardrails
 
-- Add this design document.
+- Add this design document and keep it updated as implementation discovers
+  Windows-specific constraints.
 - Keep docs clear that Windows is currently WSL2 unless native preview is
   explicitly selected.
 - Add explicit unsupported errors for native Windows paths that are not ready.
 - Make sure launch preflight errors explain WSL2 versus native Windows clearly.
+- Add CI compile checks for Windows if they are missing.
 
 ### P1: Session Backend Interface
 
@@ -324,6 +678,9 @@ Required behavior:
 - Add fake backend unit tests for manager task lifecycle behavior.
 - Add regression tests for start, send input, interrupt, snapshot, kill,
   recovery, and project cleanup.
+- Confirm Desktop terminal streaming and `agx task attach` still use the tmux
+  backend on macOS.
+- Commit this phase before any Windows ConPTY code is added.
 
 ### P2: Windows Transport And Locks
 
@@ -333,6 +690,7 @@ Required behavior:
 - Add tests for token validation, stale lock diagnostics, and duplicate owner
   rejection.
 - Add `agx doctor` or launch preflight checks for native Windows.
+- Keep WSL2 launch behavior unchanged.
 
 ### P3: ConPTY MVP
 
@@ -342,6 +700,8 @@ Required behavior:
 - Implement snapshots from logs.
 - Implement input, interrupt, and process-tree kill.
 - Add Windows compile tests and targeted unit tests on `windows-latest`.
+- Validate manually on a real Windows machine before advertising the feature.
+- Keep direct attach out of scope unless the basic task lifecycle is stable.
 
 ### P4: Native Discord Task Flow
 
@@ -351,6 +711,8 @@ Required behavior:
 - Return visible Discord errors when task creation or cleanup fails.
 - Verify task channel create/delete sync latency remains within the existing
   target under normal Discord API conditions.
+- Verify a second machine is blocked from controlling an already-owned Discord
+  server.
 
 ### P5: Service And Packaging
 
@@ -385,6 +747,17 @@ Required test layers:
 - Discord tests with fake Discord clients. Real Discord API calls should not be
   required in CI.
 
+Regression tests that protect existing tmux behavior:
+
+- tmux command construction tests.
+- manager lifecycle tests using fake tmux scripts.
+- task start failure cleanup tests.
+- task stop/delete cleanup warning tests.
+- recovery tests for missing tmux server, missing session, and missing window.
+- Desktop tests proving the runtime owns tmux rather than Desktop creating its
+  own controller unexpectedly.
+- CLI attach tests proving Unix attach still targets the stored tmux window.
+
 Manual release validation:
 
 ```text
@@ -399,7 +772,27 @@ native Windows:
 
 WSL2 Windows:
   existing documented WSL2 path still works
+
+macOS regression:
+  create a project from Desktop
+  create a task in project mode
+  stream terminal output
+  send input
+  interrupt
+  attach through CLI
+  kill/delete task
+  verify worktree cleanup
+
+Linux/WSL2 regression:
+  agx launch --platform linux or windows as documented
+  create task through CLI or Discord
+  verify tmux session exists
+  kill/delete task
+  verify runtime socket path remains Unix socket
 ```
+
+Windows machine validation should be tracked separately from GitHub CI. The
+feature should not be marked complete based only on cross-compilation.
 
 ## Risks
 
@@ -410,6 +803,28 @@ WSL2 Windows:
 - TCP transport without authentication would be a local security bug.
 - Stale local locks and stale Discord owner records can block legitimate users.
 - Full interactive attach may be harder than task create/log/kill.
+- Session backend abstraction may accidentally hide tmux-specific guarantees
+  that Desktop depends on.
+- Schema changes may make older Desktop builds read ambiguous task state.
+
+## Rollback Plan
+
+Every implementation phase should be independently revertible.
+
+Rollback rules:
+
+- P1 can be reverted to restore direct tmux usage if backend abstraction causes
+  regressions.
+- P2 TCP transport must be isolated so Unix socket behavior remains untouched.
+- P3 ConPTY code must be build-tagged so it can be disabled without changing
+  macOS/Linux binaries.
+- P4 Discord native Windows enablement should be behind platform/preflight
+  checks so it can be turned off without removing Discord support elsewhere.
+- Database migrations must tolerate binaries that do not use Windows backend
+  fields.
+
+If a release ships with native Windows preview disabled, users should still be
+able to use WSL2 Windows exactly as before.
 
 ## Acceptance Criteria
 
@@ -426,3 +841,15 @@ Native Windows support is ready to advertise when:
 - Worktree cleanup failures are logged and returned as warnings/errors.
 - A second machine is blocked from attaching to an already-owned Discord server.
 - User-facing docs clearly explain native Windows versus WSL2.
+
+## Open Questions
+
+- Which ConPTY Go wrapper is the best fit after real Windows validation?
+- Should native Windows use `windows-native` long term, or should `windows`
+  eventually mean native when run on GOOS=windows?
+- Which agent CLIs are officially supported natively on Windows for the first
+  release?
+- Should direct attach be implemented through ConPTY streaming, a log-only view,
+  or deferred until a Windows Desktop/TUI story exists?
+- What is the safest operator flow for breaking stale Discord ownership from a
+  dead machine?
