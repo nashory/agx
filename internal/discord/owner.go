@@ -18,7 +18,21 @@ const (
 
 var ownerClaimSettleDelay = 250 * time.Millisecond
 
+// ownerNow returns the current time for owner heartbeats and staleness checks. It
+// is a variable so tests can control time.
+var ownerNow = func() time.Time { return time.Now().UTC() }
+
+// ownerStaleThreshold is how long an owner's heartbeat may go unrefreshed before
+// another runtime may explicitly take ownership. It is roughly three heartbeat
+// intervals so a briefly paused owner is not treated as dead.
+var ownerStaleThreshold = 90 * time.Second
+
 var ErrGuildOwnerConflict = errors.New("discord guild is already owned by another AGX runtime")
+
+// ErrGuildOwnerStale reports that the current owner's heartbeat has expired. AGX
+// never steals ownership automatically; the operator must run an explicit
+// takeover.
+var ErrGuildOwnerStale = errors.New("discord guild owner is stale; run an explicit takeover to claim it")
 
 type ownerClient interface {
 	EnsureControlChannel(ctx context.Context, guildID, name string) (string, error)
@@ -27,6 +41,13 @@ type ownerClient interface {
 }
 
 func newGuildOwner(mode string) string {
+	return newGuildOwnerEpoch(mode, 0)
+}
+
+// newGuildOwnerEpoch builds an owner record at the given generation epoch with a
+// fresh heartbeat. Takeover increments the epoch so a resumed previous owner can
+// detect it has been superseded.
+func newGuildOwnerEpoch(mode string, epoch int) string {
 	host, _ := os.Hostname()
 	host = strings.TrimSpace(host)
 	if host == "" {
@@ -36,7 +57,9 @@ func newGuildOwner(mode string) string {
 	if mode == "" {
 		mode = "runtime"
 	}
-	return fmt.Sprintf("id=%s host=%s pid=%d mode=%s started=%s", db.NewTaskID(), compactOwnerField(host), os.Getpid(), compactOwnerField(mode), time.Now().UTC().Format(time.RFC3339))
+	now := ownerNow().Format(time.RFC3339)
+	return fmt.Sprintf("id=%s host=%s pid=%d mode=%s epoch=%d started=%s heartbeat=%s",
+		db.NewTaskID(), compactOwnerField(host), os.Getpid(), compactOwnerField(mode), epoch, now, now)
 }
 
 func compactOwnerField(value string) string {
@@ -67,7 +90,10 @@ func claimGuildOwner(ctx context.Context, client ownerClient, guildID, owner str
 	if err != nil {
 		return "", err
 	}
-	if existing := ownerFromTopic(channel.Topic); existing != "" && existing != owner {
+	if existing := ownerFromTopic(channel.Topic); existing != "" && !sameOwner(existing, owner) {
+		if parseOwnerInfo(existing).isStale(ownerNow()) {
+			return "", guildOwnerStaleError(existing)
+		}
 		return "", guildOwnerConflictError(existing)
 	}
 	if err := client.UpdateChannelTopic(ctx, controlChannelID, topicWithOwner(channel.Topic, owner)); err != nil {
@@ -86,7 +112,7 @@ func claimGuildOwner(ctx context.Context, client ownerClient, guildID, owner str
 	if err != nil {
 		return "", err
 	}
-	if existing := ownerFromTopic(channel.Topic); existing != owner {
+	if existing := ownerFromTopic(channel.Topic); !sameOwner(existing, owner) {
 		if existing == "" {
 			return "", fmt.Errorf("discord guild owner claim was not persisted")
 		}
@@ -103,7 +129,7 @@ func releaseGuildOwner(ctx context.Context, client ownerClient, guildID, control
 	if err != nil {
 		return err
 	}
-	if ownerFromTopic(channel.Topic) != strings.TrimSpace(owner) {
+	if !sameOwner(ownerFromTopic(channel.Topic), owner) {
 		return nil
 	}
 	if err := client.UpdateChannelTopic(ctx, controlChannelID, topicWithoutOwner(channel.Topic)); err != nil {

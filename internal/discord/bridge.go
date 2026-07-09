@@ -32,29 +32,30 @@ type Status struct {
 // Bridge owns the Discord bot connection and coordinates channel sync, command
 // routing, and live structured-agent event forwarding for one AGX runtime.
 type Bridge struct {
-	lifecycle sync.Mutex
-	mu        sync.Mutex
-	hardSync  sync.RWMutex
-	taskSync  chan struct{}
-	maintSync chan struct{}
-	chanSync  chan struct{}
-	syncState sync.Mutex
-	active    map[string]activeSync
-	permMu    sync.Mutex
-	permRun   bool
-	permNext  bool
-	cfg       config.DiscordConfig
-	bot       *Bot
-	lock      *Lock
-	service   CommandService
-	events    AgentEventSubscriber
-	store     *db.Store
-	streams   map[string]taskStream
-	owner     string
-	ownerChan string
-	startedAt time.Time
-	lastErr   string
-	connected bool
+	lifecycle          sync.Mutex
+	mu                 sync.Mutex
+	hardSync           sync.RWMutex
+	taskSync           chan struct{}
+	maintSync          chan struct{}
+	chanSync           chan struct{}
+	syncState          sync.Mutex
+	active             map[string]activeSync
+	permMu             sync.Mutex
+	permRun            bool
+	permNext           bool
+	cfg                config.DiscordConfig
+	bot                *Bot
+	lock               *Lock
+	service            CommandService
+	events             AgentEventSubscriber
+	store              *db.Store
+	streams            map[string]taskStream
+	owner              string
+	ownerChan          string
+	ownerHeartbeatStop chan struct{}
+	startedAt          time.Time
+	lastErr            string
+	connected          bool
 }
 
 type taskStream struct {
@@ -210,6 +211,7 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error
 			return err
 		}
 	}
+	heartbeatStop := make(chan struct{})
 	b.mu.Lock()
 	b.bot = bot
 	b.lock = lock
@@ -217,14 +219,51 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error
 	b.connected = true
 	b.owner = owner
 	b.ownerChan = ownerChannelID
+	b.ownerHeartbeatStop = heartbeatStop
 	b.lastErr = ""
 	b.mu.Unlock()
+	go b.runOwnerHeartbeat(bot, cfg.GuildID, ownerChannelID, owner, heartbeatStop)
 	if store != nil && initialSync {
 		go b.syncActiveTasksAfterStart(store, bot, cfg.GuildID)
 	} else {
 		b.syncTaskStreams(context.Background())
 	}
 	return nil
+}
+
+// runOwnerHeartbeat periodically refreshes this runtime's owner heartbeat so
+// other runtimes can tell it is alive. If the control channel is taken over by
+// another runtime (a newer epoch), it self-fences by stopping the bridge instead
+// of contending for the guild.
+func (b *Bridge) runOwnerHeartbeat(bot *Bot, guildID, channelID, owner string, stop chan struct{}) {
+	ticker := time.NewTicker(ownerHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			refreshed, superseded, err := refreshGuildOwner(ctx, bot, guildID, channelID, owner)
+			cancel()
+			if err != nil {
+				continue
+			}
+			if superseded {
+				go func() {
+					_ = b.Stop()
+					b.setError(fmt.Errorf("discord ownership was taken over by another AGX runtime"))
+				}()
+				return
+			}
+			owner = refreshed
+			b.mu.Lock()
+			if b.owner != "" && sameOwner(b.owner, owner) {
+				b.owner = owner
+			}
+			b.mu.Unlock()
+		}
+	}
 }
 
 func (b *Bridge) syncActiveTasksAfterStart(store *db.Store, bot *Bot, guildID string) {
@@ -253,15 +292,20 @@ func (b *Bridge) Stop() error {
 	cfg := b.cfg
 	owner := b.owner
 	ownerChannelID := b.ownerChan
+	heartbeatStop := b.ownerHeartbeatStop
 	b.cancelTaskStreamsLocked()
 	b.bot = nil
 	b.lock = nil
 	b.owner = ""
 	b.ownerChan = ""
+	b.ownerHeartbeatStop = nil
 	b.connected = false
 	b.startedAt = time.Time{}
 	b.lastErr = ""
 	b.mu.Unlock()
+	if heartbeatStop != nil {
+		close(heartbeatStop)
+	}
 
 	var err error
 	if bot != nil {
