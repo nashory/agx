@@ -49,7 +49,7 @@ func newLaunchCmdWithRunner(runner launchRunner) *cobra.Command {
 			return runner(ctx, cmd, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.Platform, "platform", "", "target platform: windows, macos, linux (default: current host; windows means WSL2)")
+	cmd.Flags().StringVar(&opts.Platform, "platform", "", "target platform: windows, macos, linux (default: current host; windows means native Windows)")
 	cmd.Flags().StringVar(&opts.DiscordToken, "discord-token", "", "Discord bot token; prefer DISCORD_BOT_TOKEN to avoid shell history and process args")
 	cmd.Flags().StringVar(&opts.DiscordGuildID, "guild", "", "Discord guild/server ID; defaults to config.toml")
 	cmd.Flags().StringVar(&opts.DiscordGuildID, "discord-server-id", "", "Discord server/guild ID; defaults to config.toml")
@@ -67,7 +67,7 @@ func runLaunch(ctx context.Context, cmd *cobra.Command, opts launchOptions) erro
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "launch platform: %s\n", platform)
 	if platform == "windows" {
-		fmt.Fprintln(cmd.OutOrStdout(), "windows launch uses the Linux runtime inside WSL2 Ubuntu")
+		fmt.Fprintln(cmd.OutOrStdout(), "windows launch runs the runtime natively (no WSL2 or Docker)")
 	}
 	if err := os.MkdirAll(config.ConfigDir(), 0o700); err != nil {
 		return fmt.Errorf("create AGX config dir: %w", err)
@@ -79,7 +79,7 @@ func runLaunch(ctx context.Context, cmd *cobra.Command, opts launchOptions) erro
 	if err := requireLaunchTool("git"); err != nil {
 		return err
 	}
-	if err := requireLaunchTool("tmux"); err != nil {
+	if err := requireSessionTool(platform); err != nil {
 		return err
 	}
 	warnIfDefaultAgentMissing(cmd, cfg)
@@ -123,8 +123,10 @@ func normalizeLaunchPlatform(value, goos string) (string, error) {
 			platform = "macos"
 		case "linux":
 			platform = "linux"
+		case "windows":
+			platform = "windows"
 		default:
-			return "", fmt.Errorf("unsupported host platform %q; use WSL2 Ubuntu for Windows", goos)
+			return "", fmt.Errorf("unsupported host platform %q", goos)
 		}
 	}
 	if platform == "darwin" {
@@ -132,8 +134,8 @@ func normalizeLaunchPlatform(value, goos string) (string, error) {
 	}
 	switch platform {
 	case "windows":
-		if goos != "linux" {
-			return "", fmt.Errorf("windows launch must be run inside WSL2 Ubuntu")
+		if goos != "windows" {
+			return "", fmt.Errorf("windows launch must be run on native Windows (WSL2 is no longer supported; use --platform linux inside a WSL2 shell)")
 		}
 		return platform, nil
 	case "macos":
@@ -203,6 +205,16 @@ func requireLaunchTool(name string) error {
 	return nil
 }
 
+// requireSessionTool checks the terminal backend prerequisite for the target
+// platform: native Windows drives tasks through ConPTY under PowerShell, while
+// every other platform uses tmux.
+func requireSessionTool(platform string) error {
+	if platform == "windows" {
+		return requireLaunchTool("powershell")
+	}
+	return requireLaunchTool("tmux")
+}
+
 func warnIfDefaultAgentMissing(cmd *cobra.Command, cfg config.Config) {
 	registry := agent.NewRegistry(cfg.DefaultAgent, agent.FromConfig(cfg)...)
 	defaultName := registry.DefaultName()
@@ -225,16 +237,20 @@ func ensureRuntimeLaunched(ctx context.Context, cmd *cobra.Command, client *agxr
 		return nil
 	}
 	cancel()
-	manager := agxruntime.CurrentRuntimeServiceManager()
-	if manager.Name() == "unsupported" {
-		return fmt.Errorf("runtime service installation is not supported on this platform")
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
+	}
+	manager := agxruntime.CurrentRuntimeServiceManager()
+	if manager.Name() == "unsupported" {
+		// No OS service manager (for example native Windows before Windows
+		// service support lands): start the runtime as a detached background
+		// process instead of failing.
+		fmt.Fprintln(cmd.OutOrStdout(), "runtime: no service manager on this platform, starting detached")
+		return launchDetachedRuntime(ctx, cmd, client, exe, wait)
 	}
 	message, installErr := manager.Install(ctx, exe, false)
 	if installErr != nil {
@@ -262,6 +278,24 @@ func ensureRuntimeLaunched(ctx context.Context, cmd *cobra.Command, client *agxr
 	status, err := waitForRuntime(ctx, client, wait)
 	if err != nil {
 		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "runtime: running pid=%d\n", status.PID)
+	return nil
+}
+
+// launchDetachedRuntime starts the runtime as a detached background process and
+// waits for it to become reachable. It is used when the platform has no OS
+// service manager.
+func launchDetachedRuntime(ctx context.Context, cmd *cobra.Command, client *agxruntime.Client, exe string, wait time.Duration) error {
+	stdoutPath, stderrPath, err := startRuntimeDetached(exe)
+	if err != nil {
+		return fmt.Errorf("start detached runtime: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "runtime log: %s\n", stdoutPath)
+	fmt.Fprintf(cmd.OutOrStdout(), "runtime error log: %s\n", stderrPath)
+	status, err := waitForRuntime(ctx, client, wait)
+	if err != nil {
+		return fmt.Errorf("detached runtime did not become ready: %w", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "runtime: running pid=%d\n", status.PID)
 	return nil

@@ -37,7 +37,7 @@ func newRuntimeStartCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			service := agxruntime.NewService(versionString())
-			fmt.Fprintf(cmd.ErrOrStderr(), "Starting AGX runtime on %s\n", agxruntime.DefaultPaths().Socket)
+			fmt.Fprintf(cmd.ErrOrStderr(), "Starting AGX runtime (config: %s)\n", agxruntime.DefaultPaths().ConfigDir)
 			if err := service.Start(ctx); err != nil && ctx.Err() == nil {
 				return err
 			}

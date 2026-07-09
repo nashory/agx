@@ -506,8 +506,10 @@ func TestNormalizeLaunchPlatform(t *testing.T) {
 	}{
 		{name: "auto linux", goos: "linux", want: "linux"},
 		{name: "auto macos", goos: "darwin", want: "macos"},
-		{name: "windows from linux", value: "windows", goos: "linux", want: "windows"},
-		{name: "windows from macos", value: "windows", goos: "darwin", wantErr: "WSL2"},
+		{name: "auto windows", goos: "windows", want: "windows"},
+		{name: "windows from windows", value: "windows", goos: "windows", want: "windows"},
+		{name: "windows from linux rejected", value: "windows", goos: "linux", wantErr: "native Windows"},
+		{name: "windows from macos rejected", value: "windows", goos: "darwin", wantErr: "native Windows"},
 		{name: "linux typo rejected", value: "lunux", goos: "linux", wantErr: "unsupported launch platform"},
 	}
 	for _, tt := range tests {
