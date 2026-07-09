@@ -37,6 +37,10 @@ func (e TaskNotLiveError) Unwrap() error {
 type CommandService interface {
 	ListTasks(ctx context.Context) ([]TaskSummary, error)
 	ListProjects(ctx context.Context) ([]ProjectSummary, error)
+	CreateProject(ctx context.Context, path, name, defaultAgent string) (ProjectSummary, error)
+	DeleteProject(ctx context.Context, projectRef string) (ProjectSummary, error)
+	CreateTask(ctx context.Context, projectRef, title, prompt, agentName, workspaceMode string, allMighty bool) (TaskSummary, error)
+	DeleteTask(ctx context.Context, taskRef string) (TaskSummary, error)
 	IsControlChannel(ctx context.Context, channelID string) (bool, error)
 	SoftSync(ctx context.Context) error
 	HardSync(ctx context.Context, preserveControlChannelID string) error
@@ -162,6 +166,24 @@ func ApplicationCommands() []*discordgo.ApplicationCommand {
 					Name:        "list",
 					Description: "List registered AGX projects",
 				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "create",
+					Description: "Register a git project path with AGX",
+					Options: []*discordgo.ApplicationCommandOption{
+						{Type: discordgo.ApplicationCommandOptionString, Name: "path", Description: "Absolute project path visible to the AGX runtime", Required: true},
+						{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: "Display name", Required: false},
+						{Type: discordgo.ApplicationCommandOptionString, Name: "agent", Description: "Default agent", Required: false},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "delete",
+					Description: "Delete an AGX project and its tasks",
+					Options: []*discordgo.ApplicationCommandOption{
+						{Type: discordgo.ApplicationCommandOptionString, Name: "project", Description: "Project name, id, or absolute path", Required: true},
+					},
+				},
 			},
 		},
 		{
@@ -172,6 +194,36 @@ func ApplicationCommands() []*discordgo.ApplicationCommand {
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "list",
 					Description: "List current AGX tasks",
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "create",
+					Description: "Create a Discord-controlled AGX task",
+					Options: []*discordgo.ApplicationCommandOption{
+						{Type: discordgo.ApplicationCommandOptionString, Name: "project", Description: "Project name, id, or absolute path", Required: true},
+						{Type: discordgo.ApplicationCommandOptionString, Name: "title", Description: "Task title", Required: true},
+						{Type: discordgo.ApplicationCommandOptionString, Name: "prompt", Description: "Initial prompt", Required: false},
+						{Type: discordgo.ApplicationCommandOptionString, Name: "agent", Description: "Agent name", Required: false},
+						{
+							Type:        discordgo.ApplicationCommandOptionString,
+							Name:        "workspace-mode",
+							Description: "Workspace mode",
+							Required:    false,
+							Choices: []*discordgo.ApplicationCommandOptionChoice{
+								{Name: "worktree", Value: "worktree"},
+								{Name: "project", Value: "project"},
+							},
+						},
+						{Type: discordgo.ApplicationCommandOptionBoolean, Name: "all-mighty", Description: "Grant unrestricted agent permissions", Required: false},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "delete",
+					Description: "Delete an AGX task and its Discord channel",
+					Options: []*discordgo.ApplicationCommandOption{
+						{Type: discordgo.ApplicationCommandOptionString, Name: "task", Description: "Task id or id prefix", Required: true},
+					},
 				},
 			},
 		},
@@ -220,13 +272,23 @@ func (r *CommandRouter) Execute(ctx context.Context, input CommandInput) (Comman
 	case "hard-sync":
 		return r.hardSync(ctx, input)
 	case "project":
-		if input.Subcommand == "list" {
+		switch input.Subcommand {
+		case "list":
 			return r.projectList(ctx)
+		case "create":
+			return r.projectCreate(ctx, input)
+		case "delete":
+			return r.projectDelete(ctx, input)
 		}
 		return CommandResponse{}, fmt.Errorf("unknown project command %q", input.Subcommand)
 	case "task":
-		if input.Subcommand == "list" {
+		switch input.Subcommand {
+		case "list":
 			return r.taskList(ctx)
+		case "create":
+			return r.taskCreate(ctx, input)
+		case "delete":
+			return r.taskDelete(ctx, input)
 		}
 		return CommandResponse{}, fmt.Errorf("unknown task command %q", input.Subcommand)
 	case "interrupt":
@@ -511,6 +573,60 @@ func (r *CommandRouter) projectList(ctx context.Context) (CommandResponse, error
 	return CommandResponse{Content: strings.TrimSpace(b.String())}, nil
 }
 
+func (r *CommandRouter) projectCreate(ctx context.Context, input CommandInput) (CommandResponse, error) {
+	project, err := r.service.CreateProject(ctx, input.Options["path"], input.Options["name"], input.Options["agent"])
+	if err != nil {
+		return CommandResponse{}, err
+	}
+	return CommandResponse{Content: fmt.Sprintf("Project `%s` registered at `%s`.", project.Name, project.Path)}, nil
+}
+
+func (r *CommandRouter) projectDelete(ctx context.Context, input CommandInput) (CommandResponse, error) {
+	project, err := r.service.DeleteProject(ctx, input.Options["project"])
+	if err != nil {
+		return CommandResponse{}, err
+	}
+	return CommandResponse{Content: fmt.Sprintf("Project `%s` deleted.", project.Name)}, nil
+}
+
+func (r *CommandRouter) taskCreate(ctx context.Context, input CommandInput) (CommandResponse, error) {
+	allMighty := true
+	if raw := strings.TrimSpace(input.Options["all-mighty"]); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return CommandResponse{}, fmt.Errorf("all-mighty must be true or false")
+		}
+		allMighty = parsed
+	}
+	task, err := r.service.CreateTask(ctx,
+		input.Options["project"],
+		input.Options["title"],
+		input.Options["prompt"],
+		input.Options["agent"],
+		input.Options["workspace-mode"],
+		allMighty,
+	)
+	if err != nil {
+		return CommandResponse{}, err
+	}
+	channel := ""
+	if strings.TrimSpace(task.ChannelID) != "" {
+		channel = fmt.Sprintf(" <#%s>", task.ChannelID)
+	}
+	return CommandResponse{Content: fmt.Sprintf("Task `%s` created in `%s`.%s", shortID(task.ID), valueOrUnknown(task.ProjectName), channel)}, nil
+}
+
+func (r *CommandRouter) taskDelete(ctx context.Context, input CommandInput) (CommandResponse, error) {
+	task, err := r.service.DeleteTask(ctx, input.Options["task"])
+	if err != nil {
+		if isPartialSuccessError(err) {
+			return CommandResponse{Content: err.Error()}, nil
+		}
+		return CommandResponse{}, err
+	}
+	return CommandResponse{Content: fmt.Sprintf("Task `%s` deleted.", shortID(task.ID))}, nil
+}
+
 func (r *CommandRouter) softSync(ctx context.Context) (CommandResponse, error) {
 	if err := r.service.SoftSync(ctx); err != nil {
 		return CommandResponse{}, err
@@ -695,7 +811,8 @@ func isControlChannelName(name string) bool {
 func commandHelp() string {
 	return strings.Join([]string{
 		"`/task list` or `/ps` - list current tasks",
-		"`/project list` - list projects",
+		"`/task create`, `/task delete` - create or delete Discord-controlled tasks from `#agx-control`",
+		"`/project list`, `/project create`, `/project delete` - manage registered projects from `#agx-control`",
 		"`/soft-sync` - sync Discord to the current AGX state",
 		"`/hard-sync` - rebuild managed Discord channels from AGX state",
 		"`/status task:<id>`, `/logs task:<id>` - inspect tasks from `#agx-control`",

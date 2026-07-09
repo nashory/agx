@@ -252,6 +252,26 @@ func (s panicCommandService) ListProjects(context.Context) ([]ProjectSummary, er
 	return nil, nil
 }
 
+func (s panicCommandService) CreateProject(context.Context, string, string, string) (ProjectSummary, error) {
+	s.t.Fatal("CreateProject should not be called")
+	return ProjectSummary{}, nil
+}
+
+func (s panicCommandService) DeleteProject(context.Context, string) (ProjectSummary, error) {
+	s.t.Fatal("DeleteProject should not be called")
+	return ProjectSummary{}, nil
+}
+
+func (s panicCommandService) CreateTask(context.Context, string, string, string, string, string, bool) (TaskSummary, error) {
+	s.t.Fatal("CreateTask should not be called")
+	return TaskSummary{}, nil
+}
+
+func (s panicCommandService) DeleteTask(context.Context, string) (TaskSummary, error) {
+	s.t.Fatal("DeleteTask should not be called")
+	return TaskSummary{}, nil
+}
+
 func (s panicCommandService) IsControlChannel(context.Context, string) (bool, error) {
 	s.t.Fatal("IsControlChannel should not be called")
 	return false, nil

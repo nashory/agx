@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,23 +13,42 @@ import (
 )
 
 type fakeCommandService struct {
-	sentText      string
-	sendResult    SendTaskMessageResult
-	interrupted   string
-	deleted       string
-	killedChannel string
-	softSynced    bool
-	hardSynced    bool
-	hardPreserve  string
-	syncStatus    SyncStatusSummary
-	control       map[string]bool
-	tasks         []TaskSummary
-	projects      []ProjectSummary
-	logs          string
-	channel       map[string]string
-	sendErr       error
-	interruptErr  error
-	killErr       error
+	sentText                string
+	sendResult              SendTaskMessageResult
+	interrupted             string
+	deleted                 string
+	killedChannel           string
+	softSynced              bool
+	hardSynced              bool
+	hardPreserve            string
+	syncStatus              SyncStatusSummary
+	control                 map[string]bool
+	tasks                   []TaskSummary
+	projects                []ProjectSummary
+	createdTask             TaskSummary
+	deletedTask             TaskSummary
+	createdProject          ProjectSummary
+	deletedProject          ProjectSummary
+	logs                    string
+	channel                 map[string]string
+	createProjectPath       string
+	createProjectName       string
+	createProjectAgent      string
+	deleteProjectRef        string
+	createTaskProject       string
+	createTaskTitle         string
+	createTaskPrompt        string
+	createTaskAgent         string
+	createTaskWorkspaceMode string
+	createTaskAllMighty     bool
+	deleteTaskRef           string
+	sendErr                 error
+	interruptErr            error
+	killErr                 error
+	createProjectErr        error
+	deleteProjectErr        error
+	createTaskErr           error
+	deleteTaskErr           error
 }
 
 func (f *fakeCommandService) ListTasks(context.Context) ([]TaskSummary, error) {
@@ -37,6 +57,60 @@ func (f *fakeCommandService) ListTasks(context.Context) ([]TaskSummary, error) {
 
 func (f *fakeCommandService) ListProjects(context.Context) ([]ProjectSummary, error) {
 	return f.projects, nil
+}
+
+func (f *fakeCommandService) CreateProject(ctx context.Context, path, name, defaultAgent string) (ProjectSummary, error) {
+	f.createProjectPath = path
+	f.createProjectName = name
+	f.createProjectAgent = defaultAgent
+	if f.createProjectErr != nil {
+		return ProjectSummary{}, f.createProjectErr
+	}
+	if f.createdProject.ID != "" || f.createdProject.Name != "" || f.createdProject.Path != "" {
+		return f.createdProject, nil
+	}
+	if name == "" {
+		name = filepath.Base(path)
+	}
+	return ProjectSummary{ID: "project-12345678", Name: name, Path: path}, nil
+}
+
+func (f *fakeCommandService) DeleteProject(ctx context.Context, projectRef string) (ProjectSummary, error) {
+	f.deleteProjectRef = projectRef
+	if f.deleteProjectErr != nil {
+		return ProjectSummary{}, f.deleteProjectErr
+	}
+	if f.deletedProject.ID != "" || f.deletedProject.Name != "" || f.deletedProject.Path != "" {
+		return f.deletedProject, nil
+	}
+	return ProjectSummary{ID: "project-12345678", Name: projectRef}, nil
+}
+
+func (f *fakeCommandService) CreateTask(ctx context.Context, projectRef, title, prompt, agentName, workspaceMode string, allMighty bool) (TaskSummary, error) {
+	f.createTaskProject = projectRef
+	f.createTaskTitle = title
+	f.createTaskPrompt = prompt
+	f.createTaskAgent = agentName
+	f.createTaskWorkspaceMode = workspaceMode
+	f.createTaskAllMighty = allMighty
+	if f.createTaskErr != nil {
+		return TaskSummary{}, f.createTaskErr
+	}
+	if f.createdTask.ID != "" || f.createdTask.Title != "" {
+		return f.createdTask, nil
+	}
+	return TaskSummary{ID: "task-12345678", Title: title, ProjectName: projectRef}, nil
+}
+
+func (f *fakeCommandService) DeleteTask(ctx context.Context, taskRef string) (TaskSummary, error) {
+	f.deleteTaskRef = taskRef
+	if f.deleteTaskErr != nil {
+		return TaskSummary{}, f.deleteTaskErr
+	}
+	if f.deletedTask.ID != "" || f.deletedTask.Title != "" {
+		return f.deletedTask, nil
+	}
+	return TaskSummary{ID: taskRef}, nil
 }
 
 func (f *fakeCommandService) IsControlChannel(ctx context.Context, channelID string) (bool, error) {
@@ -96,15 +170,24 @@ func (f *fakeCommandService) SendTaskMessage(ctx context.Context, taskID string,
 
 func TestApplicationCommandsRequiredOptionsComeFirst(t *testing.T) {
 	for _, command := range ApplicationCommands() {
-		seenOptional := false
-		for _, option := range command.Options {
-			if !option.Required {
-				seenOptional = true
-				continue
-			}
-			if seenOptional {
-				t.Fatalf("command %s has required option %s after optional option", command.Name, option.Name)
-			}
+		assertRequiredOptionsComeFirst(t, command.Name, command.Options)
+	}
+}
+
+func assertRequiredOptionsComeFirst(t *testing.T, commandPath string, options []*discordgo.ApplicationCommandOption) {
+	t.Helper()
+	seenOptional := false
+	for _, option := range options {
+		if option.Type == discordgo.ApplicationCommandOptionSubCommand || option.Type == discordgo.ApplicationCommandOptionSubCommandGroup {
+			assertRequiredOptionsComeFirst(t, commandPath+" "+option.Name, option.Options)
+			continue
+		}
+		if !option.Required {
+			seenOptional = true
+			continue
+		}
+		if seenOptional {
+			t.Fatalf("command %s has required option %s after optional option", commandPath, option.Name)
 		}
 	}
 }
@@ -132,6 +215,24 @@ func TestApplicationCommandsExposeOnlySafeTaskControls(t *testing.T) {
 	if commands["kill"] == nil {
 		t.Fatal("ApplicationCommands missing kill")
 	}
+	if !hasSubcommand(commands["project"], "create") || !hasSubcommand(commands["project"], "delete") {
+		t.Fatal("ApplicationCommands missing project create/delete subcommands")
+	}
+	if !hasSubcommand(commands["task"], "create") || !hasSubcommand(commands["task"], "delete") {
+		t.Fatal("ApplicationCommands missing task create/delete subcommands")
+	}
+}
+
+func hasSubcommand(command *discordgo.ApplicationCommand, name string) bool {
+	if command == nil {
+		return false
+	}
+	for _, option := range command.Options {
+		if option.Type == discordgo.ApplicationCommandOptionSubCommand && option.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCommandRouterRejectsUnauthorizedUser(t *testing.T) {
@@ -267,6 +368,148 @@ func TestCommandRouterTaskListShowsCurrentTasks(t *testing.T) {
 		if !strings.Contains(response.Content, expected) {
 			t.Fatalf("task list = %q, missing %q", response.Content, expected)
 		}
+	}
+}
+
+func TestCommandRouterProjectCreateRegistersProject(t *testing.T) {
+	service := &fakeCommandService{
+		control:        map[string]bool{"control-1": true},
+		createdProject: ProjectSummary{ID: "project-12345678", Name: "agx", Path: "/repos/agx"},
+	}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.Execute(context.Background(), CommandInput{
+		Name:       "project",
+		Subcommand: "create",
+		GuildID:    "guild-1",
+		ChannelID:  "control-1",
+		UserID:     "user",
+		Options: map[string]string{
+			"path":  "/repos/agx",
+			"name":  "agx",
+			"agent": "codex",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.createProjectPath != "/repos/agx" || service.createProjectName != "agx" || service.createProjectAgent != "codex" {
+		t.Fatalf("create project args = path %q name %q agent %q", service.createProjectPath, service.createProjectName, service.createProjectAgent)
+	}
+	if !strings.Contains(response.Content, "registered") || !strings.Contains(response.Content, "`agx`") || !strings.Contains(response.Content, "`/repos/agx`") {
+		t.Fatalf("response = %q, want project registered summary", response.Content)
+	}
+}
+
+func TestCommandRouterProjectDeleteDeletesProject(t *testing.T) {
+	service := &fakeCommandService{
+		control:        map[string]bool{"control-1": true},
+		deletedProject: ProjectSummary{ID: "project-12345678", Name: "agx", Path: "/repos/agx"},
+	}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.Execute(context.Background(), CommandInput{
+		Name:       "project",
+		Subcommand: "delete",
+		GuildID:    "guild-1",
+		ChannelID:  "control-1",
+		UserID:     "user",
+		Options:    map[string]string{"project": "agx"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.deleteProjectRef != "agx" {
+		t.Fatalf("deleteProjectRef = %q, want agx", service.deleteProjectRef)
+	}
+	if !strings.Contains(response.Content, "Project `agx` deleted") {
+		t.Fatalf("response = %q, want project deleted summary", response.Content)
+	}
+}
+
+func TestCommandRouterTaskCreateCreatesDiscordTask(t *testing.T) {
+	service := &fakeCommandService{
+		control:     map[string]bool{"control-1": true},
+		createdTask: TaskSummary{ID: "task-12345678", Title: "ship windows controls", ProjectName: "agx", ChannelID: "discord-channel"},
+	}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.Execute(context.Background(), CommandInput{
+		Name:       "task",
+		Subcommand: "create",
+		GuildID:    "guild-1",
+		ChannelID:  "control-1",
+		UserID:     "user",
+		Options: map[string]string{
+			"project":        "agx",
+			"title":          "ship windows controls",
+			"prompt":         "Read the context first",
+			"agent":          "codex",
+			"workspace-mode": "project",
+			"all-mighty":     "false",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.createTaskProject != "agx" ||
+		service.createTaskTitle != "ship windows controls" ||
+		service.createTaskPrompt != "Read the context first" ||
+		service.createTaskAgent != "codex" ||
+		service.createTaskWorkspaceMode != "project" ||
+		service.createTaskAllMighty {
+		t.Fatalf("create task args = %#v", service)
+	}
+	for _, expected := range []string{"Task `task-123` created", "`agx`", "<#discord-channel>"} {
+		if !strings.Contains(response.Content, expected) {
+			t.Fatalf("response = %q, missing %q", response.Content, expected)
+		}
+	}
+}
+
+func TestCommandRouterTaskCreateDefaultsAllMighty(t *testing.T) {
+	service := &fakeCommandService{control: map[string]bool{"control-1": true}}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	_, err := router.Execute(context.Background(), CommandInput{
+		Name:       "task",
+		Subcommand: "create",
+		GuildID:    "guild-1",
+		ChannelID:  "control-1",
+		UserID:     "user",
+		Options:    map[string]string{"project": "agx", "title": "main"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !service.createTaskAllMighty {
+		t.Fatal("createTaskAllMighty = false, want default true")
+	}
+}
+
+func TestCommandRouterTaskDeleteDeletesTask(t *testing.T) {
+	service := &fakeCommandService{
+		control:     map[string]bool{"control-1": true},
+		deletedTask: TaskSummary{ID: "task-12345678", Title: "old task", ProjectName: "agx"},
+	}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.Execute(context.Background(), CommandInput{
+		Name:       "task",
+		Subcommand: "delete",
+		GuildID:    "guild-1",
+		ChannelID:  "control-1",
+		UserID:     "user",
+		Options:    map[string]string{"task": "task-1234"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.deleteTaskRef != "task-1234" {
+		t.Fatalf("deleteTaskRef = %q, want task-1234", service.deleteTaskRef)
+	}
+	if !strings.Contains(response.Content, "Task `task-123` deleted") {
+		t.Fatalf("response = %q, want task deleted summary", response.Content)
 	}
 }
 
