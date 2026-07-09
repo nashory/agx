@@ -208,11 +208,24 @@ Open the Desktop app to manage projects and tasks visually.
 Discord is optional. To use it:
 
 1. Create or choose a Discord server.
-2. Open AGX Desktop.
-3. Go to the Discord tab.
-4. Enter your bot token, server ID, and allowed Discord user ID.
-5. Use `Invite AGX Coding` to open the bot invite page.
-6. Connect and run a Soft Sync.
+2. Create a Discord bot and copy its token.
+3. On macOS Desktop, open the Discord tab, enter the bot token, server ID, and
+   allowed Discord user ID, then connect and run a Soft Sync.
+4. On Linux or WSL2, put the stable IDs in `~/.config/agx/config.toml` and
+   connect from the CLI:
+
+```toml
+[discord]
+guild_id = "your-discord-server-id"
+allowed_user_ids = ["your-discord-user-id"]
+```
+
+```bash
+read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
+export DISCORD_BOT_TOKEN
+agx discord connect
+agx discord sync
+```
 
 The bot token is stored in AGX's local config with file permissions restricted
 to your user. Disconnecting clears the stored bot token while keeping the server

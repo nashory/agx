@@ -37,23 +37,42 @@ model.
 
 ## CLI Setup
 
-You can also configure Discord from the CLI:
+You can also configure Discord from the CLI. This is the recommended path when
+you run AGX from Linux, Docker, or WSL2 without the macOS Desktop app.
+
+Put stable Discord IDs in your local AGX config:
+
+```toml
+# ~/.config/agx/config.toml
+[discord]
+guild_id = "your-discord-server-id"
+allowed_user_ids = ["your-discord-user-id"]
+```
+
+Then provide the bot token at connect time:
 
 ```bash
 read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
 export DISCORD_BOT_TOKEN
 
-agx chat connect \
-  --guild "$DISCORD_SERVER_ID" \
-  --allow-user "$YOUR_DISCORD_USER_ID"
-
-agx chat sync
-agx chat status
+agx discord connect
+agx discord sync
+agx discord status
 ```
 
-`agx chat connect` reads `DISCORD_BOT_TOKEN` when `--token` is omitted. Prefer
-the environment variable path so the bot token does not appear in shell history
-or process arguments.
+You can also pass the IDs as flags. Flag values override the TOML values and
+are saved locally after a successful connect:
+
+```bash
+agx discord connect \
+  --guild "$DISCORD_SERVER_ID" \
+  --allow-user "$YOUR_DISCORD_USER_ID"
+```
+
+`agx discord connect` reads `DISCORD_BOT_TOKEN` when `--token` is omitted.
+Prefer the environment variable path so the bot token does not appear in shell
+history or process arguments. `agx chat ...` remains available as a compatibility
+alias for older scripts.
 
 ## Command Reference
 
@@ -61,14 +80,16 @@ or process arguments.
 | --- | --- |
 | `/ps` or `/task list` | List current tasks. |
 | `/project list` | List registered projects. |
+| `/project create path:<path> [name] [agent]` | Register a git project path with AGX. |
+| `/project delete project:<ref>` | Delete a project and its tasks. |
+| `/task create project:<ref> title:<title> [prompt] [agent] [workspace-mode] [all-mighty]` | Create a Discord-controlled task. |
+| `/task delete task:<id>` | Delete a task and its Discord channel. |
 | `/soft-sync` | Sync AGX state and stale AGX channels in the configured AGX server. |
 | `/hard-sync` | Rebuild channels in the configured AGX server from current state. |
 | `/status task:<id>` | Show task status. |
 | `/logs` | Show a task log snapshot. |
-| `/interrupt task:<id>` | Interrupt a running task. |
-| `/stop task:<id>` | Stop a task. |
-| `/restart task:<id>` | Restart a task. |
-| `/delete task:<id>` | Delete a task. |
+| `/interrupt` | Interrupt the current task channel's running turn. |
+| `/clear` | Clear the current task channel's agent context. |
 | `/kill` | Delete the current task and remove its Discord task channel. |
 | `/heartbeat` | Check task or backend health. |
 

@@ -62,6 +62,7 @@ func TestRuntimeBackedInvocationCoversStatefulCommands(t *testing.T) {
 		{args: []string{"agx", "stop"}, want: true},
 		{args: []string{"agx", "interrupt"}, want: true},
 		{args: []string{"agx", "attach"}, want: true},
+		{args: []string{"agx", "discord", "connect"}, want: true},
 		{args: []string{"agx", "chat", "sync"}, want: true},
 		{args: []string{"agx", "task", "create"}, want: true},
 		{args: []string{"agx", "task", "list"}, want: true},
@@ -404,7 +405,7 @@ func TestRuntimeClientChatCommandsUseRuntimeStatus(t *testing.T) {
 	if gotToken != "token-1" || gotGuild != "guild-1" || gotAllowedUser != "user-1" {
 		t.Fatalf("DiscordConnect args = (%q, %q, %q), want first configured user", gotToken, gotGuild, gotAllowedUser)
 	}
-	if !strings.Contains(connectOut.String(), "discord chat enabled for guild guild-1") {
+	if !strings.Contains(connectOut.String(), "discord enabled for guild guild-1") {
 		t.Fatalf("connect output = %q", connectOut.String())
 	}
 
@@ -428,7 +429,7 @@ func TestRuntimeClientChatCommandsUseRuntimeStatus(t *testing.T) {
 	if err := syncCmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !client.discordSoftSynced || !strings.Contains(syncOut.String(), "discord chat synced with AGX Guild") {
+	if !client.discordSoftSynced || !strings.Contains(syncOut.String(), "discord synced with AGX Guild") {
 		t.Fatalf("sync output = %q, synced=%v", syncOut.String(), client.discordSoftSynced)
 	}
 
@@ -439,8 +440,31 @@ func TestRuntimeClientChatCommandsUseRuntimeStatus(t *testing.T) {
 	if err := disconnectCmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !client.discordDisconnected || !strings.Contains(disconnectOut.String(), "discord chat disabled") {
+	if !client.discordDisconnected || !strings.Contains(disconnectOut.String(), "discord disabled") {
 		t.Fatalf("disconnect output = %q, disconnected=%v", disconnectOut.String(), client.discordDisconnected)
+	}
+}
+
+func TestRuntimeClientDiscordCommandKeepsChatAlias(t *testing.T) {
+	client := &fakeRuntimeTaskCreateClient{}
+	cmd := newRuntimeClientDiscordCmd(client)
+	if cmd.Use != "discord" {
+		t.Fatalf("Use = %q, want discord", cmd.Use)
+	}
+	aliasFound := false
+	for _, alias := range cmd.Aliases {
+		if alias == "chat" {
+			aliasFound = true
+			break
+		}
+	}
+	if !aliasFound {
+		t.Fatalf("aliases = %#v, want chat alias", cmd.Aliases)
+	}
+	for _, args := range [][]string{{"connect"}, {"disconnect"}, {"status"}, {"sync"}} {
+		if _, _, err := cmd.Find(args); err != nil {
+			t.Fatalf("discord command missing %v: %v", args, err)
+		}
 	}
 }
 

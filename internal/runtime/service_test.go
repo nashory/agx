@@ -686,12 +686,16 @@ func TestMergedDiscordConnectConfigUsesExistingValues(t *testing.T) {
 		BotToken:       " token ",
 		GuildID:        " guild ",
 		AllowedUserIDs: []string{" ", "user-1"},
+		VoiceSTT:       config.VoiceSTTConfig{Mode: config.VoiceSTTEnabled, ModelPath: "/models/ggml.bin"},
 	})
 	if err := agxdiscord.ValidateConfig(next); err != nil {
 		t.Fatal(err)
 	}
 	if next.BotToken != "token" || next.GuildID != "guild" || len(next.AllowedUserIDs) != 1 || next.AllowedUserIDs[0] != "user-1" {
 		t.Fatalf("merged config = %#v, want trimmed existing token/guild/allowlist", next)
+	}
+	if next.VoiceSTT.Mode != config.VoiceSTTEnabled || next.VoiceSTT.ModelPath != "/models/ggml.bin" {
+		t.Fatalf("VoiceSTT = %#v, want preserved STT config", next.VoiceSTT)
 	}
 }
 

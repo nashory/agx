@@ -220,6 +220,7 @@ func mergedDiscordConnectConfig(req discordConnectRequest, current config.Discor
 		BotToken:       token,
 		GuildID:        guildID,
 		AllowedUserIDs: cleanDiscordAllowedUsers(allowedUsers),
+		VoiceSTT:       current.VoiceSTT,
 	}
 }
 

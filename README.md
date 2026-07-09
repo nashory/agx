@@ -145,7 +145,7 @@ AGX is built around the part that gets messy after the first prompt:
 | Lost context after closing a window | Sessions persist through Desktop and CLI reconnects. |
 | Remote follow-up is awkward | Discord-attached tasks can be controlled from a private server. |
 | CLI-only tools are hard to monitor | Desktop gives a visual task board and live terminal surfaces. |
-| Desktop-only tools are hard to automate | `agx` exposes project, task, runtime, logs, and chat commands. |
+| Desktop-only tools are hard to automate | `agx` exposes project, task, runtime, logs, and Discord commands. |
 
 ## Operating Model
 
@@ -231,7 +231,7 @@ Available top-level commands include:
 ```text
 agent       inspect agent CLIs
 attachment  manage persisted Discord attachments
-chat        configure Discord integration
+discord     configure Discord integration
 doctor      diagnose runtime prerequisites
 project     manage projects
 runtime     manage the runtime daemon
@@ -310,16 +310,28 @@ Discord-attached tasks into a server so you can control selected work remotely.
 
 Typical CLI setup:
 
+```toml
+# ~/.config/agx/config.toml
+[discord]
+guild_id = "your-discord-server-id"
+allowed_user_ids = ["your-discord-user-id"]
+```
+
 ```bash
 read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
 export DISCORD_BOT_TOKEN
 
-agx chat connect \
+agx discord connect
+agx discord sync
+agx discord status
+```
+
+You can also pass the IDs as flags when you do not want to edit TOML:
+
+```bash
+agx discord connect \
   --guild "$DISCORD_SERVER_ID" \
   --allow-user "$YOUR_DISCORD_USER_ID"
-
-agx chat sync
-agx chat status
 ```
 
 Only the configured Discord user ID can control AGX. Use a private server and a
@@ -340,12 +352,15 @@ Common Discord commands include:
 | --- | --- |
 | `/ps` or `/task list` | List current tasks. |
 | `/project list` | List registered projects. |
+| `/project create` | Register a project path with AGX. |
+| `/project delete` | Delete a project and its tasks. |
+| `/task create` | Create a Discord-controlled task. |
+| `/task delete` | Delete a task and its Discord channel. |
 | `/status task:<id>` | Show task status. |
 | `/logs` | Show a task log snapshot. |
-| `/interrupt task:<id>` | Interrupt a running task. |
-| `/stop task:<id>` | Stop a task. |
-| `/restart task:<id>` | Restart a task. |
-| `/delete task:<id>` | Delete a task. |
+| `/interrupt` | Interrupt the current task channel's running turn. |
+| `/kill` | Delete the current task and remove this task channel. |
+| `/clear` | Clear the current task channel's agent context. |
 | `/soft-sync` | Reconcile Discord channels with runtime state. |
 | `/hard-sync` | Rebuild Discord channels from runtime state. |
 
@@ -391,7 +406,7 @@ for focused tasks where direct edits are expected.
 | macOS arm64 | Desktop app, CLI, runtime, launchd user service. |
 | Linux amd64/arm64 | CLI, runtime, TUI, systemd user service, release tarballs. |
 | Docker | Ubuntu runtime/TUI environment for Docker-capable hosts. |
-| Windows | Not supported yet. |
+| Windows | Use the Linux CLI/runtime through WSL2 Ubuntu; native Windows builds are not supported yet. |
 
 Linux Desktop packaging is not part of the current release target. The runtime
 is built on Unix primitives and is shared by Desktop, CLI, TUI, and Discord.

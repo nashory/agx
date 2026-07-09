@@ -57,7 +57,7 @@ func isRuntimeBackedInvocation(args []string) bool {
 		return false
 	}
 	switch args[1] {
-	case "run", "ps", "logs", "send", "stop", "interrupt", "attach", "chat", "attachment":
+	case "run", "ps", "logs", "send", "stop", "interrupt", "attach", "chat", "discord", "attachment":
 		return true
 	case "agent":
 		return len(args) >= 3 && args[2] == "list"
@@ -94,7 +94,7 @@ func executeRuntimeBackedCommand() {
 		newRuntimeClientTaskCmd(client),
 		newRuntimeClientProjectCmd(client),
 		newRuntimeClientAgentCmd(client),
-		newRuntimeClientChatCmd(client),
+		newRuntimeClientDiscordCmd(client),
 		newRuntimeClientAttachmentCmd(),
 		newRuntimeCmd(),
 		newDoctorCmd(),
@@ -232,10 +232,15 @@ func newRuntimeClientAttachCmd(client *agxruntime.Client) *cobra.Command {
 	}
 }
 
-func newRuntimeClientChatCmd(client *agxruntime.Client) *cobra.Command {
+func newRuntimeClientChatCmd(client runtimeChatClient) *cobra.Command {
+	return newRuntimeClientDiscordCmd(client)
+}
+
+func newRuntimeClientDiscordCmd(client runtimeChatClient) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "chat",
-		Short: "Configure Discord chat integration",
+		Use:     "discord",
+		Aliases: []string{"chat"},
+		Short:   "Configure Discord integration",
 	}
 	cmd.AddCommand(
 		newRuntimeClientChatConnectCmd(client),
@@ -263,27 +268,27 @@ func newRuntimeClientChatConnectCmd(client runtimeChatClient) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "discord chat enabled for guild %s\n", status.GuildID)
+			fmt.Fprintf(cmd.OutOrStdout(), "discord enabled for guild %s\n", status.GuildID)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&token, "token", "", "Discord bot token; prefer DISCORD_BOT_TOKEN to avoid shell history and process args")
-	cmd.Flags().StringVar(&guild, "guild", "", "Discord guild/server ID")
-	cmd.Flags().StringArrayVar(&allowedUsers, "allow-user", nil, "Discord user ID allowed to control AGX; only the first value is used")
+	cmd.Flags().StringVar(&guild, "guild", "", "Discord guild/server ID; defaults to config.toml")
+	cmd.Flags().StringArrayVar(&allowedUsers, "allow-user", nil, "Discord user ID allowed to control AGX; defaults to config.toml, only the first value is used")
 	return cmd
 }
 
 func newRuntimeClientChatDisconnectCmd(client runtimeChatClient) *cobra.Command {
 	return &cobra.Command{
 		Use:   "disconnect",
-		Short: "Disable Discord chat integration",
+		Short: "Disable Discord integration",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := runtimeCLIContext(cmd)
 			defer cancel()
 			if _, err := client.DiscordDisconnect(ctx); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "discord chat disabled")
+			fmt.Fprintln(cmd.OutOrStdout(), "discord disabled")
 			return nil
 		},
 	}
@@ -292,7 +297,7 @@ func newRuntimeClientChatDisconnectCmd(client runtimeChatClient) *cobra.Command 
 func newRuntimeClientChatStatusCmd(client runtimeChatClient) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show Discord chat runtime status",
+		Short: "Show Discord runtime status",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := runtimeCLIContext(cmd)
 			defer cancel()
@@ -316,7 +321,7 @@ func newRuntimeClientChatStatusCmd(client runtimeChatClient) *cobra.Command {
 func newRuntimeClientChatSyncCmd(client runtimeChatClient) *cobra.Command {
 	return &cobra.Command{
 		Use:   "sync",
-		Short: "Reconcile Discord chat state",
+		Short: "Reconcile Discord state",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := runtimeCLIContext(cmd)
 			defer cancel()
@@ -325,10 +330,10 @@ func newRuntimeClientChatSyncCmd(client runtimeChatClient) *cobra.Command {
 				return err
 			}
 			if status.GuildName != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "discord chat synced with %s\n", status.GuildName)
+				fmt.Fprintf(cmd.OutOrStdout(), "discord synced with %s\n", status.GuildName)
 				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "discord chat synced with guild %s\n", status.GuildID)
+			fmt.Fprintf(cmd.OutOrStdout(), "discord synced with guild %s\n", status.GuildID)
 			return nil
 		},
 	}
