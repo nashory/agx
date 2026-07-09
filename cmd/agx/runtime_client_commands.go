@@ -12,7 +12,6 @@ import (
 	agxdiscord "github.com/nashory/agx/internal/discord"
 	"github.com/nashory/agx/internal/display"
 	agxruntime "github.com/nashory/agx/internal/runtime"
-	"github.com/nashory/agx/internal/tmux"
 	agxtui "github.com/nashory/agx/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -211,7 +210,7 @@ func newRuntimeClientAgentCmd(client *agxruntime.Client) *cobra.Command {
 func newRuntimeClientAttachCmd(client *agxruntime.Client) *cobra.Command {
 	return &cobra.Command{
 		Use:   "attach TASK_ID",
-		Short: "Attach to a task tmux window",
+		Short: "Attach to a task session",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := runtimeCLIContext(cmd)
@@ -221,14 +220,13 @@ func newRuntimeClientAttachCmd(client *agxruntime.Client) *cobra.Command {
 				return err
 			}
 			if task.SessionName == nil || strings.TrimSpace(*task.SessionName) == "" {
-				return fmt.Errorf("task has no active tmux session")
+				return fmt.Errorf("task has no active session")
 			}
 			project, err := client.GetProject(ctx, task.ProjectID)
 			if err != nil {
 				return err
 			}
-			sessionName := tmux.SafeSessionName(project.Name + "-" + display.ShortID(project.ID))
-			return tmux.NewController().Attach(tmux.Target(sessionName, *task.SessionName))
+			return attachToTaskSession(project, *task.SessionName)
 		},
 	}
 }

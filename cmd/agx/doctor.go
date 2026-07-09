@@ -25,7 +25,7 @@ func newDoctorCmd() *cobra.Command {
 			client := agxruntime.NewClient()
 			if status, err := client.Status(ctx); err == nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "runtime: ok pid=%d uptime=%ds\n", status.PID, status.UptimeSeconds)
-				fmt.Fprintf(cmd.OutOrStdout(), "socket: %s\n", status.SocketPath)
+				fmt.Fprintf(cmd.OutOrStdout(), "transport: %s\n", transportOrSocket(status))
 				fmt.Fprintf(cmd.OutOrStdout(), "lock: %s\n", status.LockPath)
 				if discord, err := client.DiscordStatus(ctx); err == nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "runtime discord: enabled=%t connected=%t guild=%s\n", discord.Enabled, discord.Connected, redactedSetting(discord.GuildID))

@@ -58,6 +58,7 @@ func (s *Service) bindListener() (net.Listener, error) {
 		return nil, err
 	}
 	s.transportToken = token
+	s.transportAddress = endpoint.Address
 	logRuntimeOperation("runtime_transport",
 		"transport", "tcp",
 		"address", endpoint.Address,

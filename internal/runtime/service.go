@@ -53,6 +53,9 @@ type Service struct {
 	// transport. It is populated only on native Windows (see transport_windows.go)
 	// and left empty on Unix, where the socket permissions gate access.
 	transportToken string
+	// transportAddress is the loopback TCP address the runtime serves on. It is
+	// populated only on native Windows; empty means the Unix socket transport.
+	transportAddress string
 
 	backgroundCtx    context.Context
 	backgroundCancel context.CancelFunc
@@ -71,6 +74,7 @@ type Status struct {
 	ConfigDir     string                 `json:"configDir"`
 	SocketPath    string                 `json:"socketPath"`
 	LockPath      string                 `json:"lockPath"`
+	Transport     string                 `json:"transport,omitempty"`
 	Recovery      session.RecoveryResult `json:"recovery"`
 }
 
@@ -540,6 +544,16 @@ func (s *Service) Status() Status {
 		ConfigDir:     s.paths.ConfigDir,
 		SocketPath:    s.paths.Socket,
 		LockPath:      s.paths.Lock,
+		Transport:     s.transportLabel(),
 		Recovery:      s.recovery,
 	}
+}
+
+// transportLabel describes the transport the runtime is serving on: the loopback
+// TCP address on native Windows, or the Unix socket path elsewhere.
+func (s *Service) transportLabel() string {
+	if s.transportAddress != "" {
+		return "tcp " + s.transportAddress
+	}
+	return "unix " + s.paths.Socket
 }

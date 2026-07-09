@@ -86,7 +86,7 @@ func newRuntimeStatusCmd() *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "version: %s\n", status.Version)
 			fmt.Fprintf(cmd.OutOrStdout(), "uptime: %ds\n", status.UptimeSeconds)
 			fmt.Fprintf(cmd.OutOrStdout(), "config: %s\n", status.ConfigDir)
-			fmt.Fprintf(cmd.OutOrStdout(), "socket: %s\n", status.SocketPath)
+			fmt.Fprintf(cmd.OutOrStdout(), "transport: %s\n", transportOrSocket(status))
 			fmt.Fprintf(cmd.OutOrStdout(), "lock: %s\n", status.LockPath)
 			if discord, err := agxruntime.NewClient().DiscordStatus(ctx); err == nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "discord enabled: %t\n", discord.Enabled)
@@ -261,6 +261,15 @@ func newRuntimeUninstallServiceCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// transportOrSocket returns the runtime's transport description, falling back to
+// the Unix socket path for runtimes that predate the transport field.
+func transportOrSocket(status agxruntime.Status) string {
+	if strings.TrimSpace(status.Transport) != "" {
+		return status.Transport
+	}
+	return "unix " + status.SocketPath
 }
 
 func isRuntimeInvocation(args []string) bool {
