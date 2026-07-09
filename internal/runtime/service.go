@@ -17,29 +17,28 @@ import (
 	agxdiscord "github.com/nashory/agx/internal/discord"
 	"github.com/nashory/agx/internal/display"
 	"github.com/nashory/agx/internal/session"
-	"github.com/nashory/agx/internal/tmux"
 )
 
 // Service owns the long-running AGX runtime daemon. It is the single process
-// that owns the SQLite store, tmux controller, Discord bridge, and structured
+// that owns the SQLite store, session backend, Discord bridge, and structured
 // agent event streams so desktop and CLI clients can coordinate through one
 // serialized API surface.
 type Service struct {
-	paths       Paths
-	version     string
-	started     time.Time
-	bus         *EventBus
-	store       *db.Store
-	tmux        *tmux.Controller
-	recovery    session.RecoveryResult
-	locks       map[string]*sync.Mutex
-	states      map[string]runtimeTaskState
-	locksMu     sync.Mutex
-	requestSeq  atomic.Uint64
-	discord     *agxdiscord.Bridge
-	agents      *agentEventService
-	attachments attachmentDownloader
-	voice       voiceTranscriber
+	paths          Paths
+	version        string
+	started        time.Time
+	bus            *EventBus
+	store          *db.Store
+	sessionBackend session.Backend
+	recovery       session.RecoveryResult
+	locks          map[string]*sync.Mutex
+	states         map[string]runtimeTaskState
+	locksMu        sync.Mutex
+	requestSeq     atomic.Uint64
+	discord        *agxdiscord.Bridge
+	agents         *agentEventService
+	attachments    attachmentDownloader
+	voice          voiceTranscriber
 
 	discordSyncMu      sync.Mutex
 	discordSyncRunning bool
@@ -84,7 +83,7 @@ func NewService(version string) *Service {
 		version:          version,
 		started:          time.Now().UTC(),
 		bus:              NewEventBus(),
-		tmux:             tmux.NewController(),
+		sessionBackend:   session.DefaultBackend(),
 		locks:            map[string]*sync.Mutex{},
 		states:           map[string]runtimeTaskState{},
 		attachments:      defaultAttachmentDownloader(),
@@ -165,7 +164,7 @@ func (s *Service) Start(ctx context.Context) (err error) {
 	s.discord.SetStore(store)
 	s.discord.SetCommandService(discordCommandService{runtime: s})
 	s.discord.SetAgentEventSubscriber(runtimeAgentSubscriber{runtime: s})
-	recovery, err := session.NewManager(store, s.tmux, agent.RegistryForProject("")).RecoverLiveTasks()
+	recovery, err := session.NewManager(store, s.sessionBackend, agent.RegistryForProject("")).RecoverLiveTasks()
 	if err != nil {
 		_ = store.Close()
 		_ = ln.Close()
@@ -220,7 +219,7 @@ func (s *Service) Start(ctx context.Context) (err error) {
 }
 
 func (s *Service) managerForProject(project db.Project) *session.Manager {
-	return session.NewManager(s.store, s.tmux, agent.RegistryForProject(project.Path))
+	return session.NewManager(s.store, s.sessionBackend, agent.RegistryForProject(project.Path))
 }
 
 // taskLock returns a per-task mutex for operations that mutate tmux/runtime

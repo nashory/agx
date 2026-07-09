@@ -3,6 +3,7 @@ module github.com/nashory/agx
 go 1.26.3
 
 require (
+	github.com/UserExistsError/conpty v0.1.4
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
