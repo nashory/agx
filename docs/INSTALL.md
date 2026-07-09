@@ -234,7 +234,9 @@ allowed_user_ids = ["your-discord-user-id"]
 ```bash
 read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
 export DISCORD_BOT_TOKEN
-agx launch --platform linux
+agx launch --platform linux \
+  --discord-server-id "$DISCORD_SERVER_ID" \
+  --allow-user "$YOUR_DISCORD_USER_ID"
 ```
 
 The bot token is stored in AGX's local config with file permissions restricted

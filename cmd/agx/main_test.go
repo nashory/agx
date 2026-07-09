@@ -483,7 +483,7 @@ func TestLaunchCommandParsesOptions(t *testing.T) {
 	cmd.SetArgs([]string{
 		"--platform", "windows",
 		"--discord-token", "token-1",
-		"--guild", "guild-1",
+		"--discord-server-id", "guild-1",
 		"--allow-user", "user-1",
 		"--skip-discord-sync",
 		"--wait", "3s",

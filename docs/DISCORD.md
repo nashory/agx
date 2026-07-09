@@ -64,7 +64,9 @@ If you also want to start the runtime service and run sanity checks in one
 step, use the launcher instead:
 
 ```bash
-agx launch --platform linux
+agx launch --platform linux \
+  --discord-server-id "$DISCORD_SERVER_ID" \
+  --allow-user "$YOUR_DISCORD_USER_ID"
 ```
 
 Use `--platform windows` for WSL2 Ubuntu and `--platform macos` on macOS.

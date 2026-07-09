@@ -292,14 +292,18 @@ agx runtime status
 On Linux, use the CLI/runtime and TUI:
 
 ```bash
-agx launch --platform linux
+agx launch --platform linux \
+  --discord-server-id "$DISCORD_SERVER_ID" \
+  --allow-user "$YOUR_DISCORD_USER_ID"
 agx tui
 ```
 
 On Windows, run AGX inside WSL2 Ubuntu and launch the Linux runtime there:
 
 ```bash
-agx launch --platform windows
+agx launch --platform windows \
+  --discord-server-id "$DISCORD_SERVER_ID" \
+  --allow-user "$YOUR_DISCORD_USER_ID"
 ```
 
 In Docker, use the Ubuntu runtime environment:

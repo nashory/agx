@@ -52,6 +52,7 @@ func newLaunchCmdWithRunner(runner launchRunner) *cobra.Command {
 	cmd.Flags().StringVar(&opts.Platform, "platform", "", "target platform: windows, macos, linux (default: current host; windows means WSL2)")
 	cmd.Flags().StringVar(&opts.DiscordToken, "discord-token", "", "Discord bot token; prefer DISCORD_BOT_TOKEN to avoid shell history and process args")
 	cmd.Flags().StringVar(&opts.DiscordGuildID, "guild", "", "Discord guild/server ID; defaults to config.toml")
+	cmd.Flags().StringVar(&opts.DiscordGuildID, "discord-server-id", "", "Discord server/guild ID; defaults to config.toml")
 	cmd.Flags().StringVar(&opts.DiscordAllowedUserID, "allow-user", "", "Discord user ID allowed to control AGX; defaults to config.toml")
 	cmd.Flags().BoolVar(&opts.SkipDiscord, "skip-discord", false, "launch runtime without connecting Discord")
 	cmd.Flags().BoolVar(&opts.SkipDiscordSync, "skip-discord-sync", false, "connect Discord without running soft sync")
@@ -173,7 +174,7 @@ func launchDiscordInputs(opts launchOptions, cfg config.Config) (token, guildID,
 		guildID = strings.TrimSpace(cfg.Discord.GuildID)
 	}
 	if guildID == "" {
-		return "", "", "", fmt.Errorf("discord guild id is required; set [discord].guild_id in config.toml or pass --guild")
+		return "", "", "", fmt.Errorf("discord guild id is required; set [discord].guild_id in config.toml or pass --discord-server-id")
 	}
 	allowedUserID = strings.TrimSpace(opts.DiscordAllowedUserID)
 	if allowedUserID == "" {
