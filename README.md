@@ -83,7 +83,7 @@ direct tmux access:
 ```bash
 brew install --formula nashory/tap/agx
 agx doctor
-agx runtime install-service
+agx launch --platform macos
 ```
 
 See [docs/INSTALL.md](docs/INSTALL.md) for macOS, Linux, Docker, first-run
@@ -213,8 +213,8 @@ agx attach <task-id>
 Manage the runtime:
 
 ```bash
+agx launch --platform macos
 agx runtime status
-agx runtime install-service
 agx runtime stop
 agx runtime start
 ```
@@ -233,6 +233,7 @@ agent       inspect agent CLIs
 attachment  manage persisted Discord attachments
 discord     configure Discord integration
 doctor      diagnose runtime prerequisites
+launch      sanity-check and launch runtime plus Discord
 project     manage projects
 runtime     manage the runtime daemon
 task        manage tasks
@@ -291,8 +292,14 @@ agx runtime status
 On Linux, use the CLI/runtime and TUI:
 
 ```bash
-agx runtime install-service
+agx launch --platform linux
 agx tui
+```
+
+On Windows, run AGX inside WSL2 Ubuntu and launch the Linux runtime there:
+
+```bash
+agx launch --platform windows
 ```
 
 In Docker, use the Ubuntu runtime environment:
@@ -325,6 +332,10 @@ agx discord connect
 agx discord sync
 agx discord status
 ```
+
+`agx launch` performs the same Discord connect/sync step after runtime startup
+when the Discord IDs are present in `config.toml` and `DISCORD_BOT_TOKEN` is
+set.
 
 You can also pass the IDs as flags when you do not want to edit TOML:
 

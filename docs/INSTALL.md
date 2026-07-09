@@ -20,9 +20,11 @@ boundary. The CLI/runtime uses local Unix primitives such as tmux, git, Unix
 sockets, SQLite, and normal child processes. Linux Desktop packaging is not part
 of the first public release yet.
 
-The `install-service` command installs a macOS launchd user service on macOS and
-a `systemd --user` service on native Linux. Docker runs the runtime in the
-foreground inside the container and does not require systemd.
+The `launch` command runs sanity checks, installs or starts the runtime service,
+and connects Discord when configured. Under the hood, AGX uses a macOS launchd
+user service on macOS and a `systemd --user` service on native Linux or WSL2
+Ubuntu. Docker runs the runtime in the foreground inside the container and does
+not require systemd.
 
 Native Windows builds are not supported yet.
 
@@ -118,7 +120,7 @@ shasum -a 256 -c checksums.txt
 For native Linux service management:
 
 ```bash
-agx runtime install-service
+agx launch --platform linux
 systemctl --user status dev.agx.runtime.service
 ```
 
@@ -129,6 +131,12 @@ for your user:
 loginctl enable-linger "$USER"
 ```
 
+On Windows, install and run the Linux CLI inside WSL2 Ubuntu:
+
+```bash
+agx launch --platform windows
+```
+
 ## First Run
 
 Start the local AGX runtime daemon. The runtime owns the local database, task
@@ -137,7 +145,7 @@ processes, worktrees, and Discord bridge.
 For normal use on macOS, install it as a user launchd service:
 
 ```bash
-agx runtime install-service
+agx launch --platform macos
 agx runtime status
 ```
 
@@ -223,8 +231,7 @@ allowed_user_ids = ["your-discord-user-id"]
 ```bash
 read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
 export DISCORD_BOT_TOKEN
-agx discord connect
-agx discord sync
+agx launch --platform linux
 ```
 
 The bot token is stored in AGX's local config with file permissions restricted
@@ -275,7 +282,7 @@ agx ps
 If the runtime is not running, start it:
 
 ```bash
-agx runtime install-service
+agx launch --platform linux
 ```
 
 If Discord is connected from another process, stop the old runtime or bridge

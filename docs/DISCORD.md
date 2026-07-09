@@ -60,6 +60,15 @@ agx discord sync
 agx discord status
 ```
 
+If you also want to start the runtime service and run sanity checks in one
+step, use the launcher instead:
+
+```bash
+agx launch --platform linux
+```
+
+Use `--platform windows` for WSL2 Ubuntu and `--platform macos` on macOS.
+
 You can also pass the IDs as flags. Flag values override the TOML values and
 are saved locally after a successful connect:
 

@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nashory/agx/internal/config"
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
 	agxruntime "github.com/nashory/agx/internal/runtime"
@@ -64,6 +66,7 @@ func TestRuntimeBackedInvocationCoversStatefulCommands(t *testing.T) {
 		{args: []string{"agx", "attach"}, want: true},
 		{args: []string{"agx", "discord", "connect"}, want: true},
 		{args: []string{"agx", "chat", "sync"}, want: true},
+		{args: []string{"agx", "launch"}, want: true},
 		{args: []string{"agx", "task", "create"}, want: true},
 		{args: []string{"agx", "task", "list"}, want: true},
 		{args: []string{"agx", "task", "show"}, want: true},
@@ -465,6 +468,97 @@ func TestRuntimeClientDiscordCommandKeepsChatAlias(t *testing.T) {
 		if _, _, err := cmd.Find(args); err != nil {
 			t.Fatalf("discord command missing %v: %v", args, err)
 		}
+	}
+}
+
+func TestLaunchCommandParsesOptions(t *testing.T) {
+	var got launchOptions
+	cmd := newLaunchCmdWithRunner(func(ctx context.Context, cmd *cobra.Command, opts launchOptions) error {
+		got = opts
+		return nil
+	})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{
+		"--platform", "windows",
+		"--discord-token", "token-1",
+		"--guild", "guild-1",
+		"--allow-user", "user-1",
+		"--skip-discord-sync",
+		"--wait", "3s",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got.Platform != "windows" || got.DiscordToken != "token-1" || got.DiscordGuildID != "guild-1" || got.DiscordAllowedUserID != "user-1" || !got.SkipDiscordSync || got.Wait != 3*time.Second {
+		t.Fatalf("launch options = %#v", got)
+	}
+}
+
+func TestNormalizeLaunchPlatform(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		goos    string
+		want    string
+		wantErr string
+	}{
+		{name: "auto linux", goos: "linux", want: "linux"},
+		{name: "auto macos", goos: "darwin", want: "macos"},
+		{name: "windows from linux", value: "windows", goos: "linux", want: "windows"},
+		{name: "windows from macos", value: "windows", goos: "darwin", wantErr: "WSL2"},
+		{name: "linux typo accepted", value: "lunux", goos: "linux", want: "linux"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeLaunchPlatform(tt.value, tt.goos)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("normalizeLaunchPlatform() error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("normalizeLaunchPlatform() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLaunchDiscordInputsUseConfigAndEnv(t *testing.T) {
+	t.Setenv("DISCORD_BOT_TOKEN", "env-token")
+	token, guildID, allowedUserID, err := launchDiscordInputs(launchOptions{}, config.Config{
+		Discord: config.DiscordConfig{
+			GuildID:        "guild-1",
+			AllowedUserIDs: []string{" ", "user-1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "env-token" || guildID != "guild-1" || allowedUserID != "user-1" {
+		t.Fatalf("launchDiscordInputs() = (%q, %q, %q)", token, guildID, allowedUserID)
+	}
+}
+
+func TestLaunchDiscordInputsRequireTokenAndIDs(t *testing.T) {
+	_, _, _, err := launchDiscordInputs(launchOptions{}, config.Config{})
+	if err == nil || !strings.Contains(err.Error(), "bot token") {
+		t.Fatalf("launchDiscordInputs() error = %v, want bot token error", err)
+	}
+
+	_, _, _, err = launchDiscordInputs(launchOptions{DiscordToken: "token"}, config.Config{})
+	if err == nil || !strings.Contains(err.Error(), "guild id") {
+		t.Fatalf("launchDiscordInputs() error = %v, want guild id error", err)
+	}
+
+	_, _, _, err = launchDiscordInputs(launchOptions{DiscordToken: "token", DiscordGuildID: "guild"}, config.Config{})
+	if err == nil || !strings.Contains(err.Error(), "allowed Discord user") {
+		t.Fatalf("launchDiscordInputs() error = %v, want allowed user error", err)
 	}
 }
 
