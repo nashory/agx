@@ -35,13 +35,17 @@ func (s *Service) handleDiscordConnect(w http.ResponseWriter, r *http.Request) {
 		writeErrorStatus(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := config.SaveDiscord(next); err != nil {
-		writeError(w, err)
-		return
-	}
 	s.discord.Configure(next)
 	s.discord.SetStore(s.store)
 	if err := s.discord.Start(r.Context(), "runtime"); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := config.SaveDiscord(next); err != nil {
+		stopErr := s.discord.Stop()
+		if stopErr != nil {
+			err = errors.Join(err, fmt.Errorf("stop discord after config save failure: %w", stopErr))
+		}
 		writeError(w, err)
 		return
 	}
