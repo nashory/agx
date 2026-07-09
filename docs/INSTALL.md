@@ -26,6 +26,9 @@ user service on macOS and a `systemd --user` service on native Linux or WSL2
 Ubuntu. Docker runs the runtime in the foreground inside the container and does
 not require systemd.
 
+If `systemd --user` is unavailable in WSL2, `agx launch` falls back to a
+detached runtime process and prints the runtime log paths for diagnosis.
+
 Native Windows builds are not supported yet.
 
 ## Prerequisites

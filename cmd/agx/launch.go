@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/nashory/agx/internal/agent"
@@ -230,7 +231,20 @@ func ensureRuntimeLaunched(ctx context.Context, cmd *cobra.Command, client *agxr
 			fmt.Fprintf(cmd.OutOrStdout(), "runtime: running pid=%d\n", status.PID)
 			return nil
 		}
-		return installErr
+		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: runtime service start failed, falling back to detached runtime: %v\n", installErr)
+		stdoutPath, stderrPath, err := startRuntimeDetached(exe)
+		if err != nil {
+			return fmt.Errorf("start runtime service: %w; detached fallback failed: %v", installErr, err)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "runtime: detached fallback started\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "runtime log: %s\n", stdoutPath)
+		fmt.Fprintf(cmd.OutOrStdout(), "runtime error log: %s\n", stderrPath)
+		status, err := waitForRuntime(ctx, client, wait)
+		if err != nil {
+			return fmt.Errorf("runtime service failed and detached fallback did not become ready: %w", err)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "runtime: running pid=%d\n", status.PID)
+		return nil
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "runtime: %s\n", message)
 	status, err := waitForRuntime(ctx, client, wait)
@@ -239,6 +253,32 @@ func ensureRuntimeLaunched(ctx context.Context, cmd *cobra.Command, client *agxr
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "runtime: running pid=%d\n", status.PID)
 	return nil
+}
+
+func startRuntimeDetached(executable string) (stdoutPath, stderrPath string, err error) {
+	stdoutPath, stderrPath = agxruntime.RuntimeLogPaths()
+	if err := os.MkdirAll(filepath.Dir(stdoutPath), 0o700); err != nil {
+		return "", "", err
+	}
+	stdoutFile, err := os.OpenFile(stdoutPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return "", "", err
+	}
+	defer stdoutFile.Close()
+	stderrFile, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return "", "", err
+	}
+	defer stderrFile.Close()
+	cmd := exec.Command(executable, "runtime", "start")
+	cmd.Stdout = stdoutFile
+	cmd.Stderr = stderrFile
+	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return "", "", err
+	}
+	return stdoutPath, stderrPath, nil
 }
 
 func waitForRuntime(ctx context.Context, client *agxruntime.Client, wait time.Duration) (agxruntime.Status, error) {
