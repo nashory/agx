@@ -3,9 +3,11 @@
 This document defines the plan for running AGX natively on Windows without
 requiring WSL2, Docker, or a Unix compatibility layer.
 
-The current supported Windows path is WSL2 Ubuntu. Native Windows support is a
-separate platform track because the runtime depends on Unix sockets, Unix file
-locks, tmux, POSIX shell behavior, and Unix process semantics.
+Native Windows is the Windows path for AGX. WSL2 is being dropped as a supported
+Windows target: `agx launch --platform windows` runs AGX natively on Windows.
+Native Windows support is a distinct platform track because the runtime depends
+on Unix sockets, Unix file locks, tmux, POSIX shell behavior, and Unix process
+semantics, none of which exist on native Windows.
 
 ## Problem
 
@@ -29,7 +31,9 @@ WSL2 works because it provides those Unix primitives. Native Windows does not.
 - Allow Discord connection on native Windows without Desktop, WSL2, or Docker.
 - Support Discord slash-command task create, task remove, project create, and
   project remove against a native Windows runtime.
-- Preserve existing macOS, Linux, Docker, and WSL2 behavior.
+- Preserve existing macOS, Linux, and Docker behavior. (Running the Linux binary
+  inside a WSL2 Linux environment is just the Linux path and keeps working, but
+  WSL2 is no longer a documented Windows target.)
 - Replace direct tmux coupling with a small session backend boundary.
 - Implement a Windows session backend with the minimum terminal behavior AGX
   needs, not a full tmux clone.
@@ -46,9 +50,13 @@ WSL2 works because it provides those Unix primitives. Native Windows does not.
 - Building a complete tmux-compatible multiplexer.
 - Requiring native Windows users to run WSL2 or Docker.
 - Guaranteeing every agent CLI has equal native Windows support in the first
-  release.
-- Changing the current WSL2 Windows documentation before native support is
-  implemented and validated.
+  release. The first release targets `claude` and `codex` natively; other agent
+  CLIs are best effort until validated on a real Windows host.
+- Maintaining WSL2 as a supported Windows target. WSL2 is being retired as a
+  documented Windows path; users who still run inside a WSL2 Linux environment
+  are on the Linux platform path, not a Windows-specific one.
+- Implementing interactive task attach on native Windows in the first release.
+  Attach is deferred; the MVP supports task create, log/snapshot, and kill.
 
 ## Current State
 
@@ -478,24 +486,19 @@ The Discord bridge should not contain Windows-specific process logic.
 
 ## CLI And Launcher UX
 
-Current launcher behavior treats Windows as WSL2-oriented. Do not silently
-change that meaning until native Windows support is complete.
-
-Recommended rollout:
+`agx launch --platform windows` means native Windows. There is no separate
+`windows-native` flag and no WSL2 launch path. WSL2 has been dropped as a
+Windows target.
 
 ```text
 agx launch --platform windows
-    current WSL2 Windows path until native support is stable
+    native Windows runtime; only valid on GOOS=windows
 
-agx launch --platform windows-native
-    explicit native Windows preview path
-
-future:
-    on GOOS=windows, `--platform windows` may become native Windows after docs,
-    migration notes, and support checks are updated
+    (Running inside a WSL2 Linux shell is the Linux path: use
+     `agx launch --platform linux` there. `--platform windows` is native only.)
 ```
 
-`agx launch --platform windows-native` should run a doctor-style preflight:
+`agx launch --platform windows` should run a doctor-style preflight:
 
 - config directory writable
 - runtime lock available
@@ -503,23 +506,15 @@ future:
 - Discord server id configured or provided
 - Discord owner guard available
 - git available
-- selected agent CLI available
+- selected agent CLI available (first release: `claude`, `codex`)
 - selected shell available
 - ConPTY backend available
 
-Native Windows launch should be explicit until it is proven:
-
-```text
-agx launch --platform windows
-    WSL2 Ubuntu path, current behavior
-
-agx launch --platform windows-native
-    native preview path, only valid on GOOS=windows
-```
-
-If the native preview is attempted on macOS, Linux, Docker, or WSL2, the command
-should fail with a clear message that development and validation must happen on
-a real Windows host.
+If `--platform windows` is attempted on macOS, Linux, or Docker (a non-Windows
+GOOS), the command should fail with a clear message that native Windows requires
+a real Windows host. During development, before the ConPTY backend and native
+transport are stable, the preflight should report exactly which native
+capability is missing rather than silently falling back to any Unix path.
 
 Launcher preflight should print a concise table:
 
@@ -583,7 +578,8 @@ Required behavior:
   possible
 - handle spaces in project paths
 - validate Git worktree behavior on Windows paths
-- keep WSL2 paths and native Windows paths separate in docs and config
+- store canonical Windows paths only; do not accept WSL-style paths for native
+  Windows projects
 
 Shell execution should avoid constructing one large command string when
 possible. Prefer:
@@ -606,9 +602,8 @@ C:\Users\name\src\project with spaces
 C:\Users\name\.config\agx\worktrees\<task>
 ```
 
-WSL paths such as `/mnt/c/...` are not native Windows paths and should not be
-accepted by native Windows project registration unless a future explicit
-interop mode is designed.
+WSL paths such as `/mnt/c/...` are not native Windows paths and must be rejected
+by native Windows project registration. WSL2 interop is out of scope.
 
 ## Database And Migration Rules
 
@@ -664,10 +659,10 @@ Logs must never include:
 
 - Add this design document and keep it updated as implementation discovers
   Windows-specific constraints.
-- Keep docs clear that Windows is currently WSL2 unless native preview is
-  explicitly selected.
+- Make docs clear that `--platform windows` is native Windows and that WSL2 is no
+  longer a supported Windows target.
 - Add explicit unsupported errors for native Windows paths that are not ready.
-- Make sure launch preflight errors explain WSL2 versus native Windows clearly.
+- Make sure launch preflight errors name the exact missing native capability.
 - Add CI compile checks for Windows if they are missing.
 
 ### P1: Session Backend Interface
@@ -690,7 +685,7 @@ Logs must never include:
 - Add tests for token validation, stale lock diagnostics, and duplicate owner
   rejection.
 - Add `agx doctor` or launch preflight checks for native Windows.
-- Keep WSL2 launch behavior unchanged.
+- Keep Unix (macOS/Linux/Docker) launch behavior unchanged.
 
 ### P3: ConPTY MVP
 
@@ -762,16 +757,13 @@ Manual release validation:
 
 ```text
 native Windows:
-  agx launch --platform windows-native --discord-server-id <server>
+  agx launch --platform windows --discord-server-id <server>
   /project create <name>
   /task create <project> <prompt>
   send a Discord message to the task channel
   kill the task
   remove the project
   verify logs and cleanup
-
-WSL2 Windows:
-  existing documented WSL2 path still works
 
 macOS regression:
   create a project from Desktop
@@ -783,8 +775,8 @@ macOS regression:
   kill/delete task
   verify worktree cleanup
 
-Linux/WSL2 regression:
-  agx launch --platform linux or windows as documented
+Linux regression:
+  agx launch --platform linux as documented
   create task through CLI or Discord
   verify tmux session exists
   kill/delete task
@@ -823,33 +815,38 @@ Rollback rules:
 - Database migrations must tolerate binaries that do not use Windows backend
   fields.
 
-If a release ships with native Windows preview disabled, users should still be
-able to use WSL2 Windows exactly as before.
+If a release ships with the native Windows backend disabled or incomplete, the
+`--platform windows` command should fail with a clear preflight error naming the
+missing capability, and macOS/Linux/Docker behavior must remain untouched.
 
 ## Acceptance Criteria
 
 Native Windows support is ready to advertise when:
 
-- macOS, Linux, Docker, and WSL2 tests remain green.
+- macOS, Linux, and Docker tests remain green.
 - Native Windows build and unit tests run in CI.
 - A native Windows runtime can start without WSL2 or Docker.
-- `agx launch --platform windows-native --discord-server-id <server>` can start
-  the runtime and connect Discord.
+- `agx launch --platform windows --discord-server-id <server>` can start the
+  runtime and connect Discord natively on Windows.
 - Discord slash commands can create and remove projects and tasks.
 - A Discord task can receive a message, run an agent, and show logs.
 - Killing or deleting a task cleans up the whole process tree.
 - Worktree cleanup failures are logged and returned as warnings/errors.
 - A second machine is blocked from attaching to an already-owned Discord server.
-- User-facing docs clearly explain native Windows versus WSL2.
+- User-facing docs describe `--platform windows` as native Windows, with no WSL2
+  Windows path.
+
+## Resolved Decisions
+
+- `--platform windows` means native Windows. There is no `windows-native` flag
+  and WSL2 is dropped as a Windows target.
+- First-release native agent CLI support targets `claude` and `codex`. Other
+  agent CLIs are best effort until validated on a real Windows host.
+- Direct/interactive attach is deferred. The MVP supports task create,
+  log/snapshot, and kill only.
 
 ## Open Questions
 
 - Which ConPTY Go wrapper is the best fit after real Windows validation?
-- Should native Windows use `windows-native` long term, or should `windows`
-  eventually mean native when run on GOOS=windows?
-- Which agent CLIs are officially supported natively on Windows for the first
-  release?
-- Should direct attach be implemented through ConPTY streaming, a log-only view,
-  or deferred until a Windows Desktop/TUI story exists?
 - What is the safest operator flow for breaking stale Discord ownership from a
   dead machine?
