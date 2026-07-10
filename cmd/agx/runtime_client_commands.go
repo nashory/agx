@@ -258,7 +258,7 @@ func newRuntimeClientChatConnectCmd(client runtimeChatClient) *cobra.Command {
 		Use:   "connect",
 		Short: "Save Discord connection settings and connect runtime",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := runtimeCLIContext(cmd)
+			ctx, cancel := runtimeConnectCLIContext(cmd)
 			defer cancel()
 			if strings.TrimSpace(token) == "" {
 				token = os.Getenv("DISCORD_BOT_TOKEN")
@@ -831,6 +831,14 @@ func newRuntimeClientInterruptCmd(client *agxruntime.Client) *cobra.Command {
 
 func runtimeCLIContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(cmd.Context(), 30*time.Second)
+}
+
+// runtimeConnectCLIContext gives Discord connect a longer deadline than a
+// typical runtime call. The server bounds a connect at roughly two minutes
+// (gateway handshake, owner claim, command registration); the CLI waits a little
+// longer so it reports the real outcome instead of a premature timeout.
+func runtimeConnectCLIContext(cmd *cobra.Command) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(cmd.Context(), 150*time.Second)
 }
 
 func resolveRuntimeProject(ctx context.Context, client runtimeProjectResolverClient, ref string, createCurrent bool) (agxruntime.Project, error) {

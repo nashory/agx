@@ -109,6 +109,11 @@ type runtimeTaskState struct {
 const (
 	discordTaskSyncTimeout       = 8 * time.Second
 	discordTaskManualSyncTimeout = 2 * time.Minute
+	// discordConnectTimeout bounds a Discord connect performed on the service
+	// background context so a disconnected CLI client cannot leave it running
+	// forever, while still allowing enough time for the gateway handshake,
+	// owner claim, and command registration.
+	discordConnectTimeout = 2 * time.Minute
 )
 
 // Start acquires the daemon lock, opens the runtime database, recovers persisted

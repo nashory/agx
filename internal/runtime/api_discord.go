@@ -41,7 +41,13 @@ func (s *Service) handleDiscordConnect(w http.ResponseWriter, r *http.Request) {
 	if req.Takeover {
 		start = s.discord.StartWithTakeover
 	}
-	if err := start(r.Context(), "runtime"); err != nil {
+	// Connect on the service background context, not the request context: a CLI
+	// client that times out and disconnects must not cancel an in-flight Discord
+	// connect and leave the bridge stuck in a "context canceled" state. The
+	// connect operation is still bounded so it cannot run forever.
+	connectCtx, cancel := s.backgroundTimeout(discordConnectTimeout)
+	defer cancel()
+	if err := start(connectCtx, "runtime"); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -95,7 +101,7 @@ func (s *Service) handleDiscordDisconnect(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Service) handleDiscordSoftSync(w http.ResponseWriter, r *http.Request) {
-	if err := s.ensureDiscordStarted(r.Context(), false); err != nil {
+	if err := s.ensureDiscordStarted(false); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -134,7 +140,7 @@ func (s *Service) handleDiscordTaskSync(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), discordTaskManualSyncTimeout)
 	defer cancel()
-	if err := s.ensureDiscordStarted(ctx, false); err != nil {
+	if err := s.ensureDiscordStarted(false); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -170,13 +176,19 @@ func (s *Service) handleDiscordHardSync(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, status)
 }
 
-func (s *Service) ensureDiscordStarted(ctx context.Context, initialSync bool) error {
+// ensureDiscordStarted brings the bridge up if it is not already connected. The
+// connect runs on the service background context, not a caller's request
+// context, so a client that disconnects mid-request cannot cancel it and leave
+// the bridge half-connected.
+func (s *Service) ensureDiscordStarted(initialSync bool) error {
 	if s.discord.Status().Connected {
 		return nil
 	}
 	cfg, _ := config.LoadGlobal()
 	s.discord.Configure(cfg.Discord)
 	s.discord.SetStore(s.store)
+	ctx, cancel := s.backgroundTimeout(discordConnectTimeout)
+	defer cancel()
 	if initialSync {
 		return s.discord.Start(ctx, "runtime")
 	}
