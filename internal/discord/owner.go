@@ -91,10 +91,12 @@ func claimGuildOwner(ctx context.Context, client ownerClient, guildID, owner str
 	if owner == "" {
 		return "", fmt.Errorf("discord owner is required")
 	}
+	log.Printf("operation=%q phase=%q guild=%q", "discord_owner_claim", "ensure_control_channel", guildID)
 	controlChannelID, err := client.EnsureControlChannel(ctx, guildID, controlChannelName)
 	if err != nil {
 		return "", err
 	}
+	log.Printf("operation=%q phase=%q control_channel=%q", "discord_owner_claim", "read_control_channel", controlChannelID)
 	channel, err := findControlGuildChannel(ctx, client, guildID, controlChannelID)
 	if err != nil {
 		return "", err
@@ -113,6 +115,7 @@ func claimGuildOwner(ctx context.Context, client ownerClient, guildID, owner str
 			return "", guildOwnerConflictError(existing)
 		}
 	}
+	log.Printf("operation=%q phase=%q control_channel=%q", "discord_owner_claim", "update_topic", controlChannelID)
 	if err := client.UpdateChannelTopic(ctx, controlChannelID, topicWithOwner(channel.Topic, owner)); err != nil {
 		return "", fmt.Errorf("claim Discord guild owner: %w", err)
 	}

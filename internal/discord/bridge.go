@@ -173,6 +173,9 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 	store := b.store
 	b.mu.Unlock()
 
+	started := time.Now()
+	logConnectPhase("begin", started, "mode", mode, "guild", cfg.GuildID, "takeover", takeover)
+
 	if err := ValidateConfig(cfg); err != nil {
 		b.setError(err)
 		return err
@@ -183,6 +186,7 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 		b.setError(err)
 		return err
 	}
+	logConnectPhase("lock_acquired", started)
 	bot, err := NewBot(cfg.BotToken)
 	if err != nil {
 		_ = lock.Release()
@@ -202,6 +206,7 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 		b.setError(err)
 		return err
 	}
+	logConnectPhase("gateway_opened", started)
 	owner := newGuildOwner(mode)
 	var ownerChannelID string
 	if takeover {
@@ -213,8 +218,10 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 		_ = bot.Close()
 		_ = lock.Release()
 		b.setError(err)
+		logConnectPhase("owner_claim_failed", started, "error", err.Error())
 		return err
 	}
+	logConnectPhase("owner_claimed", started, "control_channel", ownerChannelID)
 	if service != nil {
 		// Command registration is best-effort: Discord persists guild commands
 		// across restarts, so a rate-limited or slow command endpoint must not
@@ -222,6 +229,7 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 		if err := bot.RegisterCommands(ctx, cfg.GuildID); err != nil {
 			log.Printf("operation=%q status=%q guild=%q error=%q", "discord_register_commands", "skipped", cfg.GuildID, err)
 		}
+		logConnectPhase("commands_registered", started)
 	}
 	heartbeatStop := make(chan struct{})
 	b.mu.Lock()
@@ -234,6 +242,7 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 	b.ownerHeartbeatStop = heartbeatStop
 	b.lastErr = ""
 	b.mu.Unlock()
+	logConnectPhase("connected", started, "guild", cfg.GuildID)
 	go b.runOwnerHeartbeat(bot, cfg.GuildID, ownerChannelID, owner, heartbeatStop)
 	if store != nil && initialSync {
 		go b.syncActiveTasksAfterStart(store, bot, cfg.GuildID)
@@ -241,6 +250,22 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 		b.syncTaskStreams(context.Background())
 	}
 	return nil
+}
+
+// logConnectPhase emits a structured, timestamped connect-progress line so the
+// runtime log shows exactly which phase a stuck or slow connect reached.
+func logConnectPhase(phase string, started time.Time, fields ...any) {
+	args := make([]any, 0, len(fields)+2)
+	args = append(args, "operation", "discord_connect", "phase", phase, "elapsed_ms", time.Since(started).Milliseconds())
+	args = append(args, fields...)
+	var b strings.Builder
+	for i := 0; i+1 < len(args); i += 2 {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%s=%q", args[i], fmt.Sprint(args[i+1]))
+	}
+	log.Print(b.String())
 }
 
 // runOwnerHeartbeat periodically refreshes this runtime's owner heartbeat so

@@ -250,10 +250,31 @@ export default function App() {
     }
   }, [appendLog]);
 
+  const lastDiscordLogRef = useRef<string>('');
   const loadDiscordStatus = useCallback(async () => {
     setDiscordStatusLoading(true);
     try {
-      setDiscordStatus(await api.DiscordStatus());
+      const next = await api.DiscordStatus();
+      setDiscordStatus(next);
+      // Surface the runtime bridge's connection lifecycle in the action log so a
+      // failing or slow auto-connect is visible here instead of only spinning in
+      // the Discord panel. Gate on a signature so each poll doesn't spam the log.
+      if (next.enabled) {
+        const signature = `${next.connected}|${next.error ?? ''}|${next.sync?.stage ?? ''}|${next.sync?.error ?? ''}`;
+        if (signature !== lastDiscordLogRef.current) {
+          lastDiscordLogRef.current = signature;
+          if (next.error) {
+            appendLog(`[discord] ${next.connected ? 'sync warning' : 'connect failed'}: ${next.error}`);
+          } else if (next.connected) {
+            appendLog(`[discord] connected${next.guildName ? ` to ${next.guildName}` : ''}`);
+          } else {
+            appendLog('[discord] connecting…');
+          }
+          if (next.sync?.error) {
+            appendLog(`[discord] sync ${next.sync.stage ?? ''}: ${next.sync.error}`);
+          }
+        }
+      }
     } catch (err) {
       const message = errorMessage(err);
       setError(message);

@@ -240,7 +240,7 @@ func (b *Bot) EnsureControlChannel(ctx context.Context, guildID, name string) (s
 }
 
 func (b *Bot) EnsureCategory(ctx context.Context, guildID, name string) (string, error) {
-	channel, err := b.findGuildChannel(guildID, name, discordgo.ChannelTypeGuildCategory, "")
+	channel, err := b.findGuildChannel(ctx, guildID, name, discordgo.ChannelTypeGuildCategory, "")
 	if err != nil {
 		return "", err
 	}
@@ -257,7 +257,7 @@ func (b *Bot) CreateCategory(ctx context.Context, guildID, name string) (string,
 	created, err := b.session.GuildChannelCreateComplex(guildID, discordgo.GuildChannelCreateData{
 		Name: name,
 		Type: discordgo.ChannelTypeGuildCategory,
-	})
+	}, connectRequestOptions(ctx)...)
 	if err != nil {
 		return "", err
 	}
@@ -277,15 +277,25 @@ func (b *Bot) CreateTextChannel(ctx context.Context, guildID, categoryID, name, 
 		Type:     discordgo.ChannelTypeGuildText,
 		ParentID: categoryID,
 		Topic:    topic,
-	})
+	}, connectRequestOptions(ctx)...)
 	if err != nil {
 		return "", err
 	}
 	return created.ID, nil
 }
 
+// connectRequestOptions bounds a REST call to the caller's context and disables
+// discordgo's rate-limit retry. A rate-limited endpoint (retry-after can be
+// minutes) would otherwise make discordgo sleep through the wait, ignoring the
+// context and stalling the connect before it can mark itself connected — which
+// surfaces as an endless "checking" state and later an opaque "context deadline
+// exceeded". Failing fast lets the connect return a clear, actionable error.
+func connectRequestOptions(ctx context.Context) []discordgo.RequestOption {
+	return []discordgo.RequestOption{discordgo.WithContext(ctx), discordgo.WithRetryOnRatelimit(false)}
+}
+
 func (b *Bot) UpdateChannelTopic(ctx context.Context, channelID, topic string) error {
-	_, err := b.session.ChannelEdit(channelID, &discordgo.ChannelEdit{Topic: topic})
+	_, err := b.session.ChannelEdit(channelID, &discordgo.ChannelEdit{Topic: topic}, connectRequestOptions(ctx)...)
 	return err
 }
 
@@ -312,7 +322,7 @@ func (b *Bot) ListGuildChannels(ctx context.Context, guildID string) ([]GuildCha
 	if b == nil || b.session == nil {
 		return nil, fmt.Errorf("discord bot is not initialized")
 	}
-	channels, err := b.session.GuildChannels(guildID)
+	channels, err := b.session.GuildChannels(guildID, connectRequestOptions(ctx)...)
 	if err != nil {
 		return nil, err
 	}
@@ -677,7 +687,7 @@ func (b *Bot) clearProcessingIndicators() {
 }
 
 func (b *Bot) ensureTextChannel(ctx context.Context, guildID, categoryID, name, topic string) (string, error) {
-	channels, err := b.findGuildChannels(guildID, name, discordgo.ChannelTypeGuildText, categoryID)
+	channels, err := b.findGuildChannels(ctx, guildID, name, discordgo.ChannelTypeGuildText, categoryID)
 	if err != nil {
 		return "", err
 	}
@@ -695,15 +705,15 @@ func (b *Bot) ensureTextChannel(ctx context.Context, guildID, categoryID, name, 
 		Type:     discordgo.ChannelTypeGuildText,
 		ParentID: categoryID,
 		Topic:    topic,
-	})
+	}, connectRequestOptions(ctx)...)
 	if err != nil {
 		return "", err
 	}
 	return created.ID, nil
 }
 
-func (b *Bot) findGuildChannel(guildID, name string, channelType discordgo.ChannelType, parentID string) (*discordgo.Channel, error) {
-	channels, err := b.findGuildChannels(guildID, name, channelType, parentID)
+func (b *Bot) findGuildChannel(ctx context.Context, guildID, name string, channelType discordgo.ChannelType, parentID string) (*discordgo.Channel, error) {
+	channels, err := b.findGuildChannels(ctx, guildID, name, channelType, parentID)
 	if err != nil {
 		return nil, err
 	}
@@ -713,11 +723,11 @@ func (b *Bot) findGuildChannel(guildID, name string, channelType discordgo.Chann
 	return channels[0], nil
 }
 
-func (b *Bot) findGuildChannels(guildID, name string, channelType discordgo.ChannelType, parentID string) ([]*discordgo.Channel, error) {
+func (b *Bot) findGuildChannels(ctx context.Context, guildID, name string, channelType discordgo.ChannelType, parentID string) ([]*discordgo.Channel, error) {
 	if b == nil || b.session == nil {
 		return nil, fmt.Errorf("discord bot is not initialized")
 	}
-	channels, err := b.session.GuildChannels(guildID)
+	channels, err := b.session.GuildChannels(guildID, connectRequestOptions(ctx)...)
 	if err != nil {
 		return nil, err
 	}
