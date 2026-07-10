@@ -242,6 +242,18 @@ func (s discordCommandService) ResolveTaskByChannel(ctx context.Context, channel
 	return mapping.AGXID, nil
 }
 
+func (s discordCommandService) ResolveTask(ctx context.Context, ref string) (agxdiscord.TaskSummary, error) {
+	task, err := s.resolveTaskRef(ref)
+	if err != nil {
+		return agxdiscord.TaskSummary{}, err
+	}
+	project, err := s.runtime.store.GetProject(task.ProjectID)
+	if err != nil {
+		return agxdiscord.TaskSummary{}, err
+	}
+	return s.taskSummary(task, project.Name), nil
+}
+
 func (s discordCommandService) GetTask(ctx context.Context, taskID string) (agxdiscord.TaskSummary, error) {
 	task, project, err := s.runtime.taskAndProject(taskID)
 	if err != nil {
@@ -382,6 +394,55 @@ func (s discordCommandService) resolveTask(ref string) (db.Task, error) {
 		return db.Task{}, fmt.Errorf("task is required")
 	}
 	return s.runtime.store.ResolveTask(ref)
+}
+
+// resolveTaskRef resolves a task by id, id prefix, or exact title (case
+// insensitive). Id resolution wins; a title match is only attempted when the ref
+// does not match any task id, so operators can reference a task by its channel
+// name without needing to copy the id.
+func (s discordCommandService) resolveTaskRef(ref string) (db.Task, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return db.Task{}, fmt.Errorf("task is required")
+	}
+	task, err := s.runtime.store.ResolveTask(ref)
+	if err == nil {
+		return task, nil
+	}
+	if !errors.Is(err, db.ErrTaskNotFound) && !errors.Is(err, db.ErrTaskIDTooShort) {
+		return db.Task{}, err
+	}
+	return s.resolveTaskByTitle(ref)
+}
+
+func (s discordCommandService) resolveTaskByTitle(ref string) (db.Task, error) {
+	projects, err := s.runtime.store.ListProjects()
+	if err != nil {
+		return db.Task{}, err
+	}
+	var matches []db.Task
+	for _, project := range projects {
+		tasks, err := s.runtime.store.ListTasks(project.ID, nil)
+		if err != nil {
+			return db.Task{}, err
+		}
+		for _, task := range tasks {
+			if task.Interface != db.TaskInterfaceDiscord {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(task.Title), ref) {
+				matches = append(matches, task)
+			}
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return db.Task{}, db.ErrTaskNotFound
+	case 1:
+		return matches[0], nil
+	default:
+		return db.Task{}, db.AmbiguousTaskError{Prefix: ref, Matches: matches}
+	}
 }
 
 func sameProjectPath(a, b string) bool {

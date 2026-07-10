@@ -46,6 +46,7 @@ type CommandService interface {
 	SoftSync(ctx context.Context) error
 	HardSync(ctx context.Context, preserveControlChannelID string) error
 	ResolveTaskByChannel(ctx context.Context, channelID string) (string, error)
+	ResolveTask(ctx context.Context, ref string) (TaskSummary, error)
 	GetTask(ctx context.Context, taskID string) (TaskSummary, error)
 	InterruptTask(ctx context.Context, taskID string) error
 	KillTask(ctx context.Context, taskID, channelID string) error
@@ -243,6 +244,15 @@ func ApplicationCommands() []*discordgo.ApplicationCommand {
 						{Type: discordgo.ApplicationCommandOptionString, Name: "task", Description: "Task id or id prefix", Required: true},
 					},
 				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "logs",
+					Description: "Show recent output for an AGX task",
+					Options: []*discordgo.ApplicationCommandOption{
+						{Type: discordgo.ApplicationCommandOptionString, Name: "task", Description: "Task id, id prefix, or title", Required: true},
+						{Type: discordgo.ApplicationCommandOptionInteger, Name: "lines", Description: "Number of lines", Required: false},
+					},
+				},
 			},
 		},
 		{Name: "interrupt", Description: "Interrupt the current AGX task turn"},
@@ -257,9 +267,8 @@ func ApplicationCommands() []*discordgo.ApplicationCommand {
 		},
 		{
 			Name:        "logs",
-			Description: "Show recent task output",
+			Description: "Show recent output for this AGX task channel",
 			Options: []*discordgo.ApplicationCommandOption{
-				{Type: discordgo.ApplicationCommandOptionString, Name: "task", Description: "Task ID", Required: true},
 				{Type: discordgo.ApplicationCommandOptionInteger, Name: "lines", Description: "Number of lines", Required: false},
 			},
 		},
@@ -307,6 +316,8 @@ func (r *CommandRouter) Execute(ctx context.Context, input CommandInput) (Comman
 			return r.taskCreate(ctx, input)
 		case "delete":
 			return r.taskDelete(ctx, input)
+		case "logs":
+			return r.logs(ctx, input)
 		}
 		return CommandResponse{}, fmt.Errorf("unknown task command %q", input.Subcommand)
 	case "interrupt":
@@ -374,7 +385,7 @@ func (r *CommandRouter) isControlChannel(ctx context.Context, input CommandInput
 
 func isTaskOnlyCommand(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "interrupt", "clear", "kill":
+	case "interrupt", "clear", "kill", "logs":
 		return true
 	default:
 		return false
@@ -683,7 +694,7 @@ func (r *CommandRouter) status(ctx context.Context, input CommandInput) (Command
 }
 
 func (r *CommandRouter) logs(ctx context.Context, input CommandInput) (CommandResponse, error) {
-	taskID, err := r.taskID(ctx, input)
+	taskID, err := r.logsTaskID(ctx, input)
 	if err != nil {
 		return CommandResponse{}, err
 	}
@@ -822,6 +833,25 @@ func (r *CommandRouter) taskID(ctx context.Context, input CommandInput) (string,
 	return taskID, nil
 }
 
+// logsTaskID resolves the task whose logs should be shown. An explicit `task`
+// option (used by `/task logs` in #agx-control) is resolved by id, id prefix, or
+// title; otherwise the task is inferred from the current task channel so a bare
+// `/logs` works in a task channel.
+func (r *CommandRouter) logsTaskID(ctx context.Context, input CommandInput) (string, error) {
+	if ref := strings.TrimSpace(input.Options["task"]); ref != "" {
+		task, err := r.service.ResolveTask(ctx, ref)
+		if err != nil {
+			return "", err
+		}
+		return task.ID, nil
+	}
+	taskID, err := r.service.ResolveTaskByChannel(ctx, input.ChannelID)
+	if err != nil || strings.TrimSpace(taskID) == "" {
+		return "", ErrChannelNotLinked
+	}
+	return taskID, nil
+}
+
 func isControlChannelName(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), controlChannelName)
 }
@@ -833,7 +863,8 @@ func commandHelp() string {
 		"`/project list`, `/project create`, `/project delete` - manage registered projects from `#agx-control`",
 		"`/soft-sync` - sync Discord to the current AGX state",
 		"`/hard-sync` - rebuild managed Discord channels from AGX state",
-		"`/status task:<id>`, `/logs task:<id>` - inspect tasks from `#agx-control`",
+		"`/status task:<id>`, `/task logs task:<name-or-id>` - inspect tasks from `#agx-control`",
+		"`/logs` - show recent output in an AGX task channel (crash/error diagnosis)",
 		"`/interrupt` - interrupt the current task turn in an AGX task channel",
 		"`/clear` - clear the current task agent context in an AGX task channel",
 		"`/kill` - delete the current task and remove its Discord task channel",

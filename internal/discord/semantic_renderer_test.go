@@ -50,6 +50,56 @@ func TestSemanticRendererRendersProgress(t *testing.T) {
 	}
 }
 
+func TestSemanticRendererRendersFullError(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	actions := renderer.Render(agentstream.Event{
+		Kind:  agentstream.EventError,
+		Error: "detailed failure: connection refused while starting the agent",
+	})
+	if len(actions) < 2 || actions[0].Kind != RenderClearProgress {
+		t.Fatalf("actions = %#v, want progress clear then error message", actions)
+	}
+	send := actions[1]
+	if send.Kind != RenderSend || !send.HighPriority {
+		t.Fatalf("action = %#v, want high-priority send", send)
+	}
+	if !strings.Contains(send.Content, "AGX agent error") || !strings.Contains(send.Content, "connection refused while starting the agent") {
+		t.Fatalf("content dropped the error detail: %q", send.Content)
+	}
+}
+
+func TestSemanticRendererRendersEmptyErrorWithFallback(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	actions := renderer.Render(agentstream.Event{Kind: agentstream.EventError, Error: "   "})
+	if len(actions) != 2 {
+		t.Fatalf("len(actions) = %d, want clear + message", len(actions))
+	}
+	if !strings.Contains(actions[1].Content, "did not include any details") {
+		t.Fatalf("content = %q, want empty-error fallback", actions[1].Content)
+	}
+}
+
+func TestSemanticRendererSplitsLongErrorAcrossMessages(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	actions := renderer.Render(agentstream.Event{
+		Kind:  agentstream.EventError,
+		Error: strings.Repeat("stacktrace line\n", 400),
+	})
+	sends := 0
+	for _, action := range actions {
+		if action.Kind != RenderSend {
+			continue
+		}
+		sends++
+		if len(action.Content) > maxDiscordMessage {
+			t.Fatalf("error chunk length = %d, want <= %d", len(action.Content), maxDiscordMessage)
+		}
+	}
+	if sends < 2 {
+		t.Fatalf("error sends = %d, want multiple chunks", sends)
+	}
+}
+
 func TestSemanticRendererChunksAssistantMessage(t *testing.T) {
 	renderer := SemanticRenderer{MaxMessageBytes: 80}
 	actions := renderer.Render(agentstream.Event{

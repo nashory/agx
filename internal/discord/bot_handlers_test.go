@@ -292,6 +292,11 @@ func (s panicCommandService) ResolveTaskByChannel(context.Context, string) (stri
 	return "", nil
 }
 
+func (s panicCommandService) ResolveTask(context.Context, string) (TaskSummary, error) {
+	s.t.Fatal("ResolveTask should not be called")
+	return TaskSummary{}, nil
+}
+
 func (s panicCommandService) GetTask(context.Context, string) (TaskSummary, error) {
 	s.t.Fatal("GetTask should not be called")
 	return TaskSummary{}, nil

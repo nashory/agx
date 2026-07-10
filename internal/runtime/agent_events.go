@@ -428,7 +428,10 @@ func (s *agentEventService) runClaudeTurn(ctx context.Context, cancel context.Ca
 	err := s.execClaudeStream(ctx, task, project, turnID, message)
 	if err != nil {
 		kind := agentstream.EventError
-		text := err.Error()
+		text := strings.TrimSpace(err.Error())
+		if text == "" {
+			text = "The agent process failed without an error message."
+		}
 		if ctx.Err() != nil {
 			kind = agentstream.EventInterrupted
 			text = "Interrupted."

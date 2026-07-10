@@ -202,13 +202,17 @@ func MapNotification(task agentstream.TaskSummary, notification Notification) (a
 		if err := json.Unmarshal(notification.Params, &params); err != nil {
 			return agentstream.Event{}, false, err
 		}
+		message := strings.TrimSpace(params.Message)
+		if message == "" {
+			message = "codex reported an error without any details."
+		}
 		return agentstream.Event{
-			ID:        agentstream.StableEventID(task.ID, agentstream.EventError, params.Message),
+			ID:        agentstream.StableEventID(task.ID, agentstream.EventError, message),
 			TaskID:    task.ID,
 			Kind:      agentstream.EventError,
 			Agent:     "codex",
 			CreatedAt: time.Now(),
-			Error:     params.Message,
+			Error:     message,
 		}, true, nil
 	default:
 		return agentstream.Event{}, false, nil

@@ -328,10 +328,8 @@ func (r SemanticRenderer) Render(event agentstream.Event) []RenderAction {
 	case agentstream.EventInterrupted:
 		return []RenderAction{{Kind: RenderUpdateProgress, Content: "⏹️ Interrupted."}}
 	case agentstream.EventError:
-		return []RenderAction{
-			{Kind: RenderClearProgress},
-			{Kind: RenderSend, Content: "AGX agent error: " + strings.TrimSpace(event.Error), HighPriority: true},
-		}
+		actions := []RenderAction{{Kind: RenderClearProgress}}
+		return append(actions, r.errorMessages(event.Error)...)
 	default:
 		return nil
 	}
@@ -350,6 +348,31 @@ func (r SemanticRenderer) Unsupported(task agentstream.TaskSummary) RenderAction
 		),
 		HighPriority: true,
 	}
+}
+
+// errorMessages renders an agent error in full. The error is wrapped in a code
+// block so the raw text is never mangled by Discord markdown, and split across
+// several messages when it exceeds a single message so nothing is truncated. An
+// empty error still produces a message rather than a bare "AGX agent error:".
+func (r SemanticRenderer) errorMessages(errText string) []RenderAction {
+	errText = strings.TrimSpace(errText)
+	if errText == "" {
+		errText = "The agent reported an error but did not include any details."
+	}
+	chunks := splitOutput(errText, streamCodeBlockBudget)
+	actions := make([]RenderAction, 0, len(chunks))
+	for index, chunk := range chunks {
+		header := "❌ AGX agent error:"
+		if len(chunks) > 1 {
+			header = fmt.Sprintf("❌ AGX agent error (%d/%d):", index+1, len(chunks))
+		}
+		actions = append(actions, RenderAction{
+			Kind:         RenderSend,
+			Content:      header + "\n" + codeBlock(strings.TrimSpace(chunk)),
+			HighPriority: true,
+		})
+	}
+	return actions
 }
 
 func (r SemanticRenderer) sendChunks(text string, highPriority bool) []RenderAction {

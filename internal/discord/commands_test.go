@@ -31,6 +31,8 @@ type fakeCommandService struct {
 	deletedProject          ProjectSummary
 	logs                    string
 	channel                 map[string]string
+	resolvedRef             string
+	resolveTaskErr          error
 	createProjectPath       string
 	createProjectName       string
 	createProjectAgent      string
@@ -137,6 +139,19 @@ func (f *fakeCommandService) SyncStatus(ctx context.Context) SyncStatusSummary {
 
 func (f *fakeCommandService) ResolveTaskByChannel(ctx context.Context, channelID string) (string, error) {
 	return f.channel[channelID], nil
+}
+
+func (f *fakeCommandService) ResolveTask(ctx context.Context, ref string) (TaskSummary, error) {
+	f.resolvedRef = ref
+	if f.resolveTaskErr != nil {
+		return TaskSummary{}, f.resolveTaskErr
+	}
+	for _, task := range f.tasks {
+		if task.ID == ref || strings.EqualFold(task.Title, ref) {
+			return task, nil
+		}
+	}
+	return TaskSummary{ID: ref}, nil
 }
 
 func (f *fakeCommandService) GetTask(ctx context.Context, taskID string) (TaskSummary, error) {
@@ -659,6 +674,51 @@ func TestCommandRouterLogsUsesChannelTask(t *testing.T) {
 	}
 	if response.Content != "```\nhello\n```" {
 		t.Fatalf("response = %q", response.Content)
+	}
+}
+
+func TestCommandRouterTaskLogsResolvesTaskRef(t *testing.T) {
+	service := &fakeCommandService{
+		logs:    "boom",
+		control: map[string]bool{"control": true},
+		tasks:   []TaskSummary{{ID: "task-1", Title: "My Task"}},
+	}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.Execute(context.Background(), CommandInput{
+		Name:       "task",
+		Subcommand: "logs",
+		GuildID:    "guild-1",
+		ChannelID:  "control",
+		UserID:     "user",
+		Options:    map[string]string{"task": "My Task"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.resolvedRef != "My Task" {
+		t.Fatalf("resolvedRef = %q, want My Task", service.resolvedRef)
+	}
+	if response.Content != "```\nboom\n```" {
+		t.Fatalf("response = %q", response.Content)
+	}
+}
+
+func TestCommandRouterLogsRejectedInControlChannel(t *testing.T) {
+	service := &fakeCommandService{control: map[string]bool{"control": true}}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.Execute(context.Background(), CommandInput{
+		Name:      "logs",
+		GuildID:   "guild-1",
+		ChannelID: "control",
+		UserID:    "user",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.Ephemeral || !strings.Contains(response.Content, "task channel") {
+		t.Fatalf("response = %#v, want task-channel guidance", response)
 	}
 }
 
