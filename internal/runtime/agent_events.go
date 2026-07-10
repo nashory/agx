@@ -576,7 +576,9 @@ func claudeStreamArgs(task db.Task, message string) []string {
 		args = append(args, "--session-id", threadID)
 	}
 	if task.AllMighty {
-		args = append(args, "--permission-mode", "bypassPermissions", "--dangerously-disable-osx-sandbox", "--dangerously-skip-permissions")
+		args = append(args, "--permission-mode", "bypassPermissions")
+		args = append(args, agent.SandboxDisableArgs()...)
+		args = append(args, "--dangerously-skip-permissions")
 	}
 	return append(args, message)
 }

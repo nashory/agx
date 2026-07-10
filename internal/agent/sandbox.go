@@ -2,7 +2,7 @@ package agent
 
 import "runtime"
 
-// sandboxDisableArgs returns the flag that disables the OS-level sandbox codex
+// SandboxDisableArgs returns the flag that disables the OS-level sandbox codex
 // and Claude apply in all-mighty mode. The flag name is OS-specific and the
 // agent binaries only accept the flag matching the host OS, so passing the wrong
 // one is an "unknown option" error. Verified against codex/claude --help:
@@ -12,7 +12,7 @@ import "runtime"
 //	Linux   --dangerously-disable-linux-sandbox
 //
 // Platforms without such a sandbox get no flag.
-func sandboxDisableArgs() []string {
+func SandboxDisableArgs() []string {
 	switch runtime.GOOS {
 	case "darwin":
 		return []string{"--dangerously-disable-osx-sandbox"}

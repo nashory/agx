@@ -118,7 +118,7 @@ func isTerminalNoiseLine(line string) bool {
 		"claude code enterprise",
 		"claude code v",
 		"using ai gateway",
-		"--dangerously-disable-osx-sandbox",
+		"--dangerously-disable-", // osx/win/linux sandbox-disable warning banner
 		"dangerously-skip-permissions",
 		"start using avocado",
 		"sessionstart:startup hook error",

@@ -12,9 +12,9 @@ import (
 func TestBuildRunCommand(t *testing.T) {
 	// All-mighty flags include the OS-specific sandbox-disable flag, so compute
 	// expectations from the same helper the production code uses.
-	codexWant := append([]string{"codex"}, sandboxDisableArgs()...)
+	codexWant := append([]string{"codex"}, SandboxDisableArgs()...)
 	codexWant = append(codexWant, "--dangerously-bypass-approvals-and-sandbox", "quote ' and $HOME")
-	claudeWant := append([]string{"missing-claude-for-test"}, sandboxDisableArgs()...)
+	claudeWant := append([]string{"missing-claude-for-test"}, SandboxDisableArgs()...)
 	claudeWant = append(claudeWant, "--dangerously-skip-permissions", "implement auth")
 
 	tests := []struct {
@@ -74,12 +74,12 @@ func TestBuildRunCommandUsesWrappedClaudeAllMightyFlags(t *testing.T) {
 	if !ag.ShouldInjectInitialPrompt() {
 		t.Fatal("ShouldInjectInitialPrompt() = false, want true for wrapped Claude")
 	}
-	runWant := append([]string{path}, sandboxDisableArgs()...)
+	runWant := append([]string{path}, SandboxDisableArgs()...)
 	runWant = append(runWant, "--dangerously-skip-permissions")
 	if got := ag.BuildRunCommand("implement auth"); !reflect.DeepEqual(got, runWant) {
 		t.Fatalf("BuildRunCommand() = %#v, want %#v", got, runWant)
 	}
-	resumeWant := append([]string{path}, sandboxDisableArgs()...)
+	resumeWant := append([]string{path}, SandboxDisableArgs()...)
 	resumeWant = append(resumeWant, "--dangerously-skip-permissions", "--continue")
 	if got := ag.BuildResumeCommand(); !reflect.DeepEqual(got, resumeWant) {
 		t.Fatalf("BuildResumeCommand() = %#v, want %#v", got, resumeWant)
