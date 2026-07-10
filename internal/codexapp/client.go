@@ -64,6 +64,18 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
+// CallError is a JSON-RPC error returned by the Codex app-server. Callers can
+// inspect Code and Message to handle specific failures (for example a rejected
+// thread-settings override under a managed Codex config).
+type CallError struct {
+	Code    int
+	Message string
+}
+
+func (e *CallError) Error() string {
+	return fmt.Sprintf("codex app-server %d: %s", e.Code, e.Message)
+}
+
 // Start launches the Codex app-server subprocess and returns a connected client.
 // Closing the client kills the subprocess and waits for it to exit.
 func Start(ctx context.Context, opts Options) (*Client, error) {
@@ -255,7 +267,7 @@ func (c *Client) handleResponse(message rpcMessage) {
 		return
 	}
 	if message.Error != nil {
-		wait <- response{err: fmt.Errorf("codex app-server %d: %s", message.Error.Code, message.Error.Message)}
+		wait <- response{err: &CallError{Code: message.Error.Code, Message: message.Error.Message}}
 		return
 	}
 	wait <- response{result: message.Result}

@@ -150,6 +150,49 @@ func TestThreadStartSendsDangerFullAccessSandboxPolicy(t *testing.T) {
 	}
 }
 
+func TestThreadStartRetriesWithoutOverrideWhenManagedConfigRejects(t *testing.T) {
+	server, clientConn := net.Pipe()
+	defer server.Close()
+	defer clientConn.Close()
+	client := NewClient(clientConn, clientConn, clientConn)
+
+	done := make(chan error, 1)
+	go func() {
+		dec := json.NewDecoder(server)
+		var first map[string]any
+		if err := dec.Decode(&first); err != nil {
+			done <- err
+			return
+		}
+		assertDangerFullAccessPolicy(t, first) // first attempt still carries the override
+		if _, err := server.Write([]byte(`{"id":1,"error":{"code":-32600,"message":"invalid thread settings override: invalid value for approval_policy: Never is not in the allowed set [UnlessTrusted]"}}` + "\n")); err != nil {
+			done <- err
+			return
+		}
+		var second map[string]any
+		if err := dec.Decode(&second); err != nil {
+			done <- err
+			return
+		}
+		params, _ := second["params"].(map[string]any)
+		if _, ok := params["approvalPolicy"]; ok {
+			t.Errorf("retry still sent approvalPolicy: %#v", params)
+		}
+		if _, ok := params["sandboxPolicy"]; ok {
+			t.Errorf("retry still sent sandboxPolicy: %#v", params)
+		}
+		_, err := server.Write([]byte(`{"id":2,"result":{"thread":{"id":"thread-1","cwd":"/repo"}}}` + "\n"))
+		done <- err
+	}()
+
+	if _, err := client.ThreadStart(context.Background(), "/repo", true); err != nil {
+		t.Fatalf("ThreadStart() error = %v, want success after managed-config retry", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTurnStartSendsDangerFullAccessSandboxPolicy(t *testing.T) {
 	server, clientConn := net.Pipe()
 	defer server.Close()

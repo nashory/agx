@@ -2,6 +2,8 @@ package codexapp
 
 import (
 	"context"
+	"errors"
+	"strings"
 )
 
 const (
@@ -56,13 +58,41 @@ func (c *Client) ThreadStart(ctx context.Context, cwd string, allMighty bool) (T
 	params := map[string]any{
 		"cwd": cwd,
 	}
+	var out ThreadStartResponse
+	err := c.callWithAllMightyOverride(ctx, MethodThreadStart, params, allMighty, &out)
+	return out, err
+}
+
+// callWithAllMightyOverride issues an app-server call, adding the no-approval /
+// danger-full-access override when allMighty. A managed Codex config (for example
+// a corp-managed install) can lock approval_policy/sandbox and reject the
+// override; in that case AGX retries without it and lets the managed config
+// govern, since such installs already sandbox externally.
+func (c *Client) callWithAllMightyOverride(ctx context.Context, method string, params map[string]any, allMighty bool, out any) error {
 	if allMighty {
 		params["approvalPolicy"] = "never"
 		params["sandboxPolicy"] = map[string]any{"type": "dangerFullAccess"}
 	}
-	var out ThreadStartResponse
-	err := c.Call(ctx, MethodThreadStart, params, &out)
-	return out, err
+	err := c.Call(ctx, method, params, out)
+	if err != nil && allMighty && isManagedOverrideRejected(err) {
+		delete(params, "approvalPolicy")
+		delete(params, "sandboxPolicy")
+		err = c.Call(ctx, method, params, out)
+	}
+	return err
+}
+
+// isManagedOverrideRejected reports whether err is the app-server rejecting AGX's
+// approval/sandbox override because a managed config controls those settings.
+func isManagedOverrideRejected(err error) bool {
+	var ce *CallError
+	if !errors.As(err, &ce) || ce.Code != -32600 {
+		return false
+	}
+	msg := strings.ToLower(ce.Message)
+	return strings.Contains(msg, "thread settings override") ||
+		strings.Contains(msg, "approval_policy") ||
+		strings.Contains(msg, "sandbox")
 }
 
 // ThreadResume reconnects to an existing Codex thread by ID.
@@ -81,12 +111,8 @@ func (c *Client) TurnStart(ctx context.Context, threadID, text, cwd string, allM
 	if cwd != "" {
 		params["cwd"] = cwd
 	}
-	if allMighty {
-		params["approvalPolicy"] = "never"
-		params["sandboxPolicy"] = map[string]any{"type": "dangerFullAccess"}
-	}
 	var out TurnStartResponse
-	err := c.Call(ctx, MethodTurnStart, params, &out)
+	err := c.callWithAllMightyOverride(ctx, MethodTurnStart, params, allMighty, &out)
 	return out, err
 }
 
