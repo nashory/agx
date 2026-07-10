@@ -81,7 +81,13 @@ func (b *Bot) Close() error {
 	return b.session.Close()
 }
 
-func (b *Bot) RegisterCommands(guildID string) error {
+// commandRegisterTimeout bounds the Discord command-endpoint calls. That
+// endpoint's rate limit can carry a retry-after of minutes, and discordgo would
+// otherwise block the whole connect on it; failing fast lets the caller proceed
+// with the commands already registered from a previous run.
+const commandRegisterTimeout = 20 * time.Second
+
+func (b *Bot) RegisterCommands(ctx context.Context, guildID string) error {
 	if b == nil || b.session == nil {
 		return fmt.Errorf("discord bot is not initialized")
 	}
@@ -89,15 +95,20 @@ func (b *Bot) RegisterCommands(guildID string) error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(ctx, commandRegisterTimeout)
+	defer cancel()
+	// Bound the requests and do not let discordgo sleep through a long
+	// retry-after; a rate-limited command endpoint must not stall the connection.
+	opts := []discordgo.RequestOption{discordgo.WithContext(ctx), discordgo.WithRetryOnRatelimit(false)}
 	desired := ApplicationCommands()
 	// Skip the rate-limited bulk overwrite when the guild's commands already
 	// match. Re-registering on every connect otherwise accumulates against
 	// Discord's command rate limit, whose retry-after can be minutes long.
-	if existing, err := b.session.ApplicationCommands(appID, guildID); err == nil && commandsEquivalent(existing, desired) {
+	if existing, err := b.session.ApplicationCommands(appID, guildID, opts...); err == nil && commandsEquivalent(existing, desired) {
 		b.rememberCommands(appID, existing)
 		return nil
 	}
-	created, err := b.session.ApplicationCommandBulkOverwrite(appID, guildID, desired)
+	created, err := b.session.ApplicationCommandBulkOverwrite(appID, guildID, desired, opts...)
 	if err != nil {
 		return fmt.Errorf("register Discord commands: %w", err)
 	}

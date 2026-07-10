@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -215,12 +216,11 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 		return err
 	}
 	if service != nil {
-		if err := bot.RegisterCommands(cfg.GuildID); err != nil {
-			_ = releaseGuildOwner(context.Background(), bot, cfg.GuildID, ownerChannelID, owner)
-			_ = bot.Close()
-			_ = lock.Release()
-			b.setError(err)
-			return err
+		// Command registration is best-effort: Discord persists guild commands
+		// across restarts, so a rate-limited or slow command endpoint must not
+		// fail the whole connect. Log and proceed with the existing commands.
+		if err := bot.RegisterCommands(ctx, cfg.GuildID); err != nil {
+			log.Printf("operation=%q status=%q guild=%q error=%q", "discord_register_commands", "skipped", cfg.GuildID, err)
 		}
 	}
 	heartbeatStop := make(chan struct{})
