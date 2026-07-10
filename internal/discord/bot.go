@@ -89,7 +89,15 @@ func (b *Bot) RegisterCommands(guildID string) error {
 	if err != nil {
 		return err
 	}
-	created, err := b.session.ApplicationCommandBulkOverwrite(appID, guildID, ApplicationCommands())
+	desired := ApplicationCommands()
+	// Skip the rate-limited bulk overwrite when the guild's commands already
+	// match. Re-registering on every connect otherwise accumulates against
+	// Discord's command rate limit, whose retry-after can be minutes long.
+	if existing, err := b.session.ApplicationCommands(appID, guildID); err == nil && commandsEquivalent(existing, desired) {
+		b.rememberCommands(appID, existing)
+		return nil
+	}
+	created, err := b.session.ApplicationCommandBulkOverwrite(appID, guildID, desired)
 	if err != nil {
 		return fmt.Errorf("register Discord commands: %w", err)
 	}
