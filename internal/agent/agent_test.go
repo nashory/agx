@@ -10,6 +10,13 @@ import (
 )
 
 func TestBuildRunCommand(t *testing.T) {
+	// All-mighty flags include the OS-specific sandbox-disable flag, so compute
+	// expectations from the same helper the production code uses.
+	codexWant := append([]string{"codex"}, sandboxDisableArgs()...)
+	codexWant = append(codexWant, "--dangerously-bypass-approvals-and-sandbox", "quote ' and $HOME")
+	claudeWant := append([]string{"missing-claude-for-test"}, sandboxDisableArgs()...)
+	claudeWant = append(claudeWant, "--dangerously-skip-permissions", "implement auth")
+
 	tests := []struct {
 		name   string
 		agent  Agent
@@ -20,7 +27,7 @@ func TestBuildRunCommand(t *testing.T) {
 			name:   "public claude with prompt",
 			agent:  Agent{Name: "claude", Command: "missing-claude-for-test"},
 			prompt: "implement auth",
-			want:   []string{"missing-claude-for-test", "--dangerously-skip-permissions", "implement auth"},
+			want:   claudeWant,
 		},
 		{
 			name:   "gemini with prompt",
@@ -32,7 +39,7 @@ func TestBuildRunCommand(t *testing.T) {
 			name:   "prompt is not shell split",
 			agent:  Agent{Name: "codex", Command: "codex"},
 			prompt: "quote ' and $HOME",
-			want:   []string{"codex", "--dangerously-disable-osx-sandbox", "--dangerously-bypass-approvals-and-sandbox", "quote ' and $HOME"},
+			want:   codexWant,
 		},
 		{
 			name:   "custom agent with args",
@@ -67,11 +74,15 @@ func TestBuildRunCommandUsesWrappedClaudeAllMightyFlags(t *testing.T) {
 	if !ag.ShouldInjectInitialPrompt() {
 		t.Fatal("ShouldInjectInitialPrompt() = false, want true for wrapped Claude")
 	}
-	if got, want := ag.BuildRunCommand("implement auth"), []string{path, "--dangerously-disable-osx-sandbox", "--dangerously-skip-permissions"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("BuildRunCommand() = %#v, want %#v", got, want)
+	runWant := append([]string{path}, sandboxDisableArgs()...)
+	runWant = append(runWant, "--dangerously-skip-permissions")
+	if got := ag.BuildRunCommand("implement auth"); !reflect.DeepEqual(got, runWant) {
+		t.Fatalf("BuildRunCommand() = %#v, want %#v", got, runWant)
 	}
-	if got, want := ag.BuildResumeCommand(), []string{path, "--dangerously-disable-osx-sandbox", "--dangerously-skip-permissions", "--continue"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("BuildResumeCommand() = %#v, want %#v", got, want)
+	resumeWant := append([]string{path}, sandboxDisableArgs()...)
+	resumeWant = append(resumeWant, "--dangerously-skip-permissions", "--continue")
+	if got := ag.BuildResumeCommand(); !reflect.DeepEqual(got, resumeWant) {
+		t.Fatalf("BuildResumeCommand() = %#v, want %#v", got, resumeWant)
 	}
 }
 

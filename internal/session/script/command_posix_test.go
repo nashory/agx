@@ -5,6 +5,7 @@ package script
 import (
 	"os"
 	osexec "os/exec"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -85,7 +86,11 @@ func TestBuildTmuxCommandOmitsPromptForWrappedClaude(t *testing.T) {
 			t.Fatalf("wrapped Claude command should not record wrapper exit status %q:\n%s", unexpected, content)
 		}
 	}
-	if !strings.Contains(content, "script -q /dev/null '"+path+"' '--dangerously-disable-osx-sandbox' '--dangerously-skip-permissions'") {
+	sandboxFlag := "--dangerously-disable-osx-sandbox"
+	if runtime.GOOS == "linux" {
+		sandboxFlag = "--dangerously-disable-linux-sandbox"
+	}
+	if !strings.Contains(content, "script -q /dev/null '"+path+"' '"+sandboxFlag+"' '--dangerously-skip-permissions'") {
 		t.Fatalf("script missing wrapped Claude command:\n%s", content)
 	}
 }
