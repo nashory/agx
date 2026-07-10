@@ -1,6 +1,8 @@
 package session
 
 import (
+	"log"
+
 	"github.com/nashory/agx/internal/db"
 	"github.com/nashory/agx/internal/tmux"
 	"github.com/nashory/agx/internal/worktree"
@@ -126,10 +128,14 @@ func (m *Manager) cleanupOrphanWorktrees(result *RecoveryResult) error {
 			}
 		}
 		removed, err := worktree.CleanupOrphans(project, active)
-		if err != nil {
-			return err
-		}
 		result.Orphans += removed
+		if err != nil {
+			// An orphan worktree that cannot be removed (for example a Windows
+			// directory still locked by another process) is not fatal: the task is
+			// already gone and the leftover directory is harmless. Log and continue
+			// so a stuck orphan cannot block runtime startup.
+			log.Printf("operation=%q project=%q error=%q", "recover_orphan_cleanup", project.ID, err)
+		}
 	}
 	return nil
 }
