@@ -12,24 +12,30 @@ import (
 )
 
 // ExpandHomePath expands a leading ~ (with a / or \ separator, or a bare ~) to
-// the user's home directory. Inputs that never pass through a shell — Discord
-// slash commands, config values — do not get tilde expansion, so AGX applies it
-// here. filepath.Abs then normalizes separators, so forward slashes work on
-// Windows too. It is exported so path-consuming entry points (for example
-// project access validation) can normalize before probing the path.
+// the user's home directory. Inputs that never pass through a shell, such as
+// Discord slash commands and config values, do not get tilde expansion, so AGX
+// applies it here. It is exported so path-consuming entry points can normalize
+// before probing the path.
 func ExpandHomePath(path string) string {
 	trimmed := strings.TrimSpace(path)
 	if trimmed != "~" && !strings.HasPrefix(trimmed, "~/") && !strings.HasPrefix(trimmed, `~\`) {
-		return path
+		return trimmed
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return path
+		return trimmed
 	}
 	if trimmed == "~" {
 		return home
 	}
 	return filepath.Join(home, trimmed[2:])
+}
+
+// NormalizeProjectPath applies AGX project path normalization before project
+// validation or persistence. It expands shell-style home paths and returns an
+// absolute, cleaned path using the host platform's path rules.
+func NormalizeProjectPath(path string) (string, error) {
+	return filepath.Abs(ExpandHomePath(path))
 }
 
 var ErrProjectNotFound = errors.New("project not found")
@@ -54,7 +60,7 @@ func (e AmbiguousProjectError) Unwrap() error {
 }
 
 func (s *Store) EnsureProject(path string, defaultAgent *string) (Project, error) {
-	abs, err := filepath.Abs(ExpandHomePath(path))
+	abs, err := NormalizeProjectPath(path)
 	if err != nil {
 		return Project{}, err
 	}
@@ -73,7 +79,7 @@ ON CONFLICT(path) DO UPDATE SET
 }
 
 func (s *Store) EnsureProjectDetails(path, name string, description, defaultAgent *string) (Project, error) {
-	abs, err := filepath.Abs(ExpandHomePath(path))
+	abs, err := NormalizeProjectPath(path)
 	if err != nil {
 		return Project{}, err
 	}
@@ -118,7 +124,7 @@ ORDER BY last_opened DESC, name ASC
 }
 
 func (s *Store) GetProjectByPath(path string) (Project, error) {
-	abs, err := filepath.Abs(ExpandHomePath(path))
+	abs, err := NormalizeProjectPath(path)
 	if err != nil {
 		return Project{}, err
 	}

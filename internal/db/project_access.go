@@ -2,11 +2,10 @@ package db
 
 import (
 	"database/sql"
-	"path/filepath"
 )
 
 func (s *Store) MarkProjectAccessGranted(path string) error {
-	abs, err := filepath.Abs(path)
+	abs, err := NormalizeProjectPath(path)
 	if err != nil {
 		return err
 	}
@@ -19,7 +18,7 @@ ON CONFLICT(path) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
 }
 
 func (s *Store) HasProjectAccessGrant(path string) (bool, error) {
-	abs, err := filepath.Abs(path)
+	abs, err := NormalizeProjectPath(path)
 	if err != nil {
 		return false, err
 	}

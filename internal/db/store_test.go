@@ -24,6 +24,76 @@ func TestOpenPathCreatesPrivateDatabaseDirectory(t *testing.T) {
 	}
 }
 
+func TestNormalizeProjectPathExpandsHomeForms(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", filepath.VolumeName(home))
+	t.Setenv("HOMEPATH", strings.TrimPrefix(home, filepath.VolumeName(home)))
+
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "bare", in: "~", want: home},
+		{name: "posix separator", in: "~/github/repo", want: filepath.Join(home, "github", "repo")},
+		{name: "windows separator", in: `~\github\repo`, want: filepath.Join(home, `github\repo`)},
+		{name: "trimmed", in: "  ~/github/repo  ", want: filepath.Join(home, "github", "repo")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeProjectPath(tc.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("NormalizeProjectPath(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if strings.Contains(got, "~") {
+				t.Fatalf("NormalizeProjectPath(%q) left tilde unexpanded: %q", tc.in, got)
+			}
+		})
+	}
+}
+
+func TestProjectAccessGrantNormalizesHomePath(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", filepath.VolumeName(home))
+	t.Setenv("HOMEPATH", strings.TrimPrefix(home, filepath.VolumeName(home)))
+
+	store, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	raw := `~\github\repo`
+	normalized, err := NormalizeProjectPath(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkProjectAccessGranted(raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{raw, normalized} {
+		granted, err := store.HasProjectAccessGrant(ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !granted {
+			t.Fatalf("HasProjectAccessGrant(%q) = false, want true", ref)
+		}
+	}
+}
+
 func TestProjectAndTaskCRUD(t *testing.T) {
 	store, err := OpenMemory()
 	if err != nil {

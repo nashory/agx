@@ -7,24 +7,33 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nashory/agx/internal/db"
 	"github.com/nashory/agx/internal/worktree"
 )
 
 func validateProjectAccess(path string) error {
-	for _, target := range projectAccessProbeTargets(path) {
+	normalized, err := db.NormalizeProjectPath(path)
+	if err != nil {
+		return err
+	}
+	for _, target := range projectAccessProbeTargets(normalized) {
 		if err := ensureWritableDirectory(target.Path, target.Label); err != nil {
 			return err
 		}
 	}
-	return worktree.ValidateProject(path)
+	return worktree.ValidateProject(normalized)
 }
 
 func validateOrRepairProjectAccess(path string) error {
-	if err := validateProjectAccess(path); err != nil {
-		if repairErr := repairProjectAccess(path); repairErr != nil {
+	normalized, normalizeErr := db.NormalizeProjectPath(path)
+	if normalizeErr != nil {
+		return normalizeErr
+	}
+	if err := validateProjectAccess(normalized); err != nil {
+		if repairErr := repairProjectAccess(normalized); repairErr != nil {
 			return repairErr
 		}
-		if err := validateProjectAccess(path); err != nil {
+		if err := validateProjectAccess(normalized); err != nil {
 			return err
 		}
 	}
@@ -41,6 +50,9 @@ type accessProbeTarget struct {
 }
 
 func projectAccessProbeTargets(projectPath string) []accessProbeTarget {
+	if normalized, err := db.NormalizeProjectPath(projectPath); err == nil {
+		projectPath = normalized
+	}
 	targets := []accessProbeTarget{{Path: projectPath, Label: "project directory"}}
 	if indexPath, err := gitPath(projectPath, "index"); err == nil && strings.TrimSpace(indexPath) != "" {
 		targets = append(targets, accessProbeTarget{Path: filepath.Dir(indexPath), Label: "git index directory"})
