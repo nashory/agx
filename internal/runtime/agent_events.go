@@ -26,6 +26,7 @@ type codexRuntime interface {
 	TurnSteer(context.Context, string, string, string) (codexapp.TurnSteerResponse, error)
 	TurnInterrupt(context.Context, string, string) error
 	Events() <-chan codexapp.Notification
+	ApproveRequest(codexapp.Notification, codexapp.ReviewDecision) error
 	Close() error
 }
 
@@ -620,6 +621,10 @@ func (s *agentEventService) forgetRuntime(client codexRuntime) {
 func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 	defer s.forgetRuntime(client)
 	for notification := range client.Events() {
+		if codexapp.IsApprovalRequest(notification) {
+			s.answerCodexApproval(client, notification)
+			continue
+		}
 		s.mu.Lock()
 		taskID := s.taskIDForNotificationLocked(notification)
 		s.mu.Unlock()
@@ -659,6 +664,31 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 			s.runtime.emitMetadataEvent(task.ProjectID)
 			s.runtime.syncDiscordAsync()
 		}
+	}
+}
+
+// answerCodexApproval responds to a Codex approval request so the blocked turn
+// can proceed instead of hanging on "Thinking". All-mighty tasks (the only kind
+// AGX starts non-interactively over Discord) are auto-approved; anything else is
+// denied, since there is no interactive approver and silently approving would
+// defeat a non-all-mighty task's intent. Either decision unblocks the turn.
+func (s *agentEventService) answerCodexApproval(client codexRuntime, notification codexapp.Notification) {
+	decision := codexapp.DecisionApproved
+	s.mu.Lock()
+	taskID := s.taskIDForNotificationLocked(notification)
+	s.mu.Unlock()
+	if taskID != "" {
+		if task, err := s.runtime.store.GetTask(taskID); err == nil && !task.AllMighty {
+			decision = codexapp.DecisionDenied
+		}
+	}
+	if err := client.ApproveRequest(notification, decision); err != nil {
+		logRuntimeOperation("codex_approval",
+			"status", "failed",
+			"method", notification.Method,
+			"decision", string(decision),
+			"error", err,
+		)
 	}
 }
 

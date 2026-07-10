@@ -76,6 +76,10 @@ func (f *fakeCodexRuntime) Events() <-chan codexapp.Notification {
 	return f.events
 }
 
+func (f *fakeCodexRuntime) ApproveRequest(codexapp.Notification, codexapp.ReviewDecision) error {
+	return nil
+}
+
 func (f *fakeCodexRuntime) Close() error {
 	close(f.events)
 	return nil

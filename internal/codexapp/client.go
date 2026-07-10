@@ -32,6 +32,8 @@ type Client struct {
 
 	nextID atomic.Int64
 
+	writeMu sync.Mutex
+
 	mu      sync.Mutex
 	pending map[int64]chan response
 	events  chan Notification
@@ -39,11 +41,16 @@ type Client struct {
 	err     error
 }
 
-// Notification is a server-initiated Codex app-server message.
+// Notification is a server-initiated Codex app-server message. A server-initiated
+// request (one that expects a response, such as an approval request) carries a
+// non-empty RequestID; rawID preserves its original JSON id so Respond can echo
+// it back with the correct type.
 type Notification struct {
 	Method    string
 	RequestID string
 	Params    json.RawMessage
+
+	rawID json.RawMessage
 }
 
 type response struct {
@@ -162,6 +169,39 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	return json.Unmarshal(raw, result)
 }
 
+// Respond replies to a server-initiated request using the same JSON-RPC id the
+// server sent. It is used to answer approval requests and is safe to call
+// concurrently with in-flight Call requests.
+func (c *Client) Respond(n Notification, result any) error {
+	if len(n.rawID) == 0 {
+		return fmt.Errorf("codex app-server notification has no request id to respond to")
+	}
+	c.mu.Lock()
+	failErr := c.err
+	c.mu.Unlock()
+	if failErr != nil {
+		return failErr
+	}
+	payload := map[string]any{"id": n.rawID}
+	if result != nil {
+		payload["result"] = result
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return c.writeMessage(data)
+}
+
+// writeMessage serializes writes to the app-server so concurrent Call and
+// Respond invocations never interleave partial JSON-RPC frames on the stream.
+func (c *Client) writeMessage(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	_, err := c.writer.Write(append(data, '\n'))
+	return err
+}
+
 func (c *Client) callRaw(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	if strings.TrimSpace(method) == "" {
 		return nil, fmt.Errorf("codex app-server method is required")
@@ -186,7 +226,7 @@ func (c *Client) callRaw(ctx context.Context, method string, params any) (json.R
 		c.removePending(id)
 		return nil, err
 	}
-	if _, err := c.writer.Write(append(data, '\n')); err != nil {
+	if err := c.writeMessage(data); err != nil {
 		c.removePending(id)
 		return nil, err
 	}
@@ -223,7 +263,7 @@ func (c *Client) readLoop(reader io.Reader) {
 			return
 		}
 		if message.Method != "" {
-			c.publishNotification(Notification{Method: message.Method, RequestID: rawIDString(message.ID), Params: message.Params})
+			c.publishNotification(Notification{Method: message.Method, RequestID: rawIDString(message.ID), Params: message.Params, rawID: message.ID})
 			continue
 		}
 		if len(message.ID) > 0 {
