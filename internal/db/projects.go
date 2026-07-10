@@ -11,12 +11,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// expandHomePath expands a leading ~ (with a / or \ separator, or a bare ~) to
+// ExpandHomePath expands a leading ~ (with a / or \ separator, or a bare ~) to
 // the user's home directory. Inputs that never pass through a shell — Discord
 // slash commands, config values — do not get tilde expansion, so AGX applies it
 // here. filepath.Abs then normalizes separators, so forward slashes work on
-// Windows too.
-func expandHomePath(path string) string {
+// Windows too. It is exported so path-consuming entry points (for example
+// project access validation) can normalize before probing the path.
+func ExpandHomePath(path string) string {
 	trimmed := strings.TrimSpace(path)
 	if trimmed != "~" && !strings.HasPrefix(trimmed, "~/") && !strings.HasPrefix(trimmed, `~\`) {
 		return path
@@ -53,7 +54,7 @@ func (e AmbiguousProjectError) Unwrap() error {
 }
 
 func (s *Store) EnsureProject(path string, defaultAgent *string) (Project, error) {
-	abs, err := filepath.Abs(expandHomePath(path))
+	abs, err := filepath.Abs(ExpandHomePath(path))
 	if err != nil {
 		return Project{}, err
 	}
@@ -72,7 +73,7 @@ ON CONFLICT(path) DO UPDATE SET
 }
 
 func (s *Store) EnsureProjectDetails(path, name string, description, defaultAgent *string) (Project, error) {
-	abs, err := filepath.Abs(expandHomePath(path))
+	abs, err := filepath.Abs(ExpandHomePath(path))
 	if err != nil {
 		return Project{}, err
 	}
@@ -117,7 +118,7 @@ ORDER BY last_opened DESC, name ASC
 }
 
 func (s *Store) GetProjectByPath(path string) (Project, error) {
-	abs, err := filepath.Abs(expandHomePath(path))
+	abs, err := filepath.Abs(ExpandHomePath(path))
 	if err != nil {
 		return Project{}, err
 	}

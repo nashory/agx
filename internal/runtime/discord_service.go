@@ -55,6 +55,9 @@ func (s discordCommandService) CreateProject(ctx context.Context, path, name, de
 	if path == "" {
 		return agxdiscord.ProjectSummary{}, fmt.Errorf("project path is required")
 	}
+	// Discord slash-command input never passes through a shell, so expand a
+	// leading ~ before probing access; otherwise os.Stat/git see a literal "~".
+	path = db.ExpandHomePath(path)
 	if err := validateOrRepairProjectAccess(path); err != nil {
 		return agxdiscord.ProjectSummary{}, err
 	}
