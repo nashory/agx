@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -145,11 +146,28 @@ func NewCommandRouter(cfg config.DiscordConfig, service CommandService) *Command
 	return &CommandRouter{cfg: cfg, service: service}
 }
 
+// rejectUnauthorized returns the standard refusal response. The reason and
+// requester ids are logged by IsAuthorized, the single chokepoint every entry
+// point calls.
+func (r *CommandRouter) rejectUnauthorized(input CommandInput) CommandResponse {
+	return CommandResponse{Content: "You are not allowed to control AGX from Discord.", Ephemeral: true}
+}
+
+// IsAuthorized reports whether a request may control AGX. It logs the reason on
+// denial (guild mismatch vs user not in the allowlist) with the requester's ids,
+// so an otherwise opaque "not allowed" is diagnosable from the runtime logs.
 func (r *CommandRouter) IsAuthorized(input CommandInput) bool {
-	if strings.TrimSpace(r.cfg.GuildID) != "" && strings.TrimSpace(input.GuildID) != r.cfg.GuildID {
+	if strings.TrimSpace(r.cfg.GuildID) != "" && strings.TrimSpace(input.GuildID) != strings.TrimSpace(r.cfg.GuildID) {
+		log.Printf("operation=%q reason=%q command=%q request_guild=%q configured_guild=%q user=%q",
+			"discord_auth_denied", "guild_mismatch", input.Name, input.GuildID, r.cfg.GuildID, input.UserID)
 		return false
 	}
-	return IsAuthorized(r.cfg, input.UserID)
+	if !IsAuthorized(r.cfg, input.UserID) {
+		log.Printf("operation=%q reason=%q command=%q user=%q allowed_users=%v",
+			"discord_auth_denied", "user_not_allowed", input.Name, input.UserID, r.cfg.AllowedUserIDs)
+		return false
+	}
+	return true
 }
 
 func ApplicationCommands() []*discordgo.ApplicationCommand {
@@ -255,7 +273,7 @@ func (r *CommandRouter) Execute(ctx context.Context, input CommandInput) (Comman
 		return CommandResponse{}, fmt.Errorf("discord command service is not configured")
 	}
 	if !r.IsAuthorized(input) {
-		return CommandResponse{Content: "You are not allowed to control AGX from Discord.", Ephemeral: true}, nil
+		return r.rejectUnauthorized(input), nil
 	}
 	allowedChannel, channelMessage, err := r.IsAllowedSlashChannel(ctx, input)
 	if err != nil {
@@ -372,7 +390,7 @@ func (r *CommandRouter) HandlePlainMessage(ctx context.Context, input CommandInp
 		return CommandResponse{}, fmt.Errorf("discord command service is not configured")
 	}
 	if !r.IsAuthorized(input) {
-		return CommandResponse{Content: "You are not allowed to control AGX from Discord.", Ephemeral: true}, nil
+		return r.rejectUnauthorized(input), nil
 	}
 	taskID, err := r.taskID(ctx, input)
 	if err != nil {
@@ -395,7 +413,7 @@ func (r *CommandRouter) HandleComponentChoice(ctx context.Context, input Command
 		return CommandResponse{}, fmt.Errorf("discord command service is not configured")
 	}
 	if !r.IsAuthorized(input) {
-		return CommandResponse{Content: "You are not allowed to control AGX from Discord.", Ephemeral: true}, nil
+		return r.rejectUnauthorized(input), nil
 	}
 	taskID = strings.TrimSpace(taskID)
 	choice = strings.TrimSpace(choice)
@@ -499,7 +517,7 @@ func (r *CommandRouter) HandleReaction(ctx context.Context, input CommandInput, 
 		return CommandResponse{}, nil
 	}
 	if !r.IsAuthorized(input) {
-		return CommandResponse{Content: "You are not allowed to control AGX from Discord.", Ephemeral: true}, nil
+		return r.rejectUnauthorized(input), nil
 	}
 	taskID, err := r.taskID(ctx, input)
 	if err != nil {
