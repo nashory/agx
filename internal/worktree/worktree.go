@@ -385,11 +385,14 @@ func runGit(dir string, args ...string) error {
 	return err
 }
 
+// ensureWritableDirectory verifies AGX (and the agents it spawns) can write to
+// path. The probe is platform-specific: on Unix it spawns a /bin/sh child so it
+// also catches sandbox cases where the parent has access but children do not
+// (macOS TCC); on Windows, where there is no such parent/child divergence, it
+// writes directly. See probeChildWritable.
 func ensureWritableDirectory(path string) error {
-	script := `test_path="$1/.agx-write-test-$$"; : > "$test_path" && rm -f "$test_path"`
-	output, err := exec.Command("/bin/sh", "-c", script, "agx-write-test", path).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("working directory is not writable by AGX child processes: %s: %s: %w", path, strings.TrimSpace(string(output)), err)
+	if err := probeChildWritable(path); err != nil {
+		return fmt.Errorf("working directory is not writable by AGX child processes: %s: %w", path, err)
 	}
 	return nil
 }

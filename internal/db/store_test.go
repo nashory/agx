@@ -52,7 +52,9 @@ func TestNormalizeProjectPathExpandsHomeForms(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("NormalizeProjectPath(%q) = %q, want %q", tc.in, got, tc.want)
 			}
-			if strings.Contains(got, "~") {
+			// Check for a leading tilde only: Windows 8.3 short paths (e.g.
+			// C:\Users\CRAIGS~1\...) legitimately contain '~' mid-path.
+			if strings.HasPrefix(got, "~") {
 				t.Fatalf("NormalizeProjectPath(%q) left tilde unexpanded: %q", tc.in, got)
 			}
 		})

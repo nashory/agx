@@ -16,8 +16,10 @@ func TestValidateProjectAccessExpandsHomePathWithWindowsSeparator(t *testing.T) 
 	if err := validateOrRepairProjectAccess(raw); err != nil {
 		t.Fatalf("validateOrRepairProjectAccess(%q) error = %v", raw, err)
 	}
-	if strings.Contains(normalized, "~") {
-		t.Fatalf("normalized path still contains tilde: %q", normalized)
+	// Check for a leading tilde only: Windows 8.3 short paths (e.g.
+	// C:\Users\CRAIGS~1\...) legitimately contain '~' mid-path.
+	if strings.HasPrefix(normalized, "~") {
+		t.Fatalf("normalized path still has an unexpanded leading tilde: %q", normalized)
 	}
 }
 
