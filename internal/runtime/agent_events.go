@@ -698,13 +698,13 @@ func enrichCodexError(message, stderr string) string {
 // denied, since there is no interactive approver and silently approving would
 // defeat a non-all-mighty task's intent. Either decision unblocks the turn.
 func (s *agentEventService) answerCodexApproval(client codexRuntime, notification codexapp.Notification) {
-	decision := codexapp.DecisionApproved
+	decision := codexapp.DecisionAccept
 	s.mu.Lock()
 	taskID := s.taskIDForNotificationLocked(notification)
 	s.mu.Unlock()
 	if taskID != "" {
 		if task, err := s.runtime.store.GetTask(taskID); err == nil && !task.AllMighty {
-			decision = codexapp.DecisionDenied
+			decision = codexapp.DecisionDecline
 		}
 	}
 	if err := client.ApproveRequest(notification, decision); err != nil {

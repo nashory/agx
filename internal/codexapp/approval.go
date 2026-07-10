@@ -9,14 +9,16 @@ const (
 	NotifyFileChangeApprovalRequest = "item/fileChange/requestApproval"
 )
 
-// ReviewDecision is the client's answer to a Codex approval request. Values
-// serialize to the snake_case forms the app-server expects.
+// ReviewDecision is the client's answer to a Codex approval request. The values
+// are the app-server's CommandExecution/FileChange approval-response variants
+// (accept/decline/cancel), verified against codex 0.142.5, which rejects any
+// other value ("unknown variant") and then treats the command as declined.
 type ReviewDecision string
 
 const (
-	DecisionApproved ReviewDecision = "approved"
-	DecisionDenied   ReviewDecision = "denied"
-	DecisionAbort    ReviewDecision = "abort"
+	DecisionAccept  ReviewDecision = "accept"
+	DecisionDecline ReviewDecision = "decline"
+	DecisionCancel  ReviewDecision = "cancel"
 )
 
 // IsApprovalRequest reports whether the notification is a Codex approval request

@@ -28,7 +28,7 @@ func TestIsApprovalRequest(t *testing.T) {
 }
 
 // TestApproveRequestEchoesStringID verifies AGX answers an approval request with
-// the server's exact JSON-RPC id and a snake_case decision the app-server accepts.
+// the server's exact JSON-RPC id and an "accept" decision the app-server accepts.
 func TestApproveRequestEchoesStringID(t *testing.T) {
 	server, clientConn := net.Pipe()
 	defer server.Close()
@@ -45,7 +45,7 @@ func TestApproveRequestEchoesStringID(t *testing.T) {
 	}
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- client.ApproveRequest(notification, DecisionApproved) }()
+	go func() { errCh <- client.ApproveRequest(notification, DecisionAccept) }()
 
 	line, err := reader.ReadBytes('\n')
 	if err != nil {
@@ -67,8 +67,8 @@ func TestApproveRequestEchoesStringID(t *testing.T) {
 	if response.ID != "approval-1" {
 		t.Fatalf("response id = %q, want approval-1", response.ID)
 	}
-	if response.Result.Decision != "approved" {
-		t.Fatalf("decision = %q, want approved", response.Result.Decision)
+	if response.Result.Decision != "accept" {
+		t.Fatalf("decision = %q, want accept", response.Result.Decision)
 	}
 }
 
@@ -87,7 +87,7 @@ func TestApproveRequestEchoesNumericID(t *testing.T) {
 	notification := <-client.Events()
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- client.ApproveRequest(notification, DecisionDenied) }()
+	go func() { errCh <- client.ApproveRequest(notification, DecisionDecline) }()
 
 	line, err := reader.ReadBytes('\n')
 	if err != nil {
