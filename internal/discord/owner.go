@@ -4,11 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/nashory/agx/internal/db"
+)
+
+// ownerReleaseAttempts and ownerReleaseRetryDelay make ownership release on
+// shutdown resilient to transient Discord API errors, so a stopped runtime does
+// not leave a dangling owner record that blocks the next startup.
+var (
+	ownerReleaseAttempts   = 3
+	ownerReleaseRetryDelay = 500 * time.Millisecond
 )
 
 const (
@@ -91,10 +100,18 @@ func claimGuildOwner(ctx context.Context, client ownerClient, guildID, owner str
 		return "", err
 	}
 	if existing := ownerFromTopic(channel.Topic); existing != "" && !sameOwner(existing, owner) {
-		if parseOwnerInfo(existing).isStale(ownerNow()) {
+		switch {
+		case ownerIsSameHost(existing, owner):
+			// Leftover record from a previous run on this same host. The runtime
+			// lock guarantees that predecessor is gone, so reclaim it instead of
+			// failing, which keeps a crashed or restarted runtime from locking
+			// itself out of its own guild.
+			log.Printf("operation=%q previous_owner=%q", "discord_owner_reclaim_same_host", existing)
+		case parseOwnerInfo(existing).isStale(ownerNow()):
 			return "", guildOwnerStaleError(existing)
+		default:
+			return "", guildOwnerConflictError(existing)
 		}
-		return "", guildOwnerConflictError(existing)
 	}
 	if err := client.UpdateChannelTopic(ctx, controlChannelID, topicWithOwner(channel.Topic, owner)); err != nil {
 		return "", fmt.Errorf("claim Discord guild owner: %w", err)
@@ -125,17 +142,31 @@ func releaseGuildOwner(ctx context.Context, client ownerClient, guildID, control
 	if client == nil || strings.TrimSpace(guildID) == "" || strings.TrimSpace(controlChannelID) == "" || strings.TrimSpace(owner) == "" {
 		return nil
 	}
-	channel, err := findControlGuildChannel(ctx, client, guildID, controlChannelID)
-	if err != nil {
-		return err
-	}
-	if !sameOwner(ownerFromTopic(channel.Topic), owner) {
+	var lastErr error
+	for attempt := 0; attempt < ownerReleaseAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(ownerReleaseRetryDelay):
+			}
+		}
+		channel, err := findControlGuildChannel(ctx, client, guildID, controlChannelID)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if !sameOwner(ownerFromTopic(channel.Topic), owner) {
+			// Already released, or the record now belongs to another runtime.
+			return nil
+		}
+		if err := client.UpdateChannelTopic(ctx, controlChannelID, topicWithoutOwner(channel.Topic)); err != nil {
+			lastErr = fmt.Errorf("release Discord guild owner: %w", err)
+			continue
+		}
 		return nil
 	}
-	if err := client.UpdateChannelTopic(ctx, controlChannelID, topicWithoutOwner(channel.Topic)); err != nil {
-		return fmt.Errorf("release Discord guild owner: %w", err)
-	}
-	return nil
+	return lastErr
 }
 
 func findControlGuildChannel(ctx context.Context, client ownerClient, guildID, controlChannelID string) (GuildChannel, error) {

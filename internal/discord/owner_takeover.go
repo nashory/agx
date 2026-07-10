@@ -18,6 +18,7 @@ var ownerHeartbeatInterval = 30 * time.Second
 // never stolen from an owner whose liveness cannot be determined.
 type ownerInfo struct {
 	id           string
+	host         string
 	epoch        int
 	heartbeat    time.Time
 	hasHeartbeat bool
@@ -33,6 +34,8 @@ func parseOwnerInfo(owner string) ownerInfo {
 		switch key {
 		case "id":
 			info.id = value
+		case "host":
+			info.host = value
 		case "epoch":
 			if n, err := strconv.Atoi(value); err == nil {
 				info.epoch = n
@@ -47,6 +50,15 @@ func parseOwnerInfo(owner string) ownerInfo {
 		}
 	}
 	return info
+}
+
+// ownerIsSameHost reports whether two owner records come from the same host. A
+// leftover record from this host is a dead predecessor of this runtime (the
+// runtime lock guarantees only one runtime per config per host), so it is safe
+// to reclaim automatically on startup.
+func ownerIsSameHost(a, b string) bool {
+	ah, bh := parseOwnerInfo(a).host, parseOwnerInfo(b).host
+	return ah != "" && ah == bh
 }
 
 // isStale reports whether the owner's heartbeat has expired. An owner without a

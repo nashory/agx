@@ -24,8 +24,18 @@ func noSettleDelay(t *testing.T) {
 }
 
 func ownerRecord(id string, epoch int, heartbeat time.Time) string {
-	return fmt.Sprintf("id=%s host=mac pid=1 mode=runtime epoch=%d started=%s heartbeat=%s",
-		id, epoch, heartbeat.UTC().Format(time.RFC3339), heartbeat.UTC().Format(time.RFC3339))
+	return ownerRecordOnHost(id, "this-host", epoch, heartbeat)
+}
+
+// remoteOwnerRecord is an owner record from a different host, used to exercise the
+// cross-host stale/conflict paths (same-host records are auto-reclaimed).
+func remoteOwnerRecord(id string, epoch int, heartbeat time.Time) string {
+	return ownerRecordOnHost(id, "other-host", epoch, heartbeat)
+}
+
+func ownerRecordOnHost(id, host string, epoch int, heartbeat time.Time) string {
+	return fmt.Sprintf("id=%s host=%s pid=1 mode=runtime epoch=%d started=%s heartbeat=%s",
+		id, host, epoch, heartbeat.UTC().Format(time.RFC3339), heartbeat.UTC().Format(time.RFC3339))
 }
 
 func TestParseOwnerInfoAndStaleness(t *testing.T) {
@@ -67,7 +77,7 @@ func TestClaimGuildOwnerReturnsStaleForExpiredOwner(t *testing.T) {
 		ID:    "control-1",
 		Name:  controlChannelName,
 		Type:  GuildChannelText,
-		Topic: topicWithOwner("", ownerRecord("dead", 4, base.Add(-200*time.Second))),
+		Topic: topicWithOwner("", remoteOwnerRecord("dead", 4, base.Add(-200*time.Second))),
 	}}
 	_, err := claimGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0, base))
 	if !errors.Is(err, ErrGuildOwnerStale) {
@@ -83,11 +93,36 @@ func TestClaimGuildOwnerRejectsFreshOwner(t *testing.T) {
 		ID:    "control-1",
 		Name:  controlChannelName,
 		Type:  GuildChannelText,
-		Topic: topicWithOwner("", ownerRecord("alive", 4, base.Add(-5*time.Second))),
+		Topic: topicWithOwner("", remoteOwnerRecord("alive", 4, base.Add(-5*time.Second))),
 	}}
 	_, err := claimGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0, base))
 	if !errors.Is(err, ErrGuildOwnerConflict) {
 		t.Fatalf("claimGuildOwner() error = %v, want ErrGuildOwnerConflict", err)
+	}
+}
+
+func TestClaimGuildOwnerReclaimsSameHostLeftover(t *testing.T) {
+	noSettleDelay(t)
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	fixedOwnerClock(t, base)
+	// A fresh record from THIS host (a crashed/restarted predecessor). Even though
+	// its heartbeat is recent, the runtime lock guarantees it is gone, so claim
+	// should reclaim it rather than fail.
+	client := &fakeOwnerClient{channel: GuildChannel{
+		ID:    "control-1",
+		Name:  controlChannelName,
+		Type:  GuildChannelText,
+		Topic: topicWithOwner("", ownerRecord("dead-predecessor", 2, base.Add(-5*time.Second))),
+	}}
+	channelID, err := claimGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0, base))
+	if err != nil {
+		t.Fatalf("claimGuildOwner() error = %v, want same-host reclaim to succeed", err)
+	}
+	if channelID != "control-1" {
+		t.Fatalf("channelID = %q, want control-1", channelID)
+	}
+	if got := parseOwnerInfo(ownerFromTopic(client.channel.Topic)).id; got != "self" {
+		t.Fatalf("topic owner id = %q, want self after reclaim", got)
 	}
 }
 
@@ -222,5 +257,46 @@ func TestWithEpochAndFreshHeartbeat(t *testing.T) {
 	legacy := "id=self host=mac pid=1 mode=runtime started=x"
 	if !strings.Contains(withFreshHeartbeat(legacy), "heartbeat=") {
 		t.Fatal("withFreshHeartbeat should add a heartbeat to a legacy owner")
+	}
+}
+
+// flakyReleaseClient fails a set number of topic updates before succeeding, to
+// exercise release retries.
+type flakyReleaseClient struct {
+	fakeOwnerClient
+	failUpdates int
+	updates     int
+}
+
+func (c *flakyReleaseClient) UpdateChannelTopic(ctx context.Context, channelID, topic string) error {
+	c.updates++
+	if c.updates <= c.failUpdates {
+		return fmt.Errorf("transient discord error")
+	}
+	c.channel.Topic = topic
+	return nil
+}
+
+func TestReleaseGuildOwnerRetriesOnTransientError(t *testing.T) {
+	prevDelay := ownerReleaseRetryDelay
+	ownerReleaseRetryDelay = 0
+	t.Cleanup(func() { ownerReleaseRetryDelay = prevDelay })
+
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	owner := ownerRecord("self", 1, base)
+	client := &flakyReleaseClient{
+		fakeOwnerClient: fakeOwnerClient{channel: GuildChannel{
+			ID:    "control-1",
+			Name:  controlChannelName,
+			Type:  GuildChannelText,
+			Topic: topicWithOwner("", owner),
+		}},
+		failUpdates: ownerReleaseAttempts - 1, // fail all but the last attempt
+	}
+	if err := releaseGuildOwner(context.Background(), client, "guild-1", "control-1", owner); err != nil {
+		t.Fatalf("releaseGuildOwner() error = %v, want success after retries", err)
+	}
+	if ownerFromTopic(client.channel.Topic) != "" {
+		t.Fatalf("owner not cleared after retried release: %q", client.channel.Topic)
 	}
 }
