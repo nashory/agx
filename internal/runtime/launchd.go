@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -75,26 +76,29 @@ func LaunchAgentPath() (string, error) {
 }
 
 func LaunchdEnvironmentPath(currentPath string, agxPath string) string {
+	// launchd is macOS-only, so this builds a POSIX PATH (colon-separated, forward
+	// slashes) regardless of the host OS the plist is generated on. Using the
+	// os/filepath separators would corrupt it when run on Windows.
 	var paths []string
-	add := func(path string) {
-		path = strings.TrimSpace(path)
-		if path == "" {
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
 			return
 		}
 		for _, existing := range paths {
-			if existing == path {
+			if existing == p {
 				return
 			}
 		}
-		paths = append(paths, path)
+		paths = append(paths, p)
 	}
 	if agxPath != "" {
-		add(filepath.Dir(agxPath))
+		add(path.Dir(agxPath))
 	}
-	for _, path := range filepath.SplitList(currentPath) {
-		add(path)
+	for _, p := range strings.Split(currentPath, ":") {
+		add(p)
 	}
-	for _, path := range []string{
+	for _, p := range []string{
 		"/opt/homebrew/bin",
 		"/usr/local/bin",
 		"/usr/bin",
@@ -102,9 +106,9 @@ func LaunchdEnvironmentPath(currentPath string, agxPath string) string {
 		"/usr/sbin",
 		"/sbin",
 	} {
-		add(path)
+		add(p)
 	}
-	return strings.Join(paths, string(os.PathListSeparator))
+	return strings.Join(paths, ":")
 }
 
 func RenderLaunchAgentPlist(agxPath string, envPath string) ([]byte, error) {
