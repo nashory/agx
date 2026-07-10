@@ -51,7 +51,6 @@ type Bridge struct {
 	events             AgentEventSubscriber
 	store              *db.Store
 	streams            map[string]taskStream
-	owner              string
 	ownerChan          string
 	startedAt          time.Time
 	lastErr            string
@@ -141,24 +140,24 @@ func (b *Bridge) SetStore(store *db.Store) {
 // Task-channel sync can involve many Discord REST calls, so it runs after the
 // bridge is marked connected instead of blocking the connect/status path.
 func (b *Bridge) Start(ctx context.Context, mode string) error {
-	return b.start(ctx, mode, true, false)
+	return b.start(ctx, mode, true)
 }
 
 // StartWithoutInitialSync opens the bot without launching the background full
 // channel sync. It is used by foreground sync operations that already know the
 // exact sync work they need to perform.
 func (b *Bridge) StartWithoutInitialSync(ctx context.Context, mode string) error {
-	return b.start(ctx, mode, false, false)
+	return b.start(ctx, mode, false)
 }
 
-// StartWithTakeover behaves like Start but, when the guild is owned by a stale
-// runtime, explicitly takes ownership instead of failing. It never takes over
-// from an owner that still looks alive.
+// StartWithTakeover is retained for API compatibility. AGX no longer enforces
+// cross-runtime guild ownership, so it now behaves exactly like Start; the
+// operator is responsible for not pointing multiple runtimes at one guild.
 func (b *Bridge) StartWithTakeover(ctx context.Context, mode string) error {
-	return b.start(ctx, mode, true, true)
+	return b.start(ctx, mode, true)
 }
 
-func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover bool) error {
+func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error {
 	b.lifecycle.Lock()
 	defer b.lifecycle.Unlock()
 
@@ -173,7 +172,7 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 	b.mu.Unlock()
 
 	started := time.Now()
-	logConnectPhase("begin", started, "mode", mode, "guild", cfg.GuildID, "takeover", takeover)
+	logConnectPhase("begin", started, "mode", mode, "guild", cfg.GuildID)
 
 	if err := ValidateConfig(cfg); err != nil {
 		b.setError(err)
@@ -206,21 +205,20 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 		return err
 	}
 	logConnectPhase("gateway_opened", started)
-	owner := newGuildOwner(mode)
-	var ownerChannelID string
-	if takeover {
-		ownerChannelID, owner, err = takeoverGuildOwner(ctx, bot, cfg.GuildID, owner)
-	} else {
-		ownerChannelID, err = claimGuildOwner(ctx, bot, cfg.GuildID, owner)
-	}
+	// AGX no longer claims cross-runtime guild ownership. Writing an owner marker
+	// into the control-channel topic on every connect/disconnect hit Discord's
+	// topic-edit rate limit (~2 per 10 min) and stalled connects. The same-host
+	// file lock still prevents two local runtimes; coordinating multiple hosts on
+	// one guild is left to the operator. We only need the control channel id here.
+	controlChannelID, err := bot.EnsureControlChannel(ctx, cfg.GuildID, controlChannelName)
 	if err != nil {
 		_ = bot.Close()
 		_ = lock.Release()
 		b.setError(err)
-		logConnectPhase("owner_claim_failed", started, "error", err.Error())
+		logConnectPhase("control_channel_failed", started, "error", err.Error())
 		return err
 	}
-	logConnectPhase("owner_claimed", started, "control_channel", ownerChannelID)
+	logConnectPhase("control_channel_ready", started, "control_channel", controlChannelID)
 	if service != nil {
 		// Command registration is best-effort: Discord persists guild commands
 		// across restarts, so a rate-limited or slow command endpoint must not
@@ -235,8 +233,7 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 	b.lock = lock
 	b.startedAt = time.Now()
 	b.connected = true
-	b.owner = owner
-	b.ownerChan = ownerChannelID
+	b.ownerChan = controlChannelID
 	b.lastErr = ""
 	b.mu.Unlock()
 	logConnectPhase("connected", started, "guild", cfg.GuildID)
@@ -287,13 +284,9 @@ func (b *Bridge) Stop() error {
 	b.mu.Lock()
 	bot := b.bot
 	lock := b.lock
-	cfg := b.cfg
-	owner := b.owner
-	ownerChannelID := b.ownerChan
 	b.cancelTaskStreamsLocked()
 	b.bot = nil
 	b.lock = nil
-	b.owner = ""
 	b.ownerChan = ""
 	b.connected = false
 	b.startedAt = time.Time{}
@@ -302,10 +295,7 @@ func (b *Bridge) Stop() error {
 
 	var err error
 	if bot != nil {
-		err = releaseGuildOwner(context.Background(), bot, cfg.GuildID, ownerChannelID, owner)
-		if closeErr := bot.Close(); err == nil {
-			err = closeErr
-		}
+		err = bot.Close()
 	}
 	if lock != nil {
 		if lockErr := lock.Release(); err == nil {
