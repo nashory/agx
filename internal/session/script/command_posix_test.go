@@ -47,11 +47,15 @@ func TestBuildTmuxCommandWritesPrivateSelfDeletingScript(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(data)
+	claudeCommand := "'missing-claude-for-test' '--dangerously-skip-permissions' 'quote '\"'\"' and $HOME'"
+	if flag := posixSandboxDisableFlag(); flag != "" {
+		claudeCommand = "'missing-claude-for-test' '" + flag + "' '--dangerously-skip-permissions' 'quote '\"'\"' and $HOME'"
+	}
 	for _, want := range []string{
 		"rm -f \"$0\"",
 		"record_exit()",
 		"unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT",
-		"'missing-claude-for-test' '--dangerously-skip-permissions' 'quote '\"'\"' and $HOME'",
+		claudeCommand,
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("script missing %q:\n%s", want, content)
@@ -86,12 +90,23 @@ func TestBuildTmuxCommandOmitsPromptForWrappedClaude(t *testing.T) {
 			t.Fatalf("wrapped Claude command should not record wrapper exit status %q:\n%s", unexpected, content)
 		}
 	}
-	sandboxFlag := "--dangerously-disable-osx-sandbox"
-	if runtime.GOOS == "linux" {
-		sandboxFlag = "--dangerously-disable-linux-sandbox"
+	wrappedCommand := "script -q /dev/null '" + path + "' '--dangerously-skip-permissions'"
+	if flag := posixSandboxDisableFlag(); flag != "" {
+		wrappedCommand = "script -q /dev/null '" + path + "' '" + flag + "' '--dangerously-skip-permissions'"
 	}
-	if !strings.Contains(content, "script -q /dev/null '"+path+"' '"+sandboxFlag+"' '--dangerously-skip-permissions'") {
+	if !strings.Contains(content, wrappedCommand) {
 		t.Fatalf("script missing wrapped Claude command:\n%s", content)
+	}
+}
+
+func posixSandboxDisableFlag() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "--dangerously-disable-osx-sandbox"
+	case "linux":
+		return "--dangerously-disable-linux-sandbox"
+	default:
+		return ""
 	}
 }
 
