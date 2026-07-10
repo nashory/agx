@@ -28,6 +28,32 @@ type plistArray struct {
 }
 type plistTrue struct{}
 
+func (d plistDict) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	start.Name.Local = "dict"
+	if err := e.EncodeToken(start); err != nil {
+		return err
+	}
+	for _, item := range d.Items {
+		if err := e.Encode(item); err != nil {
+			return err
+		}
+	}
+	return e.EncodeToken(start.End())
+}
+
+func (a plistArray) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	start.Name.Local = "array"
+	if err := e.EncodeToken(start); err != nil {
+		return err
+	}
+	for _, item := range a.Strings {
+		if err := e.Encode(item); err != nil {
+			return err
+		}
+	}
+	return e.EncodeToken(start.End())
+}
+
 func (k plistKey) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	return e.EncodeElement(string(k), xml.StartElement{Name: xml.Name{Local: "key"}})
 }

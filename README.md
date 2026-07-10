@@ -298,12 +298,18 @@ agx launch --platform linux \
 agx tui
 ```
 
-On Windows, run AGX inside WSL2 Ubuntu and launch the Linux runtime there:
+On Windows, run the native Windows runtime:
 
-```bash
+```powershell
 agx launch --platform windows \
   --discord-server-id "$DISCORD_SERVER_ID" \
   --allow-user "$YOUR_DISCORD_USER_ID"
+```
+
+Inside a WSL2 Linux shell, use the Linux path instead:
+
+```bash
+agx launch --platform linux
 ```
 
 In Docker, use the Ubuntu runtime environment:
@@ -421,7 +427,7 @@ for focused tasks where direct edits are expected.
 | macOS arm64 | Desktop app, CLI, runtime, launchd user service. |
 | Linux amd64/arm64 | CLI, runtime, TUI, systemd user service, release tarballs. |
 | Docker | Ubuntu runtime/TUI environment for Docker-capable hosts. |
-| Windows | Use the Linux CLI/runtime through WSL2 Ubuntu; native Windows builds are not supported yet. |
+| Windows | Native CLI/runtime preview using authenticated localhost TCP, ConPTY, and Windows Service support. |
 
 Linux Desktop packaging is not part of the current release target. The runtime
 is built on Unix primitives and is shared by Desktop, CLI, TUI, and Discord.

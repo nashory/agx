@@ -69,7 +69,8 @@ agx launch --platform linux \
   --allow-user "$YOUR_DISCORD_USER_ID"
 ```
 
-Use `--platform windows` for WSL2 Ubuntu and `--platform macos` on macOS.
+Use `--platform windows` on native Windows and `--platform macos` on macOS.
+Inside a WSL2 Linux shell, use `--platform linux`.
 
 You can also pass the IDs as flags. Flag values override the TOML values and
 are saved locally after a successful connect:

@@ -134,10 +134,16 @@ for your user:
 loginctl enable-linger "$USER"
 ```
 
-On Windows, install and run the Linux CLI inside WSL2 Ubuntu:
+On Windows, use the native Windows runtime:
+
+```powershell
+agx launch --platform windows
+```
+
+Inside a WSL2 Linux shell, use the Linux runtime path:
 
 ```bash
-agx launch --platform windows
+agx launch --platform linux
 ```
 
 ## First Run
