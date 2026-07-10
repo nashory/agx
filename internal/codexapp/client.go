@@ -165,8 +165,17 @@ func (c *Client) RecentStderr() string {
 
 func appServerArgs() []string {
 	args := make([]string, 0, 4)
-	if runtime.GOOS == "darwin" {
+	// Disable the Meta launcher's OS sandbox. Without this the sandboxed
+	// app-server subprocess is silently killed shortly after startup on Windows
+	// (and macOS), so codex dies mid-turn with a "pipe closed" write error. The
+	// flag name is OS-specific and matches agent.SandboxDisableArgs.
+	switch runtime.GOOS {
+	case "darwin":
 		args = append(args, "--dangerously-disable-osx-sandbox")
+	case "windows":
+		args = append(args, "--dangerously-disable-win-sandbox")
+	case "linux":
+		args = append(args, "--dangerously-disable-linux-sandbox")
 	}
 	return append(args, "app-server", "--listen", "stdio://")
 }

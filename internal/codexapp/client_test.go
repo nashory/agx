@@ -133,17 +133,21 @@ func TestClientDoesNotBlockResponsesWhenNotificationBufferIsFull(t *testing.T) {
 	}
 }
 
-func TestAppServerArgsDisableOSXSandboxOnDarwin(t *testing.T) {
+func TestAppServerArgsDisableSandboxPerOS(t *testing.T) {
 	args := appServerArgs()
-	if runtime.GOOS == "darwin" {
-		want := []string{"--dangerously-disable-osx-sandbox", "app-server", "--listen", "stdio://"}
-		if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
-			t.Fatalf("appServerArgs() = %#v, want %#v", args, want)
-		}
-		return
+	sandboxFlag := map[string]string{
+		"darwin":  "--dangerously-disable-osx-sandbox",
+		"windows": "--dangerously-disable-win-sandbox",
+		"linux":   "--dangerously-disable-linux-sandbox",
+	}[runtime.GOOS]
+
+	var want []string
+	if sandboxFlag != "" {
+		want = append(want, sandboxFlag)
 	}
-	if len(args) > 0 && args[0] == "--dangerously-disable-osx-sandbox" {
-		t.Fatalf("appServerArgs() = %#v, did not expect macOS launcher flag on %s", args, runtime.GOOS)
+	want = append(want, "app-server", "--listen", "stdio://")
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("appServerArgs() = %#v, want %#v", args, want)
 	}
 }
 
