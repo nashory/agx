@@ -329,6 +329,9 @@ func (s discordCommandService) TaskLogs(ctx context.Context, taskID string, line
 	if err != nil {
 		return "", err
 	}
+	if isStructuredStreamTask(task) {
+		return s.runtime.structuredTaskTranscript(task, lines)
+	}
 	return s.runtime.managerForProject(project).GetLogs(task, lines)
 }
 

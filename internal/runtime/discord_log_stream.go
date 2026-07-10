@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -43,6 +44,38 @@ func isRuntimeStructuredAgentTask(task agxdiscord.TaskSummary) bool {
 	}
 	kind := strings.TrimSpace(*task.AgentStreamKind)
 	return kind == claudeStreamKind || kind == codexapp.StreamKind
+}
+
+// isStructuredStreamTask reports whether a task is backed by a structured agent
+// event stream (codex/claude) rather than a tmux session, so its logs must come
+// from the persisted transcript instead of a pane capture.
+func isStructuredStreamTask(task db.Task) bool {
+	if task.AgentStreamKind == nil {
+		return false
+	}
+	kind := strings.TrimSpace(*task.AgentStreamKind)
+	return kind == claudeStreamKind || kind == codexapp.StreamKind
+}
+
+// structuredTaskTranscript renders a structured task's recent transcript as a
+// plain-text log for `/task logs`, since these tasks have no tmux pane.
+func (s *Service) structuredTaskTranscript(task db.Task, limit int) (string, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	messages, err := s.store.ListTaskTranscriptMessages(task.ID, limit)
+	if err != nil {
+		return "", err
+	}
+	parts := make([]string, 0, len(messages))
+	for _, message := range messages {
+		body := strings.TrimSpace(message.Body)
+		if body == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("[%s] %s", message.Role, body))
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 func (s discordLogSubscriber) forwardLogs(ctx context.Context, summary agxdiscord.TaskSummary, ch chan<- agentstream.Event) {
