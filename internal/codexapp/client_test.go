@@ -8,9 +8,35 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nashory/agx/internal/agentstream"
 )
+
+func TestClientCapturesRecentStderr(t *testing.T) {
+	client := &Client{}
+	client.captureStderr(strings.NewReader("first line\n\nsecond line\n"))
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(client.RecentStderr(), "second line") {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	got := client.RecentStderr()
+	if !strings.Contains(got, "first line") || !strings.Contains(got, "second line") {
+		t.Fatalf("RecentStderr() = %q, want captured stderr lines", got)
+	}
+	if strings.Contains(got, "\n\n") {
+		t.Fatalf("RecentStderr() = %q, want blank lines skipped", got)
+	}
+}
+
+func TestNilClientRecentStderrIsEmpty(t *testing.T) {
+	if got := (*Client)(nil).RecentStderr(); got != "" {
+		t.Fatalf("nil RecentStderr() = %q, want empty", got)
+	}
+}
 
 func TestClientCallSendsRequestAndDecodesResponse(t *testing.T) {
 	server, clientConn := net.Pipe()

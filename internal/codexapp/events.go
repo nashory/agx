@@ -196,15 +196,9 @@ func MapNotification(task agentstream.TaskSummary, notification Notification) (a
 			Cursor:    notificationCursor(notification.Method, params.ThreadID, "", ""),
 		}, true, nil
 	case NotifyError:
-		var params struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(notification.Params, &params); err != nil {
-			return agentstream.Event{}, false, err
-		}
-		message := strings.TrimSpace(params.Message)
+		message := ExtractErrorMessage(notification.Params)
 		if message == "" {
-			message = "codex reported an error without any details."
+			message = ErrorNoDetail
 		}
 		return agentstream.Event{
 			ID:        agentstream.StableEventID(task.ID, agentstream.EventError, message),
@@ -217,6 +211,93 @@ func MapNotification(task agentstream.TaskSummary, notification Notification) (a
 	default:
 		return agentstream.Event{}, false, nil
 	}
+}
+
+// ErrorNoDetail is the fallback surfaced when codex signals an error but no
+// message could be extracted from the notification. Callers can compare against
+// it to decide whether to enrich the error with other diagnostics (stderr).
+const ErrorNoDetail = "codex reported an error without any details."
+
+// ExtractErrorMessage pulls a human-readable message out of a codex "error"
+// notification. Codex has shipped several shapes over time ({"message": …},
+// {"error": …}, {"error": {"message": …}}, {"data": …}); this tries each and,
+// as a last resort, returns the raw params JSON so a diagnostic is never lost.
+func ExtractErrorMessage(params json.RawMessage) string {
+	if len(params) == 0 {
+		return ""
+	}
+	var probe struct {
+		Message string          `json:"message"`
+		Detail  string          `json:"detail"`
+		Reason  string          `json:"reason"`
+		Data    json.RawMessage `json:"data"`
+		Error   json.RawMessage `json:"error"`
+	}
+	_ = json.Unmarshal(params, &probe)
+	if m := firstNonEmpty(probe.Message, probe.Detail, probe.Reason); m != "" {
+		return m
+	}
+	if m := nestedErrorMessage(probe.Error); m != "" {
+		return m
+	}
+	if m := nestedErrorMessage(probe.Data); m != "" {
+		return m
+	}
+	// Last resort: surface the raw params so an unrecognized-but-populated error
+	// shape is not lost. Skip it when the payload carries no meaningful value
+	// (e.g. {} or {"message":"   "}), which upstream treats as "no detail".
+	if hasMeaningfulValue(params) {
+		return strings.TrimSpace(string(params))
+	}
+	return ""
+}
+
+// hasMeaningfulValue reports whether a JSON payload carries any value worth
+// surfacing: a non-string value, or a string that is not blank once trimmed.
+func hasMeaningfulValue(params json.RawMessage) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(params, &fields); err != nil {
+		raw := strings.TrimSpace(string(params))
+		return raw != "" && raw != "null"
+	}
+	for _, value := range fields {
+		raw := strings.TrimSpace(string(value))
+		if raw == "" || raw == "null" || raw == `""` {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(value, &text); err == nil {
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// nestedErrorMessage decodes a nested error value that may be a bare string or
+// an object carrying message/detail fields.
+func nestedErrorMessage(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return strings.TrimSpace(text)
+	}
+	var obj struct {
+		Message string `json:"message"`
+		Detail  string `json:"detail"`
+		Reason  string `json:"reason"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		if m := firstNonEmpty(obj.Message, obj.Detail, obj.Reason); m != "" {
+			return m
+		}
+	}
+	return trimmed
 }
 
 func firstNonEmpty(values ...string) string {

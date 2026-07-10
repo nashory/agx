@@ -27,6 +27,7 @@ type codexRuntime interface {
 	TurnInterrupt(context.Context, string, string) error
 	Events() <-chan codexapp.Notification
 	ApproveRequest(codexapp.Notification, codexapp.ReviewDecision) error
+	RecentStderr() string
 	Close() error
 }
 
@@ -642,6 +643,9 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 		if err != nil || !ok {
 			continue
 		}
+		if event.Kind == agentstream.EventError {
+			event.Error = enrichCodexError(event.Error, client.RecentStderr())
+		}
 		if event.Kind == agentstream.EventTurnStarted && event.TurnID != "" {
 			s.mu.Lock()
 			s.activeTurns[taskID] = event.TurnID
@@ -667,6 +671,25 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 			s.runtime.syncDiscordAsync()
 		}
 	}
+}
+
+// enrichCodexError appends recent app-server stderr to a codex error so the
+// operator sees the actual failure. Codex frequently emits an "error"
+// notification with no usable message while the real cause (a crash, auth
+// failure, or config error) is only on stderr, which is otherwise discarded.
+func enrichCodexError(message, stderr string) string {
+	message = strings.TrimSpace(message)
+	stderr = strings.TrimSpace(stderr)
+	if stderr == "" {
+		return message
+	}
+	if message == "" || message == codexapp.ErrorNoDetail {
+		return "codex error. Recent codex output:\n" + stderr
+	}
+	if strings.Contains(message, stderr) {
+		return message
+	}
+	return message + "\n\nRecent codex output:\n" + stderr
 }
 
 // answerCodexApproval responds to a Codex approval request so the blocked turn

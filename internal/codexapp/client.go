@@ -39,7 +39,15 @@ type Client struct {
 	events  chan Notification
 	done    chan struct{}
 	err     error
+
+	stderrMu  sync.Mutex
+	stderrBuf []string
 }
+
+// maxStderrLines bounds the retained app-server stderr so a chatty subprocess
+// cannot grow the buffer without limit; only the most recent lines matter for
+// diagnosing a failure.
+const maxStderrLines = 100
 
 // Notification is a server-initiated Codex app-server message. A server-initiated
 // request (one that expects a response, such as an approval request) carries a
@@ -102,6 +110,10 @@ func Start(ctx context.Context, opts Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -112,7 +124,43 @@ func Start(ctx context.Context, opts Options) (*Client, error) {
 		}
 		return cmd.Wait()
 	}))
+	client.captureStderr(stderr)
 	return client, nil
+}
+
+// captureStderr drains the app-server stderr into a bounded ring buffer so a
+// failure that codex only reports on stderr (a crash, auth error, or panic) can
+// still be surfaced to the operator. Codex stderr is otherwise discarded.
+func (c *Client) captureStderr(reader io.Reader) {
+	if c == nil || reader == nil {
+		return
+	}
+	go func() {
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := strings.TrimRight(scanner.Text(), "\r")
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			c.stderrMu.Lock()
+			c.stderrBuf = append(c.stderrBuf, line)
+			if len(c.stderrBuf) > maxStderrLines {
+				c.stderrBuf = c.stderrBuf[len(c.stderrBuf)-maxStderrLines:]
+			}
+			c.stderrMu.Unlock()
+		}
+	}()
+}
+
+// RecentStderr returns the most recent app-server stderr lines captured so far.
+func (c *Client) RecentStderr() string {
+	if c == nil {
+		return ""
+	}
+	c.stderrMu.Lock()
+	defer c.stderrMu.Unlock()
+	return strings.Join(c.stderrBuf, "\n")
 }
 
 func appServerArgs() []string {

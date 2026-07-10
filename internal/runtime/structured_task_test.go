@@ -26,6 +26,7 @@ type fakeCodexRuntime struct {
 	nextTurnID   string
 	threadErr    error
 	dirtyThread  bool
+	stderr       string
 }
 
 func newFakeCodexRuntime() *fakeCodexRuntime {
@@ -78,6 +79,10 @@ func (f *fakeCodexRuntime) Events() <-chan codexapp.Notification {
 
 func (f *fakeCodexRuntime) ApproveRequest(codexapp.Notification, codexapp.ReviewDecision) error {
 	return nil
+}
+
+func (f *fakeCodexRuntime) RecentStderr() string {
+	return f.stderr
 }
 
 func (f *fakeCodexRuntime) Close() error {
