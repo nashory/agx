@@ -27,21 +27,11 @@ const (
 
 var ownerClaimSettleDelay = 250 * time.Millisecond
 
-// ownerNow returns the current time for owner heartbeats and staleness checks. It
-// is a variable so tests can control time.
+// ownerNow returns the current time for owner record timestamps. It is a variable
+// so tests can control time.
 var ownerNow = func() time.Time { return time.Now().UTC() }
 
-// ownerStaleThreshold is how long an owner's heartbeat may go unrefreshed before
-// another runtime may explicitly take ownership. It is roughly three heartbeat
-// intervals so a briefly paused owner is not treated as dead.
-var ownerStaleThreshold = 90 * time.Second
-
 var ErrGuildOwnerConflict = errors.New("discord guild is already owned by another AGX runtime")
-
-// ErrGuildOwnerStale reports that the current owner's heartbeat has expired. AGX
-// never steals ownership automatically; the operator must run an explicit
-// takeover.
-var ErrGuildOwnerStale = errors.New("discord guild owner is stale; run an explicit takeover to claim it")
 
 type ownerClient interface {
 	EnsureControlChannel(ctx context.Context, guildID, name string) (string, error)
@@ -53,9 +43,9 @@ func newGuildOwner(mode string) string {
 	return newGuildOwnerEpoch(mode, 0)
 }
 
-// newGuildOwnerEpoch builds an owner record at the given generation epoch with a
-// fresh heartbeat. Takeover increments the epoch so a resumed previous owner can
-// detect it has been superseded.
+// newGuildOwnerEpoch builds an owner record at the given generation epoch.
+// Takeover increments the epoch so a competing takeover can be detected during
+// the fencing recheck.
 func newGuildOwnerEpoch(mode string, epoch int) string {
 	host, _ := os.Hostname()
 	host = strings.TrimSpace(host)
@@ -66,9 +56,8 @@ func newGuildOwnerEpoch(mode string, epoch int) string {
 	if mode == "" {
 		mode = "runtime"
 	}
-	now := ownerNow().Format(time.RFC3339)
-	return fmt.Sprintf("id=%s host=%s pid=%d mode=%s epoch=%d started=%s heartbeat=%s",
-		db.NewTaskID(), compactOwnerField(host), os.Getpid(), compactOwnerField(mode), epoch, now, now)
+	return fmt.Sprintf("id=%s host=%s pid=%d mode=%s epoch=%d started=%s",
+		db.NewTaskID(), compactOwnerField(host), os.Getpid(), compactOwnerField(mode), epoch, ownerNow().Format(time.RFC3339))
 }
 
 func compactOwnerField(value string) string {
@@ -102,16 +91,17 @@ func claimGuildOwner(ctx context.Context, client ownerClient, guildID, owner str
 		return "", err
 	}
 	if existing := ownerFromTopic(channel.Topic); existing != "" && !sameOwner(existing, owner) {
-		switch {
-		case ownerIsSameHost(existing, owner):
+		if ownerIsSameHost(existing, owner) {
 			// Leftover record from a previous run on this same host. The runtime
 			// lock guarantees that predecessor is gone, so reclaim it instead of
 			// failing, which keeps a crashed or restarted runtime from locking
 			// itself out of its own guild.
 			log.Printf("operation=%q previous_owner=%q", "discord_owner_reclaim_same_host", existing)
-		case parseOwnerInfo(existing).isStale(ownerNow()):
-			return "", guildOwnerStaleError(existing)
-		default:
+		} else {
+			// A different host owns the guild. Ownership is only recorded and
+			// checked at connect time (there is no liveness heartbeat), so AGX
+			// never steals it automatically; the operator must run an explicit
+			// takeover once they know the other runtime is gone.
 			return "", guildOwnerConflictError(existing)
 		}
 	}

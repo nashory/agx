@@ -4,17 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
-	"time"
 )
-
-func fixedOwnerClock(t *testing.T, base time.Time) {
-	t.Helper()
-	prev := ownerNow
-	ownerNow = func() time.Time { return base }
-	t.Cleanup(func() { ownerNow = prev })
-}
 
 func noSettleDelay(t *testing.T) {
 	t.Helper()
@@ -23,79 +14,51 @@ func noSettleDelay(t *testing.T) {
 	t.Cleanup(func() { ownerClaimSettleDelay = prev })
 }
 
-func ownerRecord(id string, epoch int, heartbeat time.Time) string {
-	return ownerRecordOnHost(id, "this-host", epoch, heartbeat)
+func ownerRecord(id string, epoch int) string {
+	return ownerRecordOnHost(id, "this-host", epoch)
 }
 
 // remoteOwnerRecord is an owner record from a different host, used to exercise the
-// cross-host stale/conflict paths (same-host records are auto-reclaimed).
-func remoteOwnerRecord(id string, epoch int, heartbeat time.Time) string {
-	return ownerRecordOnHost(id, "other-host", epoch, heartbeat)
+// cross-host conflict path (same-host records are auto-reclaimed).
+func remoteOwnerRecord(id string, epoch int) string {
+	return ownerRecordOnHost(id, "other-host", epoch)
 }
 
-func ownerRecordOnHost(id, host string, epoch int, heartbeat time.Time) string {
-	return fmt.Sprintf("id=%s host=%s pid=1 mode=runtime epoch=%d started=%s heartbeat=%s",
-		id, host, epoch, heartbeat.UTC().Format(time.RFC3339), heartbeat.UTC().Format(time.RFC3339))
+func ownerRecordOnHost(id, host string, epoch int) string {
+	return fmt.Sprintf("id=%s host=%s pid=1 mode=runtime epoch=%d started=2026-07-09T12:00:00Z", id, host, epoch)
 }
 
-func TestParseOwnerInfoAndStaleness(t *testing.T) {
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	fresh := parseOwnerInfo(ownerRecord("a", 3, base.Add(-10*time.Second)))
-	if fresh.id != "a" || fresh.epoch != 3 || !fresh.hasHeartbeat {
-		t.Fatalf("parseOwnerInfo() = %#v", fresh)
+func TestParseOwnerInfo(t *testing.T) {
+	info := parseOwnerInfo(ownerRecord("a", 3))
+	if info.id != "a" || info.epoch != 3 || info.host != "this-host" {
+		t.Fatalf("parseOwnerInfo() = %#v", info)
 	}
-	if fresh.isStale(base) {
-		t.Fatal("recent heartbeat should not be stale")
-	}
-	stale := parseOwnerInfo(ownerRecord("a", 0, base.Add(-200*time.Second)))
-	if !stale.isStale(base) {
-		t.Fatal("old heartbeat should be stale")
-	}
-	legacy := parseOwnerInfo("id=a host=mac pid=1 mode=runtime started=x")
-	if legacy.hasHeartbeat || legacy.isStale(base) {
-		t.Fatal("legacy owner without heartbeat must never be stale")
+	legacy := parseOwnerInfo("id=a host=mac pid=1 mode=runtime")
+	if legacy.id != "a" || legacy.epoch != 0 {
+		t.Fatalf("legacy parseOwnerInfo() = %#v", legacy)
 	}
 }
 
 func TestSameOwnerMatchesByID(t *testing.T) {
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	a := ownerRecord("same", 0, base)
-	b := ownerRecord("same", 0, base.Add(30*time.Second)) // heartbeat differs
+	a := ownerRecord("same", 0)
+	b := ownerRecord("same", 5) // epoch differs
 	if !sameOwner(a, b) {
 		t.Fatal("records with the same id should be the same owner")
 	}
-	if sameOwner(a, ownerRecord("other", 0, base)) {
+	if sameOwner(a, ownerRecord("other", 0)) {
 		t.Fatal("records with different ids should differ")
 	}
 }
 
-func TestClaimGuildOwnerReturnsStaleForExpiredOwner(t *testing.T) {
+func TestClaimGuildOwnerRejectsDifferentHostOwner(t *testing.T) {
 	noSettleDelay(t)
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	fixedOwnerClock(t, base)
 	client := &fakeOwnerClient{channel: GuildChannel{
 		ID:    "control-1",
 		Name:  controlChannelName,
 		Type:  GuildChannelText,
-		Topic: topicWithOwner("", remoteOwnerRecord("dead", 4, base.Add(-200*time.Second))),
+		Topic: topicWithOwner("", remoteOwnerRecord("other", 4)),
 	}}
-	_, err := claimGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0, base))
-	if !errors.Is(err, ErrGuildOwnerStale) {
-		t.Fatalf("claimGuildOwner() error = %v, want ErrGuildOwnerStale", err)
-	}
-}
-
-func TestClaimGuildOwnerRejectsFreshOwner(t *testing.T) {
-	noSettleDelay(t)
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	fixedOwnerClock(t, base)
-	client := &fakeOwnerClient{channel: GuildChannel{
-		ID:    "control-1",
-		Name:  controlChannelName,
-		Type:  GuildChannelText,
-		Topic: topicWithOwner("", remoteOwnerRecord("alive", 4, base.Add(-5*time.Second))),
-	}}
-	_, err := claimGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0, base))
+	_, err := claimGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0))
 	if !errors.Is(err, ErrGuildOwnerConflict) {
 		t.Fatalf("claimGuildOwner() error = %v, want ErrGuildOwnerConflict", err)
 	}
@@ -103,18 +66,15 @@ func TestClaimGuildOwnerRejectsFreshOwner(t *testing.T) {
 
 func TestClaimGuildOwnerReclaimsSameHostLeftover(t *testing.T) {
 	noSettleDelay(t)
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	fixedOwnerClock(t, base)
-	// A fresh record from THIS host (a crashed/restarted predecessor). Even though
-	// its heartbeat is recent, the runtime lock guarantees it is gone, so claim
-	// should reclaim it rather than fail.
+	// A record from THIS host (a crashed/restarted predecessor). The runtime lock
+	// guarantees it is gone, so claim reclaims it rather than failing.
 	client := &fakeOwnerClient{channel: GuildChannel{
 		ID:    "control-1",
 		Name:  controlChannelName,
 		Type:  GuildChannelText,
-		Topic: topicWithOwner("", ownerRecord("dead-predecessor", 2, base.Add(-5*time.Second))),
+		Topic: topicWithOwner("", ownerRecord("dead-predecessor", 2)),
 	}}
-	channelID, err := claimGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0, base))
+	channelID, err := claimGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0))
 	if err != nil {
 		t.Fatalf("claimGuildOwner() error = %v, want same-host reclaim to succeed", err)
 	}
@@ -126,17 +86,15 @@ func TestClaimGuildOwnerReclaimsSameHostLeftover(t *testing.T) {
 	}
 }
 
-func TestTakeoverGuildOwnerFromStaleIncrementsEpoch(t *testing.T) {
+func TestTakeoverGuildOwnerIncrementsEpoch(t *testing.T) {
 	noSettleDelay(t)
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	fixedOwnerClock(t, base)
 	client := &fakeOwnerClient{channel: GuildChannel{
 		ID:    "control-1",
 		Name:  controlChannelName,
 		Type:  GuildChannelText,
-		Topic: topicWithOwner("", ownerRecord("dead", 4, base.Add(-200*time.Second))),
+		Topic: topicWithOwner("", remoteOwnerRecord("old", 4)),
 	}}
-	channelID, newOwner, err := takeoverGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0, base))
+	channelID, newOwner, err := takeoverGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0))
 	if err != nil {
 		t.Fatalf("takeoverGuildOwner() error = %v", err)
 	}
@@ -151,112 +109,48 @@ func TestTakeoverGuildOwnerFromStaleIncrementsEpoch(t *testing.T) {
 	}
 }
 
-func TestTakeoverGuildOwnerRefusesLiveOwner(t *testing.T) {
-	noSettleDelay(t)
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	fixedOwnerClock(t, base)
-	client := &fakeOwnerClient{channel: GuildChannel{
-		ID:    "control-1",
-		Name:  controlChannelName,
-		Type:  GuildChannelText,
-		Topic: topicWithOwner("", ownerRecord("alive", 4, base.Add(-5*time.Second))),
-	}}
-	_, _, err := takeoverGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0, base))
-	if !errors.Is(err, ErrGuildOwnerConflict) {
-		t.Fatalf("takeoverGuildOwner() error = %v, want ErrGuildOwnerConflict for live owner", err)
-	}
-}
-
-// returningOwnerClient simulates the previous owner reasserting ownership during
-// the fencing grace window.
+// returningOwnerClient simulates a competing runtime winning the channel during
+// the fencing grace window after our takeover write.
 type returningOwnerClient struct {
 	fakeOwnerClient
-	base    time.Time
 	updates int
 }
 
 func (c *returningOwnerClient) UpdateChannelTopic(ctx context.Context, channelID, topic string) error {
 	c.updates++
 	if c.updates == 1 {
-		// Ignore our takeover write; the old owner comes back with a fresh beat.
-		c.channel.Topic = topicWithOwner("", ownerRecord("dead", 4, c.base))
+		// Ignore our takeover write; a competing owner wins the channel instead.
+		c.channel.Topic = topicWithOwner("", remoteOwnerRecord("competitor", 9))
 		return nil
 	}
 	c.channel.Topic = topic
 	return nil
 }
 
-func TestTakeoverAbortsWhenOwnerReturnsDuringFencing(t *testing.T) {
+func TestTakeoverAbortsWhenAnotherRuntimeWinsFencing(t *testing.T) {
 	noSettleDelay(t)
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	fixedOwnerClock(t, base)
 	client := &returningOwnerClient{
 		fakeOwnerClient: fakeOwnerClient{channel: GuildChannel{
 			ID:    "control-1",
 			Name:  controlChannelName,
 			Type:  GuildChannelText,
-			Topic: topicWithOwner("", ownerRecord("dead", 4, base.Add(-200*time.Second))),
+			Topic: topicWithOwner("", remoteOwnerRecord("old", 4)),
 		}},
-		base: base,
 	}
-	_, _, err := takeoverGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0, base))
+	_, _, err := takeoverGuildOwner(context.Background(), client, "guild-1", ownerRecord("self", 0))
 	if !errors.Is(err, ErrGuildOwnerConflict) {
-		t.Fatalf("takeoverGuildOwner() error = %v, want conflict when owner returns", err)
+		t.Fatalf("takeoverGuildOwner() error = %v, want conflict when another runtime wins fencing", err)
 	}
 }
 
-func TestRefreshGuildOwnerUpdatesHeartbeat(t *testing.T) {
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	owner := ownerRecord("self", 2, base.Add(-60*time.Second))
-	client := &fakeOwnerClient{channel: GuildChannel{
-		ID:    "control-1",
-		Name:  controlChannelName,
-		Type:  GuildChannelText,
-		Topic: topicWithOwner("", owner),
-	}}
-	fixedOwnerClock(t, base)
-	refreshed, superseded, err := refreshGuildOwner(context.Background(), client, "guild-1", "control-1", owner)
-	if err != nil || superseded {
-		t.Fatalf("refreshGuildOwner() = (%q, %v, %v), want fresh non-superseded", refreshed, superseded, err)
-	}
-	if got := parseOwnerInfo(refreshed); !got.heartbeat.Equal(base) {
-		t.Fatalf("refreshed heartbeat = %v, want %v", got.heartbeat, base)
-	}
-}
-
-func TestRefreshGuildOwnerDetectsSupersede(t *testing.T) {
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	owner := ownerRecord("self", 2, base)
-	client := &fakeOwnerClient{channel: GuildChannel{
-		ID:    "control-1",
-		Name:  controlChannelName,
-		Type:  GuildChannelText,
-		Topic: topicWithOwner("", ownerRecord("usurper", 3, base)),
-	}}
-	fixedOwnerClock(t, base)
-	_, superseded, err := refreshGuildOwner(context.Background(), client, "guild-1", "control-1", owner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !superseded {
-		t.Fatal("refreshGuildOwner() superseded = false, want true when another runtime owns the guild")
-	}
-}
-
-func TestWithEpochAndFreshHeartbeat(t *testing.T) {
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	fixedOwnerClock(t, base)
-	owner := ownerRecord("self", 1, base.Add(-time.Hour))
-	if got := parseOwnerInfo(withEpoch(owner, 7)); got.epoch != 7 {
+func TestWithEpoch(t *testing.T) {
+	if got := parseOwnerInfo(withEpoch(ownerRecord("self", 1), 7)); got.epoch != 7 {
 		t.Fatalf("withEpoch epoch = %d, want 7", got.epoch)
 	}
-	if got := parseOwnerInfo(withFreshHeartbeat(owner)); !got.heartbeat.Equal(base) {
-		t.Fatalf("withFreshHeartbeat heartbeat = %v, want %v", got.heartbeat, base)
-	}
-	// Legacy owner without a heartbeat field gains one.
+	// Legacy owner without an epoch field gains one.
 	legacy := "id=self host=mac pid=1 mode=runtime started=x"
-	if !strings.Contains(withFreshHeartbeat(legacy), "heartbeat=") {
-		t.Fatal("withFreshHeartbeat should add a heartbeat to a legacy owner")
+	if got := parseOwnerInfo(withEpoch(legacy, 3)); got.epoch != 3 {
+		t.Fatalf("withEpoch on legacy epoch = %d, want 3", got.epoch)
 	}
 }
 
@@ -282,8 +176,7 @@ func TestReleaseGuildOwnerRetriesOnTransientError(t *testing.T) {
 	ownerReleaseRetryDelay = 0
 	t.Cleanup(func() { ownerReleaseRetryDelay = prevDelay })
 
-	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	owner := ownerRecord("self", 1, base)
+	owner := ownerRecord("self", 1)
 	client := &flakyReleaseClient{
 		fakeOwnerClient: fakeOwnerClient{channel: GuildChannel{
 			ID:    "control-1",
@@ -291,7 +184,7 @@ func TestReleaseGuildOwnerRetriesOnTransientError(t *testing.T) {
 			Type:  GuildChannelText,
 			Topic: topicWithOwner("", owner),
 		}},
-		failUpdates: ownerReleaseAttempts - 1, // fail all but the last attempt
+		failUpdates: ownerReleaseAttempts - 1,
 	}
 	if err := releaseGuildOwner(context.Background(), client, "guild-1", "control-1", owner); err != nil {
 		t.Fatalf("releaseGuildOwner() error = %v, want success after retries", err)

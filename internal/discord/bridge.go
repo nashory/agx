@@ -53,7 +53,6 @@ type Bridge struct {
 	streams            map[string]taskStream
 	owner              string
 	ownerChan          string
-	ownerHeartbeatStop chan struct{}
 	startedAt          time.Time
 	lastErr            string
 	connected          bool
@@ -231,7 +230,6 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 		}
 		logConnectPhase("commands_registered", started)
 	}
-	heartbeatStop := make(chan struct{})
 	b.mu.Lock()
 	b.bot = bot
 	b.lock = lock
@@ -239,11 +237,9 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync, takeover b
 	b.connected = true
 	b.owner = owner
 	b.ownerChan = ownerChannelID
-	b.ownerHeartbeatStop = heartbeatStop
 	b.lastErr = ""
 	b.mu.Unlock()
 	logConnectPhase("connected", started, "guild", cfg.GuildID)
-	go b.runOwnerHeartbeat(bot, cfg.GuildID, ownerChannelID, owner, heartbeatStop)
 	if store != nil && initialSync {
 		go b.syncActiveTasksAfterStart(store, bot, cfg.GuildID)
 	} else {
@@ -266,41 +262,6 @@ func logConnectPhase(phase string, started time.Time, fields ...any) {
 		fmt.Fprintf(&b, "%s=%q", args[i], fmt.Sprint(args[i+1]))
 	}
 	log.Print(b.String())
-}
-
-// runOwnerHeartbeat periodically refreshes this runtime's owner heartbeat so
-// other runtimes can tell it is alive. If the control channel is taken over by
-// another runtime (a newer epoch), it self-fences by stopping the bridge instead
-// of contending for the guild.
-func (b *Bridge) runOwnerHeartbeat(bot *Bot, guildID, channelID, owner string, stop chan struct{}) {
-	ticker := time.NewTicker(ownerHeartbeatInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			refreshed, superseded, err := refreshGuildOwner(ctx, bot, guildID, channelID, owner)
-			cancel()
-			if err != nil {
-				continue
-			}
-			if superseded {
-				go func() {
-					_ = b.Stop()
-					b.setError(fmt.Errorf("discord ownership was taken over by another AGX runtime"))
-				}()
-				return
-			}
-			owner = refreshed
-			b.mu.Lock()
-			if b.owner != "" && sameOwner(b.owner, owner) {
-				b.owner = owner
-			}
-			b.mu.Unlock()
-		}
-	}
 }
 
 func (b *Bridge) syncActiveTasksAfterStart(store *db.Store, bot *Bot, guildID string) {
@@ -329,20 +290,15 @@ func (b *Bridge) Stop() error {
 	cfg := b.cfg
 	owner := b.owner
 	ownerChannelID := b.ownerChan
-	heartbeatStop := b.ownerHeartbeatStop
 	b.cancelTaskStreamsLocked()
 	b.bot = nil
 	b.lock = nil
 	b.owner = ""
 	b.ownerChan = ""
-	b.ownerHeartbeatStop = nil
 	b.connected = false
 	b.startedAt = time.Time{}
 	b.lastErr = ""
 	b.mu.Unlock()
-	if heartbeatStop != nil {
-		close(heartbeatStop)
-	}
 
 	var err error
 	if bot != nil {
