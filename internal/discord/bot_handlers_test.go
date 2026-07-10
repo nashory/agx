@@ -297,6 +297,11 @@ func (s panicCommandService) ResolveTask(context.Context, string) (TaskSummary, 
 	return TaskSummary{}, nil
 }
 
+func (s panicCommandService) ResetEverything(context.Context) (ResetSummary, error) {
+	s.t.Fatal("ResetEverything should not be called")
+	return ResetSummary{}, nil
+}
+
 func (s panicCommandService) GetTask(context.Context, string) (TaskSummary, error) {
 	s.t.Fatal("GetTask should not be called")
 	return TaskSummary{}, nil

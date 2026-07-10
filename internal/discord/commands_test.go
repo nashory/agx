@@ -33,6 +33,9 @@ type fakeCommandService struct {
 	channel                 map[string]string
 	resolvedRef             string
 	resolveTaskErr          error
+	resetCalled             bool
+	resetSummary            ResetSummary
+	resetErr                error
 	createProjectPath       string
 	createProjectName       string
 	createProjectAgent      string
@@ -135,6 +138,14 @@ func (f *fakeCommandService) HardSync(ctx context.Context, preserveControlChanne
 
 func (f *fakeCommandService) SyncStatus(ctx context.Context) SyncStatusSummary {
 	return f.syncStatus
+}
+
+func (f *fakeCommandService) ResetEverything(ctx context.Context) (ResetSummary, error) {
+	f.resetCalled = true
+	if f.resetErr != nil {
+		return ResetSummary{}, f.resetErr
+	}
+	return f.resetSummary, nil
 }
 
 func (f *fakeCommandService) ResolveTaskByChannel(ctx context.Context, channelID string) (string, error) {
@@ -674,6 +685,72 @@ func TestCommandRouterLogsUsesChannelTask(t *testing.T) {
 	}
 	if response.Content != "```\nhello\n```" {
 		t.Fatalf("response = %q", response.Content)
+	}
+}
+
+func TestCommandRouterResetEverythingRequiresConfirmation(t *testing.T) {
+	service := &fakeCommandService{control: map[string]bool{"control": true}}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.Execute(context.Background(), CommandInput{
+		Name:      "dangerously-reset-everything",
+		GuildID:   "guild-1",
+		ChannelID: "control",
+		UserID:    "user",
+		Options:   map[string]string{"confirm": "nope"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.resetCalled {
+		t.Fatal("ResetEverything called without confirmation")
+	}
+	if !response.Ephemeral || !strings.Contains(response.Content, "aborted") {
+		t.Fatalf("response = %#v, want abort guidance", response)
+	}
+}
+
+func TestCommandRouterResetEverythingRunsWhenConfirmed(t *testing.T) {
+	service := &fakeCommandService{control: map[string]bool{"control": true}, resetSummary: ResetSummary{Projects: 2, Tasks: 5}}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.Execute(context.Background(), CommandInput{
+		Name:      "dangerously-reset-everything",
+		GuildID:   "guild-1",
+		ChannelID: "control",
+		UserID:    "user",
+		Options:   map[string]string{"confirm": "RESET"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !service.resetCalled {
+		t.Fatal("ResetEverything not called after confirmation")
+	}
+	if !strings.Contains(response.Content, "2 project") || !strings.Contains(response.Content, "5 task") {
+		t.Fatalf("response = %q, want reset summary", response.Content)
+	}
+}
+
+func TestCommandRouterResetEverythingRejectedOutsideControl(t *testing.T) {
+	service := &fakeCommandService{control: map[string]bool{"task-channel": false}, channel: map[string]string{"task-channel": "task-1"}}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.Execute(context.Background(), CommandInput{
+		Name:      "dangerously-reset-everything",
+		GuildID:   "guild-1",
+		ChannelID: "task-channel",
+		UserID:    "user",
+		Options:   map[string]string{"confirm": "reset"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.resetCalled {
+		t.Fatal("ResetEverything ran outside #agx-control")
+	}
+	if !strings.Contains(response.Content, "agx-control") {
+		t.Fatalf("response = %q, want control-channel guidance", response.Content)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nashory/agx/internal/agent"
 	"github.com/nashory/agx/internal/agentstream"
 	"github.com/nashory/agx/internal/config"
 )
@@ -45,6 +46,7 @@ type CommandService interface {
 	IsControlChannel(ctx context.Context, channelID string) (bool, error)
 	SoftSync(ctx context.Context) error
 	HardSync(ctx context.Context, preserveControlChannelID string) error
+	ResetEverything(ctx context.Context) (ResetSummary, error)
 	ResolveTaskByChannel(ctx context.Context, channelID string) (string, error)
 	ResolveTask(ctx context.Context, ref string) (TaskSummary, error)
 	GetTask(ctx context.Context, taskID string) (TaskSummary, error)
@@ -91,6 +93,12 @@ type ProjectSummary struct {
 	ID   string
 	Name string
 	Path string
+}
+
+// ResetSummary reports what a reset-everything operation removed.
+type ResetSummary struct {
+	Projects int
+	Tasks    int
 }
 
 type CommandInput struct {
@@ -171,11 +179,35 @@ func (r *CommandRouter) IsAuthorized(input CommandInput) bool {
 	return true
 }
 
+// agentChoices exposes the known agents as slash-command choices so `/task
+// create` offers a picklist instead of a free-text field where the operator has
+// to guess a valid agent name. Discord allows up to 25 choices; KnownAgents is
+// far smaller.
+func agentChoices() []*discordgo.ApplicationCommandOptionChoice {
+	agents := agent.KnownAgents()
+	choices := make([]*discordgo.ApplicationCommandOptionChoice, 0, len(agents))
+	for _, a := range agents {
+		label := a.Name
+		if strings.TrimSpace(a.Description) != "" {
+			label = fmt.Sprintf("%s (%s)", a.Name, a.Description)
+		}
+		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{Name: label, Value: a.Name})
+	}
+	return choices
+}
+
 func ApplicationCommands() []*discordgo.ApplicationCommand {
 	return []*discordgo.ApplicationCommand{
 		{Name: "ps", Description: "List AGX tasks"},
 		{Name: "soft-sync", Description: "Sync AGX projects and active tasks to Discord"},
 		{Name: "hard-sync", Description: "Rebuild Discord managed channels from the current AGX state"},
+		{
+			Name:        "dangerously-reset-everything",
+			Description: "Delete ALL AGX projects, tasks, and managed Discord channels",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionString, Name: "confirm", Description: "Type reset to confirm this destructive action", Required: true},
+			},
+		},
 		{
 			Name:        "project",
 			Description: "Manage AGX project views",
@@ -222,7 +254,7 @@ func ApplicationCommands() []*discordgo.ApplicationCommand {
 						{Type: discordgo.ApplicationCommandOptionString, Name: "project", Description: "Project name, id, or absolute path", Required: true},
 						{Type: discordgo.ApplicationCommandOptionString, Name: "title", Description: "Task title", Required: true},
 						{Type: discordgo.ApplicationCommandOptionString, Name: "prompt", Description: "Initial prompt", Required: false},
-						{Type: discordgo.ApplicationCommandOptionString, Name: "agent", Description: "Agent name", Required: false},
+						{Type: discordgo.ApplicationCommandOptionString, Name: "agent", Description: "Agent (defaults to the project's default)", Required: false, Choices: agentChoices()},
 						{
 							Type:        discordgo.ApplicationCommandOptionString,
 							Name:        "workspace-mode",
@@ -298,6 +330,8 @@ func (r *CommandRouter) Execute(ctx context.Context, input CommandInput) (Comman
 		return r.softSync(ctx)
 	case "hard-sync":
 		return r.hardSync(ctx, input)
+	case "dangerously-reset-everything":
+		return r.resetEverything(ctx, input)
 	case "project":
 		switch input.Subcommand {
 		case "list":
@@ -663,6 +697,17 @@ func (r *CommandRouter) softSync(ctx context.Context) (CommandResponse, error) {
 	return CommandResponse{Content: "Soft sync completed."}, nil
 }
 
+func (r *CommandRouter) resetEverything(ctx context.Context, input CommandInput) (CommandResponse, error) {
+	if !strings.EqualFold(strings.TrimSpace(input.Options["confirm"]), "reset") {
+		return CommandResponse{Content: "Reset aborted. Re-run `/dangerously-reset-everything` with `confirm: reset` to wipe all AGX projects, tasks, and managed channels.", Ephemeral: true}, nil
+	}
+	summary, err := r.service.ResetEverything(ctx)
+	if err != nil {
+		return CommandResponse{}, err
+	}
+	return CommandResponse{Content: fmt.Sprintf("Reset complete: removed %d project(s) and %d task(s). Rebuilding managed Discord channels.", summary.Projects, summary.Tasks)}, nil
+}
+
 func (r *CommandRouter) hardSync(ctx context.Context, input CommandInput) (CommandResponse, error) {
 	if err := r.service.HardSync(ctx, input.ChannelID); err != nil {
 		return CommandResponse{}, err
@@ -863,6 +908,7 @@ func commandHelp() string {
 		"`/project list`, `/project create`, `/project delete` - manage registered projects from `#agx-control`",
 		"`/soft-sync` - sync Discord to the current AGX state",
 		"`/hard-sync` - rebuild managed Discord channels from AGX state",
+		"`/dangerously-reset-everything confirm:reset` - delete ALL projects, tasks, and managed channels",
 		"`/status task:<id>`, `/task logs task:<name-or-id>` - inspect tasks from `#agx-control`",
 		"`/logs` - show recent output in an AGX task channel (crash/error diagnosis)",
 		"`/interrupt` - interrupt the current task turn in an AGX task channel",

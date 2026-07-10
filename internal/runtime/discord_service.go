@@ -227,6 +227,40 @@ func (s discordCommandService) HardSync(ctx context.Context, preserveControlChan
 	return s.runtime.startDiscordHardSync(preserveControlChannelID)
 }
 
+// ResetEverything deletes every AGX project and task (stopping their sessions
+// and agents and removing their Discord channels) and then rebuilds managed
+// Discord state from the now-empty project set, preserving #agx-control. It is
+// the Discord equivalent of the desktop "reset everything" action, performed
+// in-process so the runtime and bridge stay up.
+func (s discordCommandService) ResetEverything(ctx context.Context) (agxdiscord.ResetSummary, error) {
+	projects, err := s.runtime.store.ListProjects()
+	if err != nil {
+		return agxdiscord.ResetSummary{}, err
+	}
+	summary := agxdiscord.ResetSummary{Projects: len(projects)}
+	for _, project := range projects {
+		tasks, err := s.runtime.store.ListTasks(project.ID, nil)
+		if err != nil {
+			return summary, err
+		}
+		summary.Tasks += len(tasks)
+		if _, err := s.DeleteProject(ctx, project.ID); err != nil {
+			return summary, err
+		}
+	}
+	// Rebuild managed Discord channels from the empty state so orphaned project
+	// categories are cleared while #agx-control is preserved. Best-effort: the
+	// store is already wiped even if the async rebuild has not finished.
+	if err := s.runtime.startDiscordHardSync(""); err != nil {
+		logRuntimeOperation("discord_reset_everything", "status", "hard_sync_skipped", "error", err)
+	}
+	logRuntimeOperation("discord_reset_everything",
+		"projects", summary.Projects,
+		"tasks", summary.Tasks,
+	)
+	return summary, nil
+}
+
 func (s discordCommandService) SyncStatus(ctx context.Context) agxdiscord.SyncStatusSummary {
 	return s.runtime.discordSyncStatus()
 }
