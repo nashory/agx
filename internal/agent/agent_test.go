@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/nashory/agx/internal/config"
@@ -137,12 +138,19 @@ func TestRegistryMergesCustomAgents(t *testing.T) {
 
 func TestRegistryListsAndFiltersAvailableAgents(t *testing.T) {
 	dir := t.TempDir()
-	availablePath := filepath.Join(dir, "available-agent")
-	if err := os.WriteFile(availablePath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+	availableCommand := "available-agent"
+	availableFile := availableCommand
+	content := "#!/bin/sh\n"
+	if runtime.GOOS == "windows" {
+		availableFile += ".cmd"
+		content = "@echo off\r\n"
+	}
+	availablePath := filepath.Join(dir, availableFile)
+	if err := os.WriteFile(availablePath, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	registry := NewRegistry("available", Agent{Name: "available", Command: "available-agent"}, Agent{Name: "missing", Command: "missing-agent"})
+	registry := NewRegistry("available", Agent{Name: "available", Command: availableCommand}, Agent{Name: "missing", Command: "missing-agent"})
 
 	if got, want := registry.DefaultName(), "available"; got != want {
 		t.Fatalf("DefaultName() = %q, want %q", got, want)

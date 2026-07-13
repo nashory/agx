@@ -35,6 +35,7 @@ type Service struct {
 	states         map[string]runtimeTaskState
 	locksMu        sync.Mutex
 	requestSeq     atomic.Uint64
+	shuttingDown   atomic.Bool
 	discord        *agxdiscord.Bridge
 	agents         *agentEventService
 	attachments    attachmentDownloader
@@ -223,6 +224,9 @@ func (s *Service) Start(ctx context.Context) (err error) {
 	case <-s.shutdownCh:
 		return <-errCh
 	case err := <-errCh:
+		if err == nil && s.shuttingDown.Load() {
+			<-s.shutdownCh
+		}
 		return err
 	}
 }
@@ -333,6 +337,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	started := time.Now()
 	var err error
 	s.shutdownOnce.Do(func() {
+		s.shuttingDown.Store(true)
 		logRuntimeOperation("runtime_shutdown", "status", "stopping")
 		if s.backgroundCancel != nil {
 			s.backgroundCancel()

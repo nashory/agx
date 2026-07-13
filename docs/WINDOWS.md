@@ -12,6 +12,9 @@ On the Windows `PATH`:
 - at least one agent CLI — `claude` and/or `codex` are the first-release targets
 - Windows 10/11 (ConPTY is required and is checked at launch)
 
+For Desktop preview builds, keep `agx.exe` and `agx-desktop.exe` in the same
+directory. Desktop uses the sibling CLI to start or install the runtime.
+
 ## How it differs from macOS/Linux
 
 | Concern | macOS/Linux | Native Windows |
@@ -48,6 +51,39 @@ Launch the runtime and connect Discord:
 `--platform linux` instead. When no Windows service is installed, `launch` starts
 the runtime as a detached background process.
 
+## Desktop preview
+
+Windows Desktop support is preview-only. Build the frontend and Windows
+binaries, then launch `agx-desktop.exe` from the same directory as `agx.exe`:
+
+```powershell
+npm --prefix desktop/frontend ci
+npm --prefix desktop/frontend run build
+go build -o agx.exe ./cmd/agx
+go build -tags "desktop,production" -o agx-desktop.exe ./desktop
+.\agx-desktop.exe
+```
+
+Release zips can be created on Windows:
+
+```powershell
+.\scripts\package-windows.ps1
+```
+
+For manual validation, use the guarded preview runner. It prints the isolated
+configuration it will use by default, and only starts processes when `-Run` is
+provided:
+
+```powershell
+.\scripts\run-windows-desktop-preview.ps1
+.\scripts\run-windows-desktop-preview.ps1 -Run
+```
+
+The preview target is Desktop reconnect while the runtime is still alive:
+closing and reopening Desktop should reconnect to live runtime tasks through the
+runtime API. Full tmux-style recovery after the runtime process exits is not
+part of this preview.
+
 ## Windows service (optional)
 
 ```powershell
@@ -79,6 +115,8 @@ after a short fencing delay so a returning owner is not clobbered.
   `agx runtime status`.
 - The runtime transport token is stored in the config directory; it is
   regenerated on each start.
+- Desktop talks to the native runtime over authenticated localhost TCP, not a
+  Unix socket.
 - ConPTY tasks are in-memory: after a runtime restart, previously running tasks
   are marked offline (recovery is limited by design in this preview).
 
@@ -86,10 +124,12 @@ after a short fencing delay so a returning owner is not clobbered.
 
 ```
 build:        go build -o agx.exe ./cmd/agx
+desktop:      go build -tags "desktop,production" -o agx-desktop.exe ./desktop
 runtime:      agx runtime start   →   agx runtime status (running, over TCP)
 project:      /project create <name>
 task:         /task create <project> <prompt>
 observe:      task output streams; send input; interrupt
+reconnect:    close Desktop, reopen Desktop, confirm the live task reconnects
 kill:         kill the task; confirm no orphaned processes in Task Manager
 ownership:    a second machine cannot control an already-owned server
 ```

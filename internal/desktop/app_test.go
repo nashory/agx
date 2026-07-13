@@ -18,30 +18,72 @@ import (
 	"github.com/nashory/agx/internal/session"
 )
 
-func TestExecutableSiblingCLIRequiresExecutableAgx(t *testing.T) {
+func TestExecutableSiblingCLIRules(t *testing.T) {
 	dir := t.TempDir()
 	desktopPath := filepath.Join(dir, "AGXDesktop")
 	if err := os.WriteFile(desktopPath, []byte("desktop"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := executableSiblingCLI(desktopPath); ok {
-		t.Fatal("executableSiblingCLI found missing agx sibling")
-	}
-	agxPath := filepath.Join(dir, "agx")
-	if err := os.WriteFile(agxPath, []byte("cli"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := executableSiblingCLI(desktopPath); ok {
-		t.Fatal("executableSiblingCLI found non-executable agx sibling")
-	}
-	if runtime.GOOS == "windows" {
-		t.Skip("Unix executable bits are not meaningful on Windows")
-	}
-	if err := os.Chmod(agxPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got, ok := executableSiblingCLI(desktopPath); !ok || got != agxPath {
-		t.Fatalf("executableSiblingCLI = %q, %t; want %q, true", got, ok, agxPath)
+
+	t.Run("unix requires agx executable bit", func(t *testing.T) {
+		agxPath := filepath.Join(dir, "agx")
+		if err := os.WriteFile(agxPath, []byte("cli"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := executableSiblingCLIWithName(desktopPath, "agx", true); ok {
+			t.Fatal("executableSiblingCLIWithName found non-executable Unix agx sibling")
+		}
+		if runtime.GOOS == "windows" {
+			return
+		}
+		if err := os.Chmod(agxPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := executableSiblingCLIWithName(desktopPath, "agx", true); !ok || got != agxPath {
+			t.Fatalf("executableSiblingCLIWithName = %q, %t; want %q, true", got, ok, agxPath)
+		}
+	})
+
+	t.Run("windows accepts agx exe without executable bit", func(t *testing.T) {
+		agxPath := filepath.Join(dir, "agx.exe")
+		if err := os.WriteFile(agxPath, []byte("cli"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := executableSiblingCLIWithName(desktopPath, "agx.exe", false); !ok || got != agxPath {
+			t.Fatalf("executableSiblingCLIWithName = %q, %t; want %q, true", got, ok, agxPath)
+		}
+	})
+
+	t.Run("missing or directory is rejected", func(t *testing.T) {
+		if _, ok := executableSiblingCLIWithName(desktopPath, "missing-agx", false); ok {
+			t.Fatal("executableSiblingCLIWithName found missing sibling")
+		}
+		dirCandidate := filepath.Join(dir, "agx-dir")
+		if err := os.Mkdir(dirCandidate, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := executableSiblingCLIWithName(desktopPath, "agx-dir", false); ok {
+			t.Fatal("executableSiblingCLIWithName accepted directory sibling")
+		}
+	})
+}
+
+func TestRuntimeCLIPlatformRules(t *testing.T) {
+	switch runtime.GOOS {
+	case "windows":
+		if got := runtimeCLIFileName(); got != "agx.exe" {
+			t.Fatalf("runtimeCLIFileName() = %q, want agx.exe", got)
+		}
+		if runtimeCLIRequiresExecutableBit() {
+			t.Fatal("runtimeCLIRequiresExecutableBit() = true on Windows")
+		}
+	default:
+		if got := runtimeCLIFileName(); got != "agx" {
+			t.Fatalf("runtimeCLIFileName() = %q, want agx", got)
+		}
+		if !runtimeCLIRequiresExecutableBit() {
+			t.Fatal("runtimeCLIRequiresExecutableBit() = false on Unix")
+		}
 	}
 }
 
@@ -984,6 +1026,7 @@ func TestStatusDTOs(t *testing.T) {
 		ConfigDir:     "/tmp/agx",
 		SocketPath:    "/tmp/agx.sock",
 		LockPath:      "/tmp/agx.lock",
+		Transport:     "unix /tmp/agx.sock",
 		Recovery:      session.RecoveryResult{Offline: 1, Cleared: 2, Orphans: 3},
 	})
 	if !runtimeStatus.Running || runtimeStatus.PID != 42 || runtimeStatus.StartedAt == nil || !runtimeStatus.StartedAt.Equal(started) {
@@ -991,6 +1034,9 @@ func TestStatusDTOs(t *testing.T) {
 	}
 	if runtimeStatus.Recovery.Orphans != 3 {
 		t.Fatalf("runtime recovery = %#v, want mapped recovery result", runtimeStatus.Recovery)
+	}
+	if runtimeStatus.Transport != "unix /tmp/agx.sock" {
+		t.Fatalf("runtime transport = %q, want mapped transport", runtimeStatus.Transport)
 	}
 
 	now := time.Now()
@@ -1051,6 +1097,30 @@ func TestPathAndRepositoryHelpers(t *testing.T) {
 	}
 }
 
+func TestEnsureWritableProjectDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := ensureWritableProjectDirectory(root); err != nil {
+		t.Fatalf("ensureWritableProjectDirectory() error = %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(root, ".agx-write-test-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("write probe left files behind: %v", matches)
+	}
+}
+
+func TestEnsureWritableProjectDirectoryRejectsFilePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(path, []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureWritableProjectDirectory(path); err == nil {
+		t.Fatal("ensureWritableProjectDirectory(file) error = nil, want error")
+	}
+}
+
 func TestLanguageForPath(t *testing.T) {
 	cases := map[string]string{
 		"Dockerfile": "Dockerfile",
@@ -1103,7 +1173,11 @@ func newTestApp(t *testing.T) (*App, db.Project) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewAppWithStore(store), project
+	app := NewAppWithStore(store)
+	t.Cleanup(func() {
+		_ = app.ResetDatabase()
+	})
+	return app, project
 }
 
 func prependFakeAgentCLIs(t *testing.T, names ...string) {
@@ -1111,7 +1185,12 @@ func prependFakeAgentCLIs(t *testing.T, names ...string) {
 	binDir := t.TempDir()
 	for _, name := range names {
 		path := filepath.Join(binDir, name)
-		if err := os.WriteFile(path, []byte("#!/bin/sh\necho agx fake agent \"$@\"\nsleep 30\n"), 0o755); err != nil {
+		content := "#!/bin/sh\necho agx fake agent \"$@\"\nsleep 30\n"
+		if runtime.GOOS == "windows" {
+			path += ".cmd"
+			content = "@echo off\r\necho agx fake agent %*\r\nping -n 31 127.0.0.1 > nul\r\n"
+		}
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

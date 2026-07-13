@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -19,7 +20,8 @@ func TestOpenPathCreatesPrivateDatabaseDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o700 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
+		got := info.Mode().Perm()
 		t.Fatalf("database directory mode = %s, want 0700", got)
 	}
 }
@@ -373,10 +375,12 @@ func TestResolveProjectAmbiguousName(t *testing.T) {
 	defer store.Close()
 
 	root := t.TempDir()
-	if _, err := store.EnsureProject(root+"/same", nil); err != nil {
+	samePath := filepath.Join(root, "same")
+	otherSamePath := filepath.Join(root, "other", "same")
+	if _, err := store.EnsureProject(samePath, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.EnsureProject(root+"/other/same", nil); err != nil {
+	if _, err := store.EnsureProject(otherSamePath, nil); err != nil {
 		t.Fatal(err)
 	}
 	_, err = store.ResolveProject("same")
@@ -391,7 +395,7 @@ func TestResolveProjectAmbiguousName(t *testing.T) {
 		t.Fatalf("ambiguous matches = %d, want 2", len(ambiguous.Matches))
 	}
 	message := err.Error()
-	for _, want := range []string{root + "/same", root + "/other/same", "Use path instead"} {
+	for _, want := range []string{samePath, otherSamePath, "Use path instead"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("ambiguous error missing %q:\n%s", want, message)
 		}

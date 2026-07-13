@@ -427,7 +427,7 @@ for focused tasks where direct edits are expected.
 | macOS arm64 | Desktop app, CLI, runtime, launchd user service. |
 | Linux amd64/arm64 | CLI, runtime, TUI, systemd user service, release tarballs. |
 | Docker | Ubuntu runtime/TUI environment for Docker-capable hosts. |
-| Windows | Native CLI/runtime preview using authenticated localhost TCP, ConPTY, and Windows Service support. |
+| Windows | Native CLI/runtime and Desktop preview using authenticated localhost TCP, ConPTY, and Windows Service support. |
 
 Linux Desktop packaging is not part of the current release target. The runtime
 is built on Unix primitives and is shared by Desktop, CLI, TUI, and Discord.

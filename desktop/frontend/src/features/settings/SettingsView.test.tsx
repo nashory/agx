@@ -13,6 +13,7 @@ const runtimeStatus: RuntimeStatusInfo = {
   uptimeSeconds: 65,
   socketPath: '/tmp/agx.sock',
   lockPath: '/tmp/agx.lock',
+  transport: 'unix /tmp/agx.sock',
   recovery: {},
 };
 
@@ -85,6 +86,14 @@ describe('SettingsView', () => {
     renderSettings({ runtimeConfig: { defaultAgent: 'opencode', voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' } } });
 
     expect(screen.getByDisplayValue('OpenCode (not installed)')).not.toBeNull();
+  });
+
+  it('shows the runtime transport instead of assuming a Unix socket', () => {
+    renderSettings();
+
+    expect(screen.getByText('Transport')).not.toBeNull();
+    expect(screen.getByText('unix /tmp/agx.sock')).not.toBeNull();
+    expect(screen.queryByText('Socket')).toBeNull();
   });
 
   it('saves optional voice STT settings', async () => {

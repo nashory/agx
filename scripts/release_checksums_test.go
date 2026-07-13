@@ -6,11 +6,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestReleaseChecksumsWritesAllReleaseArtifacts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell release helper runs under Unix shells")
+	}
 	root := copyReleaseChecksumScript(t)
 	writeFile(t, filepath.Join(root, "dist", "agx-linux-amd64.tar.gz"), "linux")
 	writeFile(t, filepath.Join(root, "dist", "AGX-darwin-arm64.dmg"), "mac")
@@ -33,6 +37,9 @@ func TestReleaseChecksumsWritesAllReleaseArtifacts(t *testing.T) {
 }
 
 func TestReleaseChecksumsFailsWithoutArtifacts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell release helper runs under Unix shells")
+	}
 	root := copyReleaseChecksumScript(t)
 	if err := os.MkdirAll(filepath.Join(root, "dist"), 0o755); err != nil {
 		t.Fatal(err)

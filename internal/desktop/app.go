@@ -26,7 +26,6 @@ import (
 	"github.com/nashory/agx/internal/display"
 	agxruntime "github.com/nashory/agx/internal/runtime"
 	"github.com/nashory/agx/internal/session"
-	"github.com/nashory/agx/internal/tmux"
 	"github.com/nashory/agx/internal/worktree"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -36,7 +35,7 @@ import (
 // local store/tmux controller so core behavior can be tested without Wails.
 type App struct {
 	store      *db.Store
-	tmux       *tmux.Controller
+	tmux       session.Backend
 	ctx        context.Context
 	directMode bool
 
@@ -230,6 +229,7 @@ type RuntimeStatusInfo struct {
 	ConfigDir     string                 `json:"configDir,omitempty"`
 	SocketPath    string                 `json:"socketPath"`
 	LockPath      string                 `json:"lockPath"`
+	Transport     string                 `json:"transport,omitempty"`
 	Recovery      session.RecoveryResult `json:"recovery"`
 	Error         string                 `json:"error,omitempty"`
 }
@@ -327,7 +327,7 @@ func NewAppWithStore(store *db.Store) *App {
 		locks:      map[string]*sync.Mutex{},
 	}
 	if directMode {
-		app.tmux = tmux.NewController()
+		app.tmux = session.DefaultBackend()
 		app.agentEvents = newAgentEventService(app)
 	}
 	return app
@@ -766,8 +766,8 @@ func (a *App) ResetDatabase() error {
 		errs = append(errs, err)
 	}
 	a.stopAllLogStreams()
-	if a.tmux.HasServer() {
-		if err := a.tmux.KillServer(); err != nil {
+	if killer, ok := a.tmux.(interface{ KillServer() error }); ok && a.tmux.HasServer() {
+		if err := killer.KillServer(); err != nil {
 			errs = append(errs, fmt.Errorf("kill tmux server: %w", err))
 		}
 	}
@@ -792,6 +792,7 @@ func (a *App) RuntimeStatus() RuntimeStatusInfo {
 			Running:    false,
 			SocketPath: paths.Socket,
 			LockPath:   paths.Lock,
+			Transport:  defaultRuntimeTransportLabel(paths),
 			Error:      err.Error(),
 		}
 	}
@@ -946,6 +947,7 @@ func (a *App) RuntimeStart() (RuntimeStatusInfo, error) {
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Env = os.Environ()
+	configureRuntimeCommand(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = stdout.Close()
 		_ = stderr.Close()
@@ -999,12 +1001,30 @@ func runtimeCLIPath() (string, error) {
 }
 
 func executableSiblingCLI(executable string) (string, bool) {
-	candidate := filepath.Join(filepath.Dir(executable), "agx")
+	return executableSiblingCLIWithName(executable, runtimeCLIFileName(), runtimeCLIRequiresExecutableBit())
+}
+
+func executableSiblingCLIWithName(executable, cliName string, requireExecutableBit bool) (string, bool) {
+	candidate := filepath.Join(filepath.Dir(executable), cliName)
 	info, err := os.Stat(candidate)
-	if err != nil || info.IsDir() || info.Mode().Perm()&0o111 == 0 {
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	if requireExecutableBit && info.Mode().Perm()&0o111 == 0 {
 		return "", false
 	}
 	return candidate, true
+}
+
+func runtimeCLIFileName() string {
+	if runtime.GOOS == "windows" {
+		return "agx.exe"
+	}
+	return "agx"
+}
+
+func runtimeCLIRequiresExecutableBit() bool {
+	return runtime.GOOS != "windows"
 }
 
 func (a *App) RuntimeStop() (RuntimeStatusInfo, error) {
@@ -3302,8 +3322,16 @@ func runtimeStatusDTO(status agxruntime.Status) RuntimeStatusInfo {
 		ConfigDir:     status.ConfigDir,
 		SocketPath:    status.SocketPath,
 		LockPath:      status.LockPath,
+		Transport:     status.Transport,
 		Recovery:      status.Recovery,
 	}
+}
+
+func defaultRuntimeTransportLabel(paths agxruntime.Paths) string {
+	if runtime.GOOS == "windows" {
+		return "tcp endpoint " + filepath.Join(paths.ConfigDir, "runtime.endpoint.json")
+	}
+	return "unix " + paths.Socket
 }
 
 func (a *App) detectAndStoreStatus(task db.Task) db.TaskStatus {
@@ -3581,10 +3609,18 @@ func (a *App) ensureProjectWriteAccess(path string) error {
 }
 
 func ensureWritableProjectDirectory(path string) error {
-	script := `test_path="$1/.agx-write-test-$$"; : > "$test_path" && rm -f "$test_path"`
-	output, err := exec.Command("/bin/sh", "-c", script, "agx-write-test", path).CombinedOutput()
+	testPath := filepath.Join(path, fmt.Sprintf(".agx-write-test-%d", os.Getpid()))
+	file, err := os.OpenFile(testPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("project path is not writable by AGX child processes: %s: %s: %w", path, strings.TrimSpace(string(output)), err)
+		return fmt.Errorf("project path is not writable by AGX child processes: %s: %w", path, err)
+	}
+	closeErr := file.Close()
+	removeErr := os.Remove(testPath)
+	if closeErr != nil {
+		return fmt.Errorf("close write test file %s: %w", testPath, closeErr)
+	}
+	if removeErr != nil {
+		return fmt.Errorf("remove write test file %s: %w", testPath, removeErr)
 	}
 	return nil
 }

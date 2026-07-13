@@ -97,6 +97,28 @@ jobs:
       - run: npm --prefix desktop/frontend test
       - run: npm --prefix desktop/frontend run build
 
+  windows-desktop:
+    name: Windows Desktop Compile
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+      - run: npm --prefix desktop/frontend ci
+      - run: npm --prefix desktop/frontend run build
+      - run: go test -run '^$' ./...
+      - run: go build -o bin/agx.exe ./cmd/agx
+      - run: go build -tags "desktop,production" -o bin/agx-desktop.exe ./desktop
+      - shell: powershell
+        run: .\scripts\package-windows.ps1
+
   release-verify:
     name: Release Verify
     runs-on: ubuntu-latest

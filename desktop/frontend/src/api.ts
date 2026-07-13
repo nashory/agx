@@ -207,6 +207,7 @@ export const api: WailsApp = {
       uptimeSeconds: 0,
       socketPath: '',
       lockPath: '',
+      transport: '',
       recovery: {},
       error: 'Wails runtime is not connected',
     };

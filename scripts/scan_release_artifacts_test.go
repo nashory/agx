@@ -4,11 +4,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestScanReleaseArtifactsPassesCleanTarball(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell release helper runs under Unix shells")
+	}
 	root := copyArtifactScanScript(t)
 	dist := filepath.Join(root, "dist")
 	payload := filepath.Join(root, "payload")
@@ -19,6 +23,9 @@ func TestScanReleaseArtifactsPassesCleanTarball(t *testing.T) {
 }
 
 func TestScanReleaseArtifactsRejectsLocalState(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell release helper runs under Unix shells")
+	}
 	root := copyArtifactScanScript(t)
 	dist := filepath.Join(root, "dist")
 	payload := filepath.Join(root, "payload")
@@ -63,4 +70,3 @@ func makeTarball(t *testing.T, artifact, payload string) {
 		t.Fatalf("tar failed: %v\n%s", err, output)
 	}
 }
-

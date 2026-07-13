@@ -14,11 +14,13 @@ The first public release ships prebuilt assets for:
 
 - macOS `arm64`
 - Linux `amd64` and `arm64` CLI/runtime tarballs
+- Windows `amd64` preview zip with native CLI/runtime and Desktop
 
 That is a packaging and validation boundary, not a fundamental architecture
-boundary. The CLI/runtime uses local Unix primitives such as tmux, git, Unix
-sockets, SQLite, and normal child processes. Linux Desktop packaging is not part
-of the first public release yet.
+boundary. The macOS and Linux runtime paths use local Unix primitives such as
+tmux, git, Unix sockets, SQLite, and normal child processes. Native Windows uses
+ConPTY, authenticated localhost TCP, Windows file locks, and Windows Service
+support. Linux Desktop packaging is not part of the first public release yet.
 
 The `launch` command runs sanity checks, installs or starts the runtime service,
 and connects Discord when configured. Under the hood, AGX uses a macOS launchd
@@ -29,7 +31,9 @@ not require systemd.
 If `systemd --user` is unavailable in WSL2, `agx launch` falls back to a
 detached runtime process and prints the runtime log paths for diagnosis.
 
-Native Windows builds are not supported yet.
+Native Windows Desktop is a preview. Closing and reopening Desktop should
+reconnect to a still-running runtime, but tmux-style task recovery after runtime
+restart is not supported yet.
 
 ## Prerequisites
 
@@ -134,10 +138,11 @@ for your user:
 loginctl enable-linger "$USER"
 ```
 
-On Windows, use the native Windows runtime:
+On Windows, extract the preview zip and use the native Windows runtime:
 
 ```powershell
-agx launch --platform windows
+.\agx.exe launch --platform windows
+.\agx-desktop.exe
 ```
 
 Inside a WSL2 Linux shell, use the Linux runtime path:
@@ -165,8 +170,8 @@ agx runtime start
 ```
 
 You can also open AGX Desktop and use Settings -> Runtime to start the daemon or
-install the service. The Desktop app talks to the runtime through a local Unix
-socket and does not own the runtime database.
+install the service. The Desktop app talks to the runtime through the local
+platform transport and does not own the runtime database.
 
 Open a git repository:
 

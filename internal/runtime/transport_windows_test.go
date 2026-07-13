@@ -94,6 +94,9 @@ func TestWindowsTransportEndToEnd(t *testing.T) {
 		defer cancel()
 		_ = NewClient().Shutdown(ctx)
 		<-errCh
+		if _, err := readEndpoint(DefaultPaths()); err == nil {
+			t.Fatal("runtime endpoint still exists after shutdown")
+		}
 	}()
 
 	waitForRuntimeReady(t)

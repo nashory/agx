@@ -1,5 +1,6 @@
 GO ?= go
 NPM ?= npm
+POWERSHELL ?= powershell
 GOPATH ?= $(CURDIR)/.gopath
 DESKTOP_TAGS ?= desktop,production
 VERSION ?= dev
@@ -9,7 +10,7 @@ LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DA
 
 export GOPATH
 
-.PHONY: build desktop app frontend-install frontend-build frontend-check-dist package-macos package-linux release-checksums release-scan release-verify docker-image install clean distclean run test fmt smoke smoke-desktop runtime-start runtime-stop runtime-status runtime-bg desktop-run dev service-install service-uninstall doctor
+.PHONY: build desktop app frontend-install frontend-build frontend-check-dist package-macos package-linux package-windows release-checksums release-scan release-verify docker-image install clean distclean run test fmt smoke smoke-desktop runtime-start runtime-stop runtime-status runtime-bg desktop-run dev service-install service-uninstall doctor
 
 build:
 	$(GO) build -ldflags "$(LDFLAGS)" -o bin/agx ./cmd/agx
@@ -34,6 +35,9 @@ package-macos:
 
 package-linux:
 	VERSION=$(VERSION) GOOS=linux ./scripts/package-linux.sh
+
+package-windows:
+	$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -Command "$$env:VERSION='$(VERSION)'; & './scripts/package-windows.ps1'"
 
 release-checksums:
 	./scripts/release-checksums.sh

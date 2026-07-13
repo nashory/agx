@@ -57,8 +57,8 @@ export function RuntimeStartupView({
           </div>
           <div className="setting-row">
             <div>
-              <SettingHeading label="Controls" help="Runtime actions. Start runs the daemon for this session; Install registers the macOS user service." />
-              <span>Start the runtime for this session or install the macOS user service.</span>
+              <SettingHeading label="Controls" help="Runtime actions. Start runs the daemon for this session; Install registers the platform service." />
+              <span>Start the runtime for this session or install the platform service.</span>
             </div>
             <div className="runtime-control-buttons">
               <button className="text-button" disabled={busy} onClick={() => void onRefreshRuntime()}>
@@ -77,8 +77,8 @@ export function RuntimeStartupView({
           </div>
           <div className="setting-row">
             <div>
-              <SettingHeading label="Socket" help="Local Unix socket path used by Desktop, CLI, and integrations to talk to the runtime daemon." />
-              <span>{runtimeStatus.socketPath || 'Unavailable'}</span>
+              <SettingHeading label="Transport" help="Local transport used by Desktop, CLI, and integrations to talk to the runtime daemon." />
+              <span>{runtimeTransportDetail(runtimeStatus)}</span>
             </div>
             <SquareTerminal size={18} aria-hidden="true" />
           </div>
@@ -187,8 +187,8 @@ export function SettingsView({
           </div>
           <div className="setting-row">
             <div>
-              <SettingHeading label="Controls" help="Start launches the daemon now, Install registers the macOS user service, and Stop terminates the current daemon." />
-              <span>Start the runtime now, install the macOS user service, or stop the running daemon.</span>
+              <SettingHeading label="Controls" help="Start launches the daemon now, Install registers the platform service, and Stop terminates the current daemon." />
+              <span>Start the runtime now, install the platform service, or stop the running daemon.</span>
             </div>
             <div className="runtime-control-buttons">
               <button className="text-button" disabled={busy || runtimeStatus.running} onClick={() => void onStartRuntime()}>
@@ -207,10 +207,10 @@ export function SettingsView({
           </div>
           <div className="setting-row">
             <div>
-              <SettingHeading label="Socket" help="Local Unix socket path used by Desktop and the CLI to send requests to the runtime daemon." />
-              <span>{runtimeStatus.socketPath || 'Unavailable'}</span>
+              <SettingHeading label="Transport" help="Local transport used by Desktop and the CLI to send requests to the runtime daemon." />
+              <span>{runtimeTransportDetail(runtimeStatus)}</span>
             </div>
-            <span className={`status-pill ${runtimeStatus.running ? 'ok' : 'error'}`} title={runtimeStatus.running ? 'Runtime socket is reachable.' : 'Runtime socket is not reachable.'}>
+            <span className={`status-pill ${runtimeStatus.running ? 'ok' : 'error'}`} title={runtimeStatus.running ? 'Runtime transport is reachable.' : 'Runtime transport is not reachable.'}>
               {runtimeStatus.running ? 'Running' : 'Stopped'}
             </span>
           </div>
@@ -485,6 +485,10 @@ function runtimeRecoveryDetail(status: RuntimeStatusInfo): string {
   const cleared = recovery.cleared ?? 0;
   const orphans = recovery.orphans ?? 0;
   return `${offline} offline, ${cleared} stale sessions cleared, ${orphans} orphan worktrees removed`;
+}
+
+function runtimeTransportDetail(status: RuntimeStatusInfo): string {
+  return status.transport || status.socketPath || 'Unavailable';
 }
 
 function formatRuntimeUptime(seconds: number): string {

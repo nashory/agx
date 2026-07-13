@@ -109,6 +109,7 @@ export type RuntimeStatusInfo = {
   configDir?: string;
   socketPath: string;
   lockPath: string;
+  transport?: string;
   recovery: {
     offline?: number;
     cleared?: number;
