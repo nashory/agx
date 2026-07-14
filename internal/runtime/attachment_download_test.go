@@ -52,6 +52,31 @@ func TestAttachmentDownloaderStoresDiscordVoiceMessage(t *testing.T) {
 	}
 }
 
+func TestAttachmentDownloaderStoresTextFile(t *testing.T) {
+	content := []byte("DRAFTS - xgb-valid-manifold-interpolation\nMODE: auto\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+	downloader := newAttachmentDownloader(server.Client(), map[string]bool{testServerHost(t, server.URL): true}, true, 1024)
+	finalPath := filepath.Join(t.TempDir(), "message.txt")
+	downloaded, err := downloader.download(context.Background(), server.URL+"/message.txt", finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if downloaded.ContentType != "text/plain; charset=utf-8" || downloaded.SizeBytes != int64(len(content)) || downloaded.SHA256 == "" {
+		t.Fatalf("downloaded = %#v", downloaded)
+	}
+	stored, err := os.ReadFile(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored) != string(content) {
+		t.Fatalf("stored text = %q, want %q", stored, content)
+	}
+}
+
 func TestAttachmentDownloaderRejectsRedirectOutsideAllowedHosts(t *testing.T) {
 	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://example.com/screen.png", http.StatusFound)

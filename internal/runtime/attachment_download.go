@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -193,5 +194,18 @@ func sniffSupportedAttachment(data []byte) string {
 	if len(data) >= 4 && bytes.Equal(data[:4], []byte("OggS")) {
 		return "audio/ogg"
 	}
+	if isTextAttachmentSample(data) {
+		return "text/plain; charset=utf-8"
+	}
 	return ""
+}
+
+func isTextAttachmentSample(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	if bytes.Contains(data, []byte{0}) {
+		return false
+	}
+	return utf8.Valid(data)
 }
