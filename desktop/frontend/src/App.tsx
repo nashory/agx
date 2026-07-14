@@ -349,6 +349,27 @@ export default function App() {
     }
   }, [appendLog]);
 
+  const setupVoiceSTT = useCallback(async () => {
+    setBusy(true);
+    setError('');
+    appendLog('$ setup voice stt');
+    try {
+      const result = await api.SetupVoiceSTT();
+      setRuntimeConfig((current) => ({ ...current, voiceStt: result.config }));
+      appendLog(`[ok] voice stt setup ${result.downloaded ? 'downloaded model' : 'ready'}`);
+      for (const warning of result.warnings ?? []) {
+        appendLog(`[warn] voice stt: ${warning}`);
+      }
+    } catch (err) {
+      const message = errorMessage(err);
+      setError(message);
+      appendLog(`[error] voice stt setup: ${message}`);
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  }, [appendLog]);
+
   const runRuntimeAction = useCallback(async (action: () => Promise<RuntimeStatusInfo>, label: string) => {
     setBusy(true);
     setError('');
@@ -569,6 +590,7 @@ export default function App() {
         agents={globalAgents}
         onDefaultAgentChange={updateDefaultAgent}
         onVoiceSTTChange={updateVoiceSTT}
+        onVoiceSTTSetup={setupVoiceSTT}
         onRefreshRuntime={loadRuntimeStatus}
         onStartRuntime={() => runRuntimeAction(api.RuntimeStart, 'start runtime')}
         onInstallRuntimeService={() => runRuntimeAction(api.RuntimeInstallService, 'install runtime service')}

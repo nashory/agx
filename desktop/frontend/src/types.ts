@@ -132,6 +132,13 @@ export type VoiceSTTConfig = {
   timeout: string;
 };
 
+export type VoiceSTTSetupResult = {
+  config: VoiceSTTConfig;
+  downloaded: boolean;
+  modelUrl: string;
+  warnings: string[];
+};
+
 export type FileEntry = {
   name: string;
   path: string;

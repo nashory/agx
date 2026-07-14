@@ -100,6 +100,7 @@ type SettingsViewProps = {
   agents: Agent[];
   onDefaultAgentChange: (agentName: string) => Promise<void>;
   onVoiceSTTChange: (voiceStt: VoiceSTTConfig) => Promise<void>;
+  onVoiceSTTSetup: () => Promise<void>;
   onRefreshRuntime: () => Promise<void>;
   onStartRuntime: RuntimeAction;
   onInstallRuntimeService: RuntimeAction;
@@ -119,6 +120,7 @@ export function SettingsView({
   agents,
   onDefaultAgentChange,
   onVoiceSTTChange,
+  onVoiceSTTSetup,
   onRefreshRuntime,
   onStartRuntime,
   onInstallRuntimeService,
@@ -159,6 +161,15 @@ export function SettingsView({
     setSavingVoiceSTT(true);
     try {
       await onVoiceSTTChange(localVoiceSTT);
+    } finally {
+      setSavingVoiceSTT(false);
+    }
+  }
+
+  async function setupVoiceSTT() {
+    setSavingVoiceSTT(true);
+    try {
+      await onVoiceSTTSetup();
     } finally {
       setSavingVoiceSTT(false);
     }
@@ -313,7 +324,7 @@ export function SettingsView({
           <h2>Voice Transcription</h2>
           <div className="setting-row">
             <div>
-              <SettingHeading label="Mode" help="Local Whisper is optional. Auto uses it only when the local ffmpeg, Whisper binary, and model are configured." />
+              <SettingHeading label="Mode" help="Local Whisper is optional. Auto uses it when local ffmpeg, Whisper, and a model can be resolved automatically or from saved settings." />
               <span>{voiceSTTStatus(localVoiceSTT)}</span>
             </div>
             <select
@@ -355,13 +366,13 @@ export function SettingsView({
           <div className="setting-row">
             <div>
               <strong>Model path</strong>
-              <span>Local Whisper model file. Leave empty to keep STT unavailable.</span>
+              <span>Local Whisper model file. Setup stores the default model under the AGX config directory.</span>
             </div>
             <input
               type="text"
               value={localVoiceSTT.modelPath}
               disabled={busy || savingVoiceSTT}
-              placeholder="/path/to/ggml-base.bin"
+              placeholder="Auto"
               onChange={(event) => updateVoiceSTT('modelPath', event.target.value)}
             />
           </div>
@@ -396,10 +407,16 @@ export function SettingsView({
               <strong>Local only</strong>
               <span>Audio is stored locally and never sent to a cloud STT service by AGX.</span>
             </div>
-            <button className="text-button" disabled={busy || savingVoiceSTT} onClick={() => void saveVoiceSTT()}>
-              <Mic size={15} />
-              Save
-            </button>
+            <div className="runtime-control-buttons">
+              <button className="text-button" disabled={busy || savingVoiceSTT} onClick={() => void setupVoiceSTT()}>
+                <RefreshCw size={15} />
+                Setup
+              </button>
+              <button className="text-button" disabled={busy || savingVoiceSTT} onClick={() => void saveVoiceSTT()}>
+                <Mic size={15} />
+                Save
+              </button>
+            </div>
           </div>
         </section>
         <section className="settings-panel">
@@ -465,10 +482,10 @@ function voiceSTTMode(value: string): VoiceSTTConfig['mode'] {
 function voiceSTTStatus(config: VoiceSTTConfig): string {
   if (config.mode === 'disabled') return 'Voice messages are saved, but not transcribed.';
   const missing = [];
-  if (!config.ffmpegPath.trim()) missing.push('ffmpeg');
-  if (!config.whisperPath.trim()) missing.push('Whisper');
-  if (!config.modelPath.trim()) missing.push('model');
-  if (missing.length > 0) return `Local STT ${config.mode}; missing ${missing.join(', ')}.`;
+  if (!config.ffmpegPath.trim()) missing.push('ffmpeg via PATH');
+  if (!config.whisperPath.trim()) missing.push('Whisper via PATH');
+  if (!config.modelPath.trim()) missing.push('model via Setup');
+  if (missing.length > 0) return `Local STT ${config.mode}; will auto-resolve ${missing.join(', ')}.`;
   return `Local STT ${config.mode}; ready to transcribe voice messages.`;
 }
 

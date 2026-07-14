@@ -26,6 +26,7 @@ import (
 	"github.com/nashory/agx/internal/display"
 	agxruntime "github.com/nashory/agx/internal/runtime"
 	"github.com/nashory/agx/internal/session"
+	"github.com/nashory/agx/internal/voicestt"
 	"github.com/nashory/agx/internal/worktree"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -247,6 +248,13 @@ type VoiceSTTConfigInfo struct {
 	ModelPath   string `json:"modelPath"`
 	Language    string `json:"language"`
 	Timeout     string `json:"timeout"`
+}
+
+type VoiceSTTSetupResultInfo struct {
+	Config     VoiceSTTConfigInfo `json:"config"`
+	Downloaded bool               `json:"downloaded"`
+	ModelURL   string             `json:"modelUrl"`
+	Warnings   []string           `json:"warnings"`
 }
 
 const maxReadFileBytes = 1 << 20
@@ -888,6 +896,29 @@ func (a *App) UpdateVoiceSTT(mode, ffmpegPath, whisperPath, modelPath, language,
 	return RuntimeConfigInfo{
 		DefaultAgent: cfg.DefaultAgent,
 		VoiceSTT:     voiceSTTConfigInfoDTO(cfg.Discord.VoiceSTT),
+	}, nil
+}
+
+func (a *App) SetupVoiceSTT() (VoiceSTTSetupResultInfo, error) {
+	ctx, cancel := a.runtimeRequestContext(5 * time.Minute)
+	defer cancel()
+	result, err := voicestt.SetupLocalWhisper(ctx)
+	if err != nil {
+		return VoiceSTTSetupResultInfo{}, err
+	}
+	a.emitMetadataEvent("")
+	return VoiceSTTSetupResultInfo{
+		Config: VoiceSTTConfigInfo{
+			Mode:        result.Config.Mode,
+			FFmpegPath:  result.Config.FFmpegPath,
+			WhisperPath: result.Config.WhisperPath,
+			ModelPath:   result.Config.ModelPath,
+			Language:    result.Config.Language,
+			Timeout:     result.Config.Timeout,
+		},
+		Downloaded: result.Downloaded,
+		ModelURL:   result.ModelURL,
+		Warnings:   result.Warnings,
 	}, nil
 }
 

@@ -96,6 +96,7 @@ func executeRuntimeBackedCommand() {
 		newRuntimeClientDiscordCmd(client),
 		newLaunchCmd(),
 		newRuntimeClientAttachmentCmd(),
+		newVoiceSTTCmd(),
 		newRuntimeCmd(),
 		newDoctorCmd(),
 		newRuntimeClientTuiCmd(client),

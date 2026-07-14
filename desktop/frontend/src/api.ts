@@ -1,4 +1,4 @@
-import type { Agent, DirectoryEntry, DiscordStatusInfo, FileEntry, Project, ProjectCandidate, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskTranscriptMessage, VoiceSTTConfig, WorkspaceMode } from './types';
+import type { Agent, DirectoryEntry, DiscordStatusInfo, FileEntry, Project, ProjectCandidate, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskTranscriptMessage, VoiceSTTConfig, VoiceSTTSetupResult, WorkspaceMode } from './types';
 
 export type MonitorTask = Task & {
   projectName: string;
@@ -22,6 +22,7 @@ export type WailsApp = {
   RuntimeConfig(): Promise<RuntimeConfigInfo>;
   UpdateDefaultAgent(agentName: string): Promise<RuntimeConfigInfo>;
   UpdateVoiceSTT(mode: string, ffmpegPath: string, whisperPath: string, modelPath: string, language: string, timeout: string): Promise<RuntimeConfigInfo>;
+  SetupVoiceSTT(): Promise<VoiceSTTSetupResult>;
   RuntimeStart(): Promise<RuntimeStatusInfo>;
   RuntimeInstallService(): Promise<RuntimeStatusInfo>;
   RuntimeStop(): Promise<RuntimeStatusInfo>;
@@ -221,6 +222,9 @@ export const api: WailsApp = {
   async UpdateVoiceSTT(mode, ffmpegPath, whisperPath, modelPath, language, timeout) {
     const voiceStt: VoiceSTTConfig = { mode: mode === 'disabled' || mode === 'enabled' ? mode : 'auto', ffmpegPath, whisperPath, modelPath, language, timeout };
     return app()?.UpdateVoiceSTT(voiceStt.mode, voiceStt.ffmpegPath, voiceStt.whisperPath, voiceStt.modelPath, voiceStt.language, voiceStt.timeout) ?? { ...defaultRuntimeConfig(), voiceStt };
+  },
+  async SetupVoiceSTT() {
+    return app()?.SetupVoiceSTT() ?? { config: defaultRuntimeConfig().voiceStt, downloaded: false, modelUrl: '', warnings: ['Wails runtime is not connected'] };
   },
   async RuntimeStart() {
     const status = await app()?.RuntimeStart();

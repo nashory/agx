@@ -229,6 +229,31 @@ func TestUpdateVoiceSTTUsesRuntimeClient(t *testing.T) {
 	}
 }
 
+func TestSetupVoiceSTTUsesSharedLocalSetup(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+	t.Setenv("PATH", t.TempDir())
+	modelPath := filepath.Join(configDir, "models", "whisper", "ggml-base.bin")
+	if err := os.MkdirAll(filepath.Dir(modelPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(modelPath, []byte("model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := NewAppWithStore(nil)
+
+	result, err := app.SetupVoiceSTT()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.ModelPath != modelPath || result.Config.Mode != config.VoiceSTTAuto {
+		t.Fatalf("SetupVoiceSTT = %#v, want saved default model", result)
+	}
+	if result.Downloaded {
+		t.Fatal("SetupVoiceSTT downloaded unexpectedly")
+	}
+}
+
 func TestDiscordConnectTrimsInputsAndReturnsStatusOnError(t *testing.T) {
 	app := NewAppWithStore(nil)
 	var token, guildID, allowedUserID string

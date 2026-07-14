@@ -142,11 +142,19 @@ Desktop settings should expose this as a small "Voice transcription" section:
 - Whisper binary path.
 - Model path.
 - Language selector.
+- `Setup` button that prepares the default local Whisper model under the AGX
+  config directory and saves the resolved local configuration.
 - `Test STT` button that validates dependencies without sending a task prompt.
 - Status line: Ready, Disabled, Model missing, Whisper binary missing,
   `ffmpeg` missing, or Last test failed.
 
-CLI/doctor support should come later:
+CLI setup support uses the same local setup path:
+
+```text
+agx voice-stt setup
+```
+
+CLI/doctor validation support should come later:
 
 ```text
 agx doctor voice-stt
@@ -190,9 +198,9 @@ whisper-cli -m <model.bin> -f <tmp.wav> -otxt -of <tmp-output-prefix>
 AGX should not assume a fixed binary path. The backend should resolve command
 paths from config first, then from `PATH` only in `auto` or `enabled` mode.
 
-Do not bundle a Whisper model in the initial release. Model download/setup can
-be a guided opt-in later, but the first implementation should work with an
-existing local `whisper.cpp` installation.
+Do not bundle a Whisper model in releases. Model download/setup should be a
+guided opt-in flow shared by macOS and Windows; the runtime should also work
+with an existing local `whisper.cpp` installation.
 
 ## Prompt Construction
 
