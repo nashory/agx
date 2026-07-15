@@ -143,7 +143,8 @@ Desktop settings should expose this as a small "Voice transcription" section:
 - Model path.
 - Language selector.
 - `Setup` button that prepares the default local Whisper model under the AGX
-  config directory and saves the resolved local configuration.
+  config directory and saves the resolved local configuration. The default
+  model is `ggml-large-v3-turbo.bin`.
 - `Test STT` button that validates dependencies without sending a task prompt.
 - Status line: Ready, Disabled, Model missing, Whisper binary missing,
   `ffmpeg` missing, or Last test failed.

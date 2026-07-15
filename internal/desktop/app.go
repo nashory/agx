@@ -40,6 +40,14 @@ type App struct {
 	ctx        context.Context
 	directMode bool
 
+	// sharedRuntimeClient is created once and reused for the whole app lifetime so
+	// the desktop keeps a single HTTP transport (and its keep-alive connection
+	// pool) instead of allocating a fresh client per API call. Creating a client
+	// per call leaked a loopback socket on every request on the native Windows TCP
+	// transport, eventually exhausting WinSock buffers (WSAENOBUFS).
+	clientMu            sync.Mutex
+	sharedRuntimeClient runtimeClient
+
 	recovery session.RecoveryResult
 
 	registryMu sync.Mutex
@@ -312,8 +320,17 @@ var newRuntimeClient = func() runtimeClient {
 	return agxruntime.NewClient()
 }
 
+// runtimeClient returns the process-wide runtime client, creating it lazily on
+// first use. Reusing one client keeps a single transport and connection pool
+// alive across the many status/task polls the UI performs, which is what
+// prevents the loopback socket leak on Windows.
 func (a *App) runtimeClient() runtimeClient {
-	return newRuntimeClient()
+	a.clientMu.Lock()
+	defer a.clientMu.Unlock()
+	if a.sharedRuntimeClient == nil {
+		a.sharedRuntimeClient = newRuntimeClient()
+	}
+	return a.sharedRuntimeClient
 }
 
 // NewApp constructs the desktop app without opening the runtime database. The

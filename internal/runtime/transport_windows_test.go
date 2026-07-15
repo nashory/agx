@@ -4,10 +4,63 @@ package runtime
 
 import (
 	"context"
+	"io"
+	"net"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestNewClientHTTPConfiguresIdlePoolWindows(t *testing.T) {
+	_, client := newClientHTTP(Paths{ConfigDir: t.TempDir()})
+	wt, ok := client.Transport.(*windowsClientTransport)
+	if !ok {
+		t.Fatalf("client transport = %T, want *windowsClientTransport", client.Transport)
+	}
+	if wt.base.IdleConnTimeout != clientIdleConnTimeout {
+		t.Fatalf("IdleConnTimeout = %v, want %v", wt.base.IdleConnTimeout, clientIdleConnTimeout)
+	}
+	if wt.base.MaxIdleConns != clientMaxIdleConns {
+		t.Fatalf("MaxIdleConns = %d, want %d", wt.base.MaxIdleConns, clientMaxIdleConns)
+	}
+	if wt.base.MaxIdleConnsPerHost != clientMaxIdleConnsPerHost {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want %d", wt.base.MaxIdleConnsPerHost, clientMaxIdleConnsPerHost)
+	}
+}
+
+// TestWindowsTransportReusesConnection proves the client keeps one keep-alive
+// loopback connection across many requests instead of leaking a socket per call,
+// the exact behavior whose absence exhausted WinSock buffers (WSAENOBUFS).
+func TestWindowsTransportReusesConnection(t *testing.T) {
+	configDir := t.TempDir()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp: %v", err)
+	}
+	var accepts int32
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})}
+	go func() { _ = srv.Serve(countingListener{Listener: ln, accepts: &accepts}) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	if err := writeEndpoint(Paths{ConfigDir: configDir}, runtimeEndpoint{Address: ln.Addr().String(), Token: "test-token"}); err != nil {
+		t.Fatalf("writeEndpoint: %v", err)
+	}
+	_, client := newClientHTTP(Paths{ConfigDir: configDir})
+	for i := 0; i < 5; i++ {
+		resp, err := client.Get("http://agx-runtime/ping")
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+	if got := atomic.LoadInt32(&accepts); got != 1 {
+		t.Fatalf("accepted %d connections, want 1 (keep-alive reuse)", got)
+	}
+}
 
 func TestValidBearerToken(t *testing.T) {
 	cases := []struct {

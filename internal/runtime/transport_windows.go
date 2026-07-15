@@ -99,7 +99,14 @@ func (s *Service) wrapTransportAuth(h http.Handler) http.Handler {
 // restarted runtime's new address and token.
 func newClientHTTP(paths Paths) (string, *http.Client) {
 	return "http://agx-runtime", &http.Client{
-		Transport: &windowsClientTransport{paths: paths, base: &http.Transport{}},
+		Transport: &windowsClientTransport{
+			paths: paths,
+			base: &http.Transport{
+				MaxIdleConns:        clientMaxIdleConns,
+				MaxIdleConnsPerHost: clientMaxIdleConnsPerHost,
+				IdleConnTimeout:     clientIdleConnTimeout,
+			},
+		},
 	}
 }
 
