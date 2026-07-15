@@ -83,9 +83,11 @@ func (t localWhisperTranscriber) Transcribe(ctx context.Context, inputPath strin
 		return voiceTranscript{}, fmt.Errorf("ffmpeg conversion failed: %w", err)
 	}
 	args := []string{"-m", voiceCfg.ModelPath, "-f", wavPath, "-otxt", "-of", outPrefix}
-	if language := strings.TrimSpace(voiceCfg.Language); language != "" && language != "auto" {
-		args = append(args, "-l", language)
+	language := strings.TrimSpace(voiceCfg.Language)
+	if language == "" {
+		language = "auto"
 	}
+	args = append(args, "-l", language)
 	if err := runner.Run(runCtx, voiceCfg.WhisperPath, args...); err != nil {
 		return voiceTranscript{}, fmt.Errorf("whisper command failed: %w", err)
 	}
@@ -94,9 +96,13 @@ func (t localWhisperTranscriber) Transcribe(ctx context.Context, inputPath strin
 		return voiceTranscript{}, fmt.Errorf("read whisper transcript: %w", err)
 	}
 	return voiceTranscript{
-		Text:     strings.TrimSpace(string(text)),
+		Text:     normalizeVoiceTranscriptText(string(text)),
 		Engine:   "whisper.cpp",
 		Model:    filepath.Base(voiceCfg.ModelPath),
-		Language: voiceCfg.Language,
+		Language: language,
 	}, nil
+}
+
+func normalizeVoiceTranscriptText(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
