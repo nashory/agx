@@ -6,10 +6,24 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 )
+
+// shortUnixSocketPath returns a unix socket path short enough to bind on macOS,
+// where the sun_path limit is 104 bytes and t.TempDir() under $TMPDIR already
+// exceeds it. /tmp is short and writable on every POSIX platform this test runs.
+func shortUnixSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "agx")
+	if err != nil {
+		t.Fatalf("mkdir temp socket dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "s.sock")
+}
 
 func TestNewClientHTTPConfiguresIdlePoolPosix(t *testing.T) {
 	_, client := newClientHTTP(Paths{Socket: filepath.Join(t.TempDir(), "runtime.sock")})
@@ -31,7 +45,7 @@ func TestNewClientHTTPConfiguresIdlePoolPosix(t *testing.T) {
 // TestUnixTransportReusesConnection proves the client keeps one keep-alive
 // connection across many requests instead of leaking a socket per call.
 func TestUnixTransportReusesConnection(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "runtime.sock")
+	socket := shortUnixSocketPath(t)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		t.Fatalf("listen unix: %v", err)
