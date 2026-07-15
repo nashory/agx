@@ -35,7 +35,7 @@ func TestResolveLocalWhisperUsesConfiguredPaths(t *testing.T) {
 func TestResolveModelFindsDefaultConfigModel(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("AGX_CONFIG_DIR", configDir)
-	modelPath := filepath.Join(configDir, "models", "whisper", "ggml-base.bin")
+	modelPath := filepath.Join(configDir, "models", "whisper", "ggml-large-v3-turbo.bin")
 	if err := os.MkdirAll(filepath.Dir(modelPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestSetupLocalWhisperReusesDefaultModelAndSavesConfig(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("AGX_CONFIG_DIR", configDir)
 	t.Setenv("PATH", t.TempDir())
-	modelPath := filepath.Join(configDir, "models", "whisper", "ggml-base.bin")
+	modelPath := filepath.Join(configDir, "models", "whisper", "ggml-large-v3-turbo.bin")
 	if err := os.MkdirAll(filepath.Dir(modelPath), 0o755); err != nil {
 		t.Fatal(err)
 	}

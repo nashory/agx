@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	defaultModelName = "ggml-base.bin"
-	defaultModelURL  = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
-	maxModelBytes    = 512 << 20
+	defaultModelName = "ggml-large-v3-turbo.bin"
+	defaultModelURL  = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+	maxModelBytes    = 2 << 30
 )
 
 type LocalWhisperConfig struct {
@@ -180,8 +180,10 @@ func modelCandidates() []string {
 	modelDir := DefaultModelDir()
 	for _, name := range []string{
 		defaultModelName,
+		"ggml-base.bin",
 		"ggml-small.bin",
 		"ggml-tiny.bin",
+		"ggml-large-v3.bin",
 		"ggml-base.en.bin",
 		"ggml-small.en.bin",
 		"ggml-tiny.en.bin",
