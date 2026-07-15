@@ -12,9 +12,22 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
+)
+
+// Connection-pool tuning shared by every platform transport. A bounded idle
+// timeout guarantees that even a discarded client's keep-alive connections are
+// reaped instead of lingering forever (the runtime server sets no idle timeout
+// of its own for streaming endpoints), and a per-host idle pool large enough for
+// the desktop's concurrent status polls lets those requests reuse connections
+// rather than dialing a fresh socket each time.
+const (
+	clientIdleConnTimeout     = 90 * time.Second
+	clientMaxIdleConns        = 16
+	clientMaxIdleConnsPerHost = 16
 )
 
 // Client talks to the local runtime daemon over its platform transport (a Unix

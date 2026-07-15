@@ -115,7 +115,28 @@ const (
 	// forever, while still allowing enough time for the gateway handshake,
 	// owner claim, and command registration.
 	discordConnectTimeout = 2 * time.Minute
+
+	// serverReadHeaderTimeout bounds how long a client may take to send request
+	// headers, so a stalled or half-open connection cannot occupy a server slot
+	// indefinitely.
+	serverReadHeaderTimeout = 10 * time.Second
+	// serverIdleTimeout closes keep-alive connections that sit idle between
+	// requests, reaping any that a client abandoned without closing. It applies
+	// only while a connection is idle, so it never interrupts the long-lived SSE
+	// responses served by the event and log-stream endpoints. WriteTimeout is
+	// intentionally left unset for the same reason.
+	serverIdleTimeout = 90 * time.Second
 )
+
+// newAPIServer builds the runtime HTTP server with timeouts chosen to reap idle
+// keep-alive connections without cutting off streaming responses.
+func newAPIServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		IdleTimeout:       serverIdleTimeout,
+	}
+}
 
 // Start acquires the daemon lock, opens the runtime database, recovers persisted
 // task state, and serves the Unix-socket API until ctx is canceled or Shutdown
@@ -184,7 +205,7 @@ func (s *Service) Start(ctx context.Context) (err error) {
 	}
 	s.recovery = recovery
 	s.ln = ln
-	s.server = &http.Server{Handler: s.wrapTransportAuth(s.routes())}
+	s.server = newAPIServer(s.wrapTransportAuth(s.routes()))
 	s.bus.Publish("runtime.status", s.Status())
 	logRuntimeOperation("runtime_recovery",
 		"offline", recovery.Offline,

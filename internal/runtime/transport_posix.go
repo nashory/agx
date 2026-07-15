@@ -58,6 +58,9 @@ func newClientHTTP(paths Paths) (string, *http.Client) {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", paths.Socket)
 		},
+		MaxIdleConns:        clientMaxIdleConns,
+		MaxIdleConnsPerHost: clientMaxIdleConnsPerHost,
+		IdleConnTimeout:     clientIdleConnTimeout,
 	}
 	return "http://agx-runtime", &http.Client{Transport: transport}
 }
