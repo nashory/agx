@@ -7,7 +7,7 @@ Use this checklist before tagging a public AGX release.
 Run the release gate from a clean working tree:
 
 ```bash
-make release-verify
+task release-verify
 ```
 
 The gate runs:
@@ -23,13 +23,13 @@ After packaging final artifacts, run the same gate with artifact presence
 required:
 
 ```bash
-AGX_REQUIRE_RELEASE_ARTIFACTS=1 make release-verify
+AGX_REQUIRE_RELEASE_ARTIFACTS=1 task release-verify
 ```
 
 Then generate and verify checksums:
 
 ```bash
-make release-checksums
+task release-checksums
 shasum -a 256 -c dist/checksums.txt
 ```
 
@@ -38,10 +38,10 @@ shasum -a 256 -c dist/checksums.txt
 Build platform artifacts before publishing:
 
 ```bash
-VERSION=vX.Y.Z make package-macos
-VERSION=vX.Y.Z make package-linux
-AGX_REQUIRE_RELEASE_ARTIFACTS=1 make release-verify
-make release-checksums
+task package-macos VERSION=vX.Y.Z
+task package-linux VERSION=vX.Y.Z
+AGX_REQUIRE_RELEASE_ARTIFACTS=1 task release-verify
+task release-checksums
 ```
 
 macOS packaging requires macOS host tools such as `hdiutil`. Linux CLI/runtime
@@ -71,7 +71,7 @@ Public artifacts must not contain:
 - token, secret, or credential files
 - private runbooks or internal docs
 
-`make release-verify` scans `.tar.gz` and `.dmg` artifacts in `dist/` when they
+`task release-verify` scans `.tar.gz` and `.dmg` artifacts in `dist/` when they
 exist. Use `AGX_RELEASE_DIST_DIR=/path/to/dist` to scan a different directory.
 
 ## Supported Assets

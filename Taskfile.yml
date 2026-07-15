@@ -1,0 +1,281 @@
+version: '3'
+
+vars:
+  VERSION: dev
+  DESKTOP_TAGS: desktop,production
+  AGX_BIN: '{{if eq OS "windows"}}bin/agx.exe{{else}}bin/agx{{end}}'
+  DESKTOP_BIN: '{{if eq OS "windows"}}bin/agx-desktop.exe{{else}}bin/agx-desktop{{end}}'
+
+env:
+  GOPATH: '{{.TASKFILE_DIR}}/.gopath'
+
+tasks:
+  build:
+    desc: Build the AGX CLI
+    cmds:
+      - |
+        {{if eq OS "windows"}}
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Force -Path 'bin' | Out-Null; $commit = 'unknown'; try { $commit = (& git rev-parse --short HEAD 2>$null).Trim() } catch {}; $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); go build -ldflags \"-X main.version={{.VERSION}} -X main.commit=$commit -X main.date=$date\" -o '{{.AGX_BIN}}' ./cmd/agx"
+        {{else}}
+        mkdir -p bin
+        COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+        DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        go build -ldflags "-X main.version={{.VERSION}} -X main.commit=${COMMIT} -X main.date=${DATE}" -o "{{.AGX_BIN}}" ./cmd/agx
+        {{end}}
+
+  desktop:
+    desc: Build the AGX Desktop binary
+    cmds:
+      - task: frontend-install
+      - task: frontend-build
+      - |
+        {{if eq OS "windows"}}
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Force -Path 'bin' | Out-Null; go build -tags '{{.DESKTOP_TAGS}}' -o '{{.DESKTOP_BIN}}' ./desktop"
+        {{else}}
+        mkdir -p bin
+        go build -tags "{{.DESKTOP_TAGS}}" -o "{{.DESKTOP_BIN}}" ./desktop
+        {{end}}
+
+  app:
+    desc: Build the CLI and Desktop app
+    cmds:
+      - task: build
+      - task: desktop
+
+  frontend-install:
+    desc: Install frontend dependencies
+    cmds:
+      - npm --prefix desktop/frontend ci
+
+  frontend-build:
+    desc: Build frontend assets
+    cmds:
+      - npm --prefix desktop/frontend run build
+
+  frontend-check-dist:
+    desc: Verify generated frontend assets exist
+    cmds:
+      - task: frontend-install
+      - task: frontend-build
+      - |
+        {{if eq OS "windows"}}
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; if (-not (Test-Path 'desktop/frontend/dist/index.html')) { throw 'missing desktop/frontend/dist/index.html' }; if (-not (Get-ChildItem 'desktop/frontend/dist/assets' -Filter 'index-*.js' | Select-Object -First 1)) { throw 'missing frontend index asset' }"
+        {{else}}
+        test -f desktop/frontend/dist/index.html
+        test -n "$(find desktop/frontend/dist/assets -name 'index-*.js' -print -quit)"
+        {{end}}
+
+  package-macos:
+    desc: Build macOS release artifacts
+    platforms: [darwin]
+    cmds:
+      - VERSION={{.VERSION}} GOOS=darwin GOARCH=arm64 ./scripts/package-macos.sh
+
+  package-linux:
+    desc: Build Linux release artifacts
+    platforms: [linux, darwin]
+    cmds:
+      - VERSION={{.VERSION}} GOOS=linux ./scripts/package-linux.sh
+
+  package-windows:
+    desc: Build Windows release artifacts
+    cmds:
+      - |
+        {{if eq OS "windows"}}
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:VERSION='{{.VERSION}}'; & './scripts/package-windows.ps1'"
+        {{else}}
+        pwsh -NoProfile -ExecutionPolicy Bypass -Command "$env:VERSION='{{.VERSION}}'; & './scripts/package-windows.ps1'"
+        {{end}}
+
+  release-checksums:
+    desc: Generate release checksums
+    platforms: [darwin, linux]
+    cmds:
+      - ./scripts/release-checksums.sh
+
+  release-scan:
+    desc: Scan release artifacts for unsafe content
+    platforms: [darwin, linux]
+    cmds:
+      - ./scripts/scan-release-artifacts.sh
+
+  release-verify:
+    desc: Run release verification checks
+    platforms: [darwin, linux]
+    cmds:
+      - ./scripts/release-verify.sh
+
+  docker-image:
+    desc: Build the Ubuntu Docker image
+    cmds:
+      - |
+        {{if eq OS "windows"}}
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; $commit = 'unknown'; try { $commit = (& git rev-parse --short HEAD 2>$null).Trim() } catch {}; $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); docker build -f docker/Dockerfile -t agx:ubuntu --build-arg VERSION={{.VERSION}} --build-arg COMMIT=$commit --build-arg DATE=$date ."
+        {{else}}
+        COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+        DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        docker build -f docker/Dockerfile -t agx:ubuntu --build-arg VERSION={{.VERSION}} --build-arg COMMIT="${COMMIT}" --build-arg DATE="${DATE}" .
+        {{end}}
+
+  install:
+    desc: Install the AGX CLI with go install
+    cmds:
+      - go install ./cmd/agx
+
+  clean:
+    desc: Remove build output
+    cmds:
+      - |
+        {{if eq OS "windows"}}
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path 'bin') { Remove-Item -Recurse -Force 'bin' }"
+        {{else}}
+        rm -rf bin/
+        {{end}}
+
+  distclean:
+    desc: Remove build output, local Go cache, and frontend dependencies
+    deps:
+      - clean
+    cmds:
+      - |
+        {{if eq OS "windows"}}
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path '.gopath') { Remove-Item -Recurse -Force '.gopath' }; if (Test-Path 'desktop/frontend/node_modules') { Remove-Item -Recurse -Force 'desktop/frontend/node_modules' }"
+        {{else}}
+        rm -rf .gopath/
+        rm -rf desktop/frontend/node_modules/
+        {{end}}
+
+  run:
+    desc: Run the AGX CLI
+    cmds:
+      - go run ./cmd/agx
+
+  test:
+    desc: Build frontend assets and run Go tests
+    deps:
+      - frontend-build
+    cmds:
+      - go test ./...
+
+  fmt:
+    desc: Format Go code
+    cmds:
+      - go fmt ./...
+
+  smoke:
+    desc: Run CLI smoke checks
+    deps:
+      - build
+    cmds:
+      - '{{.AGX_BIN}} --help'
+      - '{{.AGX_BIN}} --version'
+      - '{{.AGX_BIN}} runtime --help'
+      - '{{.AGX_BIN}} doctor'
+
+  smoke-desktop:
+    desc: Run Desktop smoke checks
+    deps:
+      - desktop
+    cmds:
+      - |
+        {{if eq OS "windows"}}
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; if (-not (Test-Path '{{.DESKTOP_BIN}}')) { throw 'missing {{.DESKTOP_BIN}}' }; if (-not (Test-Path 'desktop/frontend/dist/index.html')) { throw 'missing desktop/frontend/dist/index.html' }; if (-not (Get-ChildItem 'desktop/frontend/dist/assets' -Filter 'index-*.js' | Select-Object -First 1)) { throw 'missing frontend index asset' }"
+        {{else}}
+        test -x "{{.DESKTOP_BIN}}"
+        test -f desktop/frontend/dist/index.html
+        test -n "$(find desktop/frontend/dist/assets -name 'index-*.js' -print -quit)"
+        {{end}}
+
+  runtime-start:
+    desc: Build and start the runtime
+    deps:
+      - build
+    cmds:
+      - '{{.AGX_BIN}} runtime start'
+
+  runtime-stop:
+    desc: Build and stop the runtime
+    deps:
+      - build
+    cmds:
+      - '{{.AGX_BIN}} runtime stop'
+
+  runtime-status:
+    desc: Build and show runtime status
+    deps:
+      - build
+    cmds:
+      - '{{.AGX_BIN}} runtime status'
+
+  runtime-bg:
+    desc: Start the runtime in the background
+    deps:
+      - build
+    platforms: [darwin, linux]
+    cmds:
+      - mkdir -p bin/logs
+      - ./bin/agx runtime stop >/dev/null 2>&1 || true
+      - |
+        for i in $(seq 1 50); do
+          ./bin/agx runtime status >/dev/null 2>&1 || break
+          sleep 0.1
+        done
+      - |
+        nohup ./bin/agx runtime start >bin/logs/runtime.log 2>bin/logs/runtime.err.log &
+        # Poll the runtime status until it answers twice in a row (~10s budget).
+        # Two notes on Task's shell (mvdan/sh), which differ from the old Makefile
+        # /bin/sh: (1) $! returns a job handle like "g1", not an OS pid, so we do
+        # not track the start pid or use `kill -0`; (2) errexit is on, so a bare
+        # `test ... && exit 0` aborts the whole script when the test is false. The
+        # readiness check therefore uses an explicit `if` guard.
+        ready=0
+        for i in $(seq 1 100); do
+          if ./bin/agx runtime status >/dev/null 2>&1; then
+            ready=$((ready + 1))
+            if [ "$ready" -ge 2 ]; then
+              exit 0
+            fi
+          else
+            ready=0
+          fi
+          sleep 0.1
+        done
+        echo "runtime did not start; see bin/logs/runtime.err.log" >&2
+        test ! -s bin/logs/runtime.err.log || tail -40 bin/logs/runtime.err.log >&2
+        exit 1
+
+  desktop-run:
+    desc: Build and run Desktop
+    deps:
+      - desktop
+    cmds:
+      - '{{.DESKTOP_BIN}}'
+
+  dev:
+    desc: Build everything, start the runtime in the background, and run Desktop
+    platforms: [darwin, linux]
+    cmds:
+      - task: app
+      - task: runtime-bg
+      - ./bin/agx-desktop
+
+  service-install:
+    desc: Build and install the runtime service
+    deps:
+      - build
+    cmds:
+      - '{{.AGX_BIN}} runtime install-service'
+
+  service-uninstall:
+    desc: Build and uninstall the runtime service
+    deps:
+      - build
+    cmds:
+      - '{{.AGX_BIN}} runtime uninstall-service'
+
+  doctor:
+    desc: Build and run doctor
+    deps:
+      - build
+    cmds:
+      - '{{.AGX_BIN}} doctor'

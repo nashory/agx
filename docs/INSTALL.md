@@ -259,15 +259,15 @@ See [DISCORD.md](DISCORD.md) for Discord setup details and command reference.
 ## Build From Source
 
 Source builds are for contributors and release maintainers. They require Go,
-Node.js, npm, and the desktop frontend toolchain.
+Node.js, npm, `task`, and the desktop frontend toolchain.
 
 From a clean checkout:
 
 ```bash
-make frontend-install
-make test
-make build
-make desktop
+task frontend-install
+task test
+task build
+task desktop
 ```
 
 Run the local binaries:

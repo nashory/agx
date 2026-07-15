@@ -5,13 +5,14 @@ This guide explains how to build, run, and test AGX from source.
 ## Requirements
 
 AGX publishes prebuilt release assets for macOS arm64, but source development is
-mostly a normal Unix-style Go and React workflow.
+mostly a normal Go and React workflow.
 
 Required tools:
 
 - Go 1.26+
 - Node.js 18+
 - npm
+- `task`
 - `tmux`
 - `git`
 
@@ -28,7 +29,7 @@ Optional tools for end-to-end testing:
 Install host tools on macOS:
 
 ```bash
-brew install tmux git
+brew install go-task/tap/go-task tmux git
 ```
 
 Then install and authenticate at least one agent CLI outside AGX if you want to
@@ -44,10 +45,10 @@ cd agx
 Install frontend dependencies:
 
 ```bash
-make frontend-install
+task frontend-install
 ```
 
-The Makefile sets `GOPATH` to `./.gopath` by default. This keeps local builds
+The Taskfile sets `GOPATH` to `./.gopath` by default. This keeps local builds
 self-contained and avoids relying on a writable home-directory Go module cache.
 
 ## Build
@@ -55,34 +56,34 @@ self-contained and avoids relying on a writable home-directory Go module cache.
 Build the CLI:
 
 ```bash
-make build
+task build
 ./bin/agx --version
 ```
 
 Build the Desktop app:
 
 ```bash
-make desktop
+task desktop
 ./bin/agx-desktop
 ```
 
 Build both:
 
 ```bash
-make app
+task app
 ```
 
 Build with release metadata:
 
 ```bash
-VERSION=v0.1.0-dev make build
+task build VERSION=v0.1.0-dev
 ./bin/agx --version
 ```
 
 Build macOS release artifacts:
 
 ```bash
-VERSION=v0.1.0-rc.1 make package-macos
+task package-macos VERSION=v0.1.0-rc.1
 ```
 
 This target uses macOS packaging tools such as `hdiutil`.
@@ -97,7 +98,7 @@ dist/agx-darwin-arm64.tar.gz
 Build Linux CLI/runtime release artifacts:
 
 ```bash
-VERSION=v0.1.0-rc.1 make package-linux
+task package-linux VERSION=v0.1.0-rc.1
 ```
 
 Expected output:
@@ -111,14 +112,14 @@ Final release checksums should be generated after all platform artifacts are
 present:
 
 ```bash
-make release-checksums
+task release-checksums
 shasum -a 256 -c dist/checksums.txt
 ```
 
 Run the lightweight artifact scan before publishing release assets:
 
 ```bash
-make release-scan
+task release-scan
 ```
 
 The scan fails if package contents include local AGX state, config files,
@@ -130,7 +131,7 @@ packager. They may clean their own build staging directories only.
 Build the Ubuntu Docker image:
 
 ```bash
-make docker-image
+task docker-image
 ```
 
 Docker builds should use an allowlist copy pattern and `.dockerignore` should
@@ -146,47 +147,47 @@ POSIX-style development environments.
 Start the runtime in the foreground:
 
 ```bash
-make runtime-start
+task runtime-start
 ```
 
 Start the runtime in the background:
 
 ```bash
-make runtime-bg
+task runtime-bg
 ```
 
 Check or stop it:
 
 ```bash
-make runtime-status
-make runtime-stop
+task runtime-status
+task runtime-stop
 ```
 
 Run Desktop against the local runtime:
 
 ```bash
-make desktop-run
+task desktop-run
 ```
 
 For the legacy POSIX end-to-end development loop, build everything, start the
 runtime, and open Desktop:
 
 ```bash
-make dev
+task dev
 ```
 
 You can also install the runtime as a user service. This uses launchd on macOS
 and `systemd --user` on native Linux:
 
 ```bash
-make service-install
+task service-install
 ./bin/agx runtime status
 ```
 
 Remove the service when done:
 
 ```bash
-make service-uninstall
+task service-uninstall
 ```
 
 ## Test
@@ -194,10 +195,10 @@ make service-uninstall
 Run the default test suite:
 
 ```bash
-make test
+task test
 ```
 
-`make test` builds the frontend first because Desktop packages embed generated
+`task test` builds the frontend first because Desktop packages embed generated
 frontend assets.
 
 Run Go tests directly after frontend assets have been built:
@@ -209,26 +210,26 @@ go test ./...
 Run formatting:
 
 ```bash
-make fmt
+task fmt
 ```
 
 Run smoke checks:
 
 ```bash
-make smoke
-make smoke-desktop
+task smoke
+task smoke-desktop
 ```
 
 Run the release verification gate:
 
 ```bash
-make release-verify
+task release-verify
 ```
 
 After packaging release assets, require artifact scanning:
 
 ```bash
-AGX_REQUIRE_RELEASE_ARTIFACTS=1 make release-verify
+AGX_REQUIRE_RELEASE_ARTIFACTS=1 task release-verify
 ```
 
 Package-level ownership of release checks:
@@ -243,7 +244,7 @@ Package-level ownership of release checks:
 Run the doctor:
 
 ```bash
-make doctor
+task doctor
 ```
 
 Frontend-only build:
@@ -255,13 +256,13 @@ npm --prefix desktop/frontend run build
 Clean local build output:
 
 ```bash
-make clean
+task clean
 ```
 
 Remove build output, frontend dependencies, and local Go cache:
 
 ```bash
-make distclean
+task distclean
 ```
 
 ## Manual Task Test
@@ -329,22 +330,22 @@ task transcripts containing sensitive content.
 Before opening a PR, run the smallest set that covers your change:
 
 ```bash
-make fmt
-make test
-make smoke
+task fmt
+task test
+task smoke
 ```
 
 If Desktop or frontend code changed:
 
 ```bash
-make smoke-desktop
+task smoke-desktop
 ```
 
 If release packaging changed:
 
 ```bash
-VERSION=v0.1.0-dev make package-macos
-make release-checksums
+task package-macos VERSION=v0.1.0-dev
+task release-checksums
 shasum -a 256 -c dist/checksums.txt
 ```
 
