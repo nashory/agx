@@ -71,11 +71,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - run: go install github.com/go-task/task/v3/cmd/task@v3.52.0
       - run: sudo apt-get update && sudo apt-get install -y tmux pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
       - run: go build -o bin/agx ./cmd/agx
-      - run: VERSION=ci make package-linux
-      - run: make release-scan
-      - run: make release-checksums
+      - run: task package-linux VERSION=ci
+      - run: task release-scan
+      - run: task release-checksums
       - run: shasum -a 256 -c dist/checksums.txt
       - run: |
           mkdir -p /tmp/agx-linux-smoke
@@ -133,9 +134,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/frontend/package-lock.json
+      - run: go install github.com/go-task/task/v3/cmd/task@v3.52.0
       - run: sudo apt-get update && sudo apt-get install -y tmux pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
       - run: npm --prefix desktop/frontend ci
-      - run: make release-verify
+      - run: task release-verify
 
   docker:
     name: Docker

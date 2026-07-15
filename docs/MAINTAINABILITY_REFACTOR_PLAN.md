@@ -253,7 +253,7 @@ Every commit in this refactor sequence should run:
 npm --prefix desktop/frontend test
 npm --prefix desktop/frontend run build
 go test ./...
-make release-verify
+task release-verify
 ```
 
 Local Go execution may be blocked by endpoint policy on some machines. In that

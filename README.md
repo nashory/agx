@@ -515,16 +515,16 @@ use worktree mode when multiple agents are editing in parallel.
 
 ## Build From Source
 
-Source builds require Go 1.26+, Node.js 18+, npm, `tmux`, and `git`.
+Source builds require Go 1.26+, Node.js 18+, npm, `task`, `tmux`, and `git`.
 
 ```bash
 git clone https://github.com/nashory/agx.git
 cd agx
 
-make frontend-install
-make test
-make build
-make desktop
+task frontend-install
+task test
+task build
+task desktop
 ```
 
 Run the local binaries:
@@ -538,16 +538,16 @@ Run the local binaries:
 Run the full development loop:
 
 ```bash
-make dev
+task dev
 ```
 
 Build release artifacts:
 
 ```bash
-VERSION=v0.1.0-dev make package-macos
-VERSION=v0.1.0-dev make package-linux
-AGX_REQUIRE_RELEASE_ARTIFACTS=1 make release-verify
-make release-checksums
+task package-macos VERSION=v0.1.0-dev
+task package-linux VERSION=v0.1.0-dev
+AGX_REQUIRE_RELEASE_ARTIFACTS=1 task release-verify
+task release-checksums
 ```
 
 CI runs Go tests on macOS and Linux, builds and smoke-tests the frontend,

@@ -48,7 +48,7 @@ ignored by git and should not be relied on for public release instructions.
 The macOS packaging flow is implemented with:
 
 - `scripts/package-macos.sh`
-- `make package-macos`
+- `task package-macos`
 
 The package command builds:
 
@@ -81,7 +81,7 @@ Related code/test changes:
 - `internal/desktop/app.go`
 - `internal/desktop/app_test.go`
 
-Verification completed for `VERSION=v0.1.0-rc.1 make package-macos`:
+Verification completed for `task package-macos VERSION=v0.1.0-rc.1`:
 
 - CLI version showed `agx version v0.1.0-rc.1`.
 - CLI and Desktop binaries were arm64 Mach-O executables.
@@ -257,9 +257,9 @@ For the next RC:
 ```bash
 git fetch origin main
 git rebase origin/main
-make test
-VERSION=v0.1.0-rc.2 make package-macos
-make release-checksums
+task test
+task package-macos VERSION=v0.1.0-rc.2
+task release-checksums
 shasum -a 256 -c dist/checksums.txt
 gh release create v0.1.0-rc.2 \
   dist/AGX-darwin-arm64.dmg \

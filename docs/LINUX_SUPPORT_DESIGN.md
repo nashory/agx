@@ -389,23 +389,23 @@ docker/Dockerfile
 docker/Makefile
 ```
 
-Make targets:
+Task targets:
 
 ```text
-make package-linux
-make package-macos
-make release-checksums
-make docker-image
+task package-linux
+task package-macos
+task release-checksums
+task docker-image
 ```
 
 Implementation status:
 
 - `scripts/package-linux.sh` builds `agx-linux-amd64.tar.gz` and
   `agx-linux-arm64.tar.gz`.
-- `make package-linux` runs the Linux tarball packaging flow.
-- `make release-checksums` writes a checksum file for the complete release
+- `task package-linux` runs the Linux tarball packaging flow.
+- `task release-checksums` writes a checksum file for the complete release
   artifact set.
-- `make docker-image` delegates to `docker/Makefile`.
+- `task docker-image` builds the Docker image from `docker/Dockerfile`.
 - `.github/workflows/ci.yml` validates Linux Go tests, Linux packaging,
   frontend build, and Docker image build.
 
@@ -973,7 +973,7 @@ OS-specific names should be verified or moved into per-agent config defaults.
 ### Phase 2: Native Linux Packaging
 
 - Add `scripts/package-linux.sh`.
-- Add `make package-linux`.
+- Add `task package-linux`.
 - Produce `agx-linux-amd64.tar.gz` and `agx-linux-arm64.tar.gz`.
 - Add Linux install documentation.
 - Add a Linux release smoke test.

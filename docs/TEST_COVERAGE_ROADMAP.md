@@ -55,7 +55,7 @@ Use these test categories consistently so each layer owns the right assertions:
 | Handler contract | `internal/runtime` | HTTP status, typed error payloads, persisted side effects. | Real Discord network calls. |
 | Bridge unit | `internal/desktop`, CLI | Translation between UI/CLI calls and runtime client contracts. | Retesting runtime handler internals. |
 | Fake integration | Discord/session/worktree | Multi-step orchestration with fake clients/filesystems/processes. | Flaky sleeps and real external services. |
-| Release smoke | `make release-verify` | The built artifact and critical command paths still work together. | Detailed branch coverage. |
+| Release smoke | `task release-verify` | The built artifact and critical command paths still work together. | Detailed branch coverage. |
 
 When a bug crosses layers, add the narrowest tests at each boundary instead of
 one broad brittle test. For example, a Discord task sync failure should have:
@@ -183,7 +183,7 @@ Acceptance criteria:
 
 - `npm --prefix desktop/frontend test` runs DOM/component tests.
 - `npm --prefix desktop/frontend run build` remains unchanged.
-- CI and `make release-verify` still run frontend tests.
+- CI and `task release-verify` still run frontend tests.
 - Frontend tests can mock successful and failed API calls without a runtime.
 - The source-string smoke checks either remain as a separate script or are
   explicitly called from the new test command.
@@ -454,7 +454,7 @@ Work items:
 
 - Add per-package coverage reporting to CI logs.
 - Add a soft warning threshold first, then a hard threshold for key packages.
-- Keep `make release-verify` as the full local release gate.
+- Keep `task release-verify` as the full local release gate.
 - Add a short testing ownership section to `docs/DEVELOPMENT.md`.
 - Document how to run frontend unit tests, smoke tests, and release tests.
 
@@ -561,7 +561,7 @@ A phase is done only when all of these are true:
 
 - New tests fail against the previously broken or unprotected behavior.
 - New tests pass locally and in GitHub Actions.
-- `make release-verify` passes.
+- `task release-verify` passes.
 - Any new fake, helper, or dependency seam is documented in the relevant test
   file or package.
 - No test requires private credentials, local runtime state, or a specific user
@@ -600,7 +600,7 @@ Each commit should run:
 npm --prefix desktop/frontend test
 npm --prefix desktop/frontend run build
 go test ./...
-make release-verify
+task release-verify
 ```
 
 After CI coverage reporting lands, also verify the GitHub Actions result for

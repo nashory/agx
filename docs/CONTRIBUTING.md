@@ -35,6 +35,7 @@ Development from source requires:
 - Go 1.26+
 - Node.js 18+
 - npm
+- `task`
 - `tmux`
 - `git`
 - At least one supported agent CLI if you want to run end-to-end tasks:
@@ -43,7 +44,7 @@ Development from source requires:
 Install host tools with Homebrew:
 
 ```bash
-brew install tmux git
+brew install go-task/tap/go-task tmux git
 ```
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the full build, run, and test command
@@ -61,10 +62,10 @@ cd agx
 Install frontend dependencies and build everything:
 
 ```bash
-make frontend-install
-make test
-make build
-make desktop
+task frontend-install
+task test
+task build
+task desktop
 ```
 
 For more detailed setup, runtime, Desktop, Discord, and packaging workflows, see
@@ -83,10 +84,10 @@ For local end-to-end development, this builds the CLI and Desktop app, starts
 the runtime in the background, and opens Desktop:
 
 ```bash
-make dev
+task dev
 ```
 
-The Makefile sets `GOPATH` to `./.gopath` by default. That keeps development
+The Taskfile sets `GOPATH` to `./.gopath` by default. That keeps development
 self-contained on machines where the normal home-directory Go module cache is
 not writable.
 
@@ -118,22 +119,22 @@ runtime, so changes to runtime APIs often need updates in both places.
 Use these before opening a PR:
 
 ```bash
-make fmt
-make test
-make build
-make frontend-install
-make desktop
-make smoke
-make smoke-desktop
+task fmt
+task test
+task build
+task frontend-install
+task desktop
+task smoke
+task smoke-desktop
 ```
 
 Useful runtime commands while developing:
 
 ```bash
-make runtime-bg
-make runtime-status
-make runtime-stop
-make doctor
+task runtime-bg
+task runtime-status
+task runtime-stop
+task doctor
 ```
 
 For frontend-only checks:
@@ -148,7 +149,7 @@ For Go tests only:
 go test ./...
 ```
 
-`make test` builds the frontend first because desktop packages embed generated
+`task test` builds the frontend first because desktop packages embed generated
 frontend assets. For the complete developer command reference, see
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
@@ -204,7 +205,7 @@ Desktop visibility for Discord-attached tasks.
   `desktop/frontend/dist/`; they are built locally and ignored.
 - Do not commit local runtime data, task worktrees, bot tokens, or `.agx/`
   project state.
-- Run `make fmt` for Go formatting.
+- Run `task fmt` for Go formatting.
 - Keep user-facing docs and command examples in sync with actual CLI behavior.
 
 ## Pull Request Checklist
@@ -212,7 +213,7 @@ Desktop visibility for Discord-attached tasks.
 Before opening a PR:
 
 - The change is small enough to review.
-- `make fmt` has been run.
+- `task fmt` has been run.
 - Relevant tests pass.
 - Desktop builds if frontend or desktop backend code changed.
 - Documentation is updated for user-facing behavior.
@@ -230,8 +231,8 @@ Useful PR description shape:
 
 ## Test Plan
 
-- [ ] make test
-- [ ] make desktop
+- [ ] task test
+- [ ] task desktop
 - [ ] Manual: ...
 ```
 
