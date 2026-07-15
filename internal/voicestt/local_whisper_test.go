@@ -79,6 +79,66 @@ func TestSetupLocalWhisperReusesDefaultModelAndSavesConfig(t *testing.T) {
 	}
 }
 
+func TestSetupLocalWhisperMigratesGeneratedLegacyDefaultModel(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+	t.Setenv("PATH", t.TempDir())
+	modelDir := filepath.Join(configDir, "models", "whisper")
+	legacyPath := filepath.Join(modelDir, "ggml-base.bin")
+	defaultPath := filepath.Join(modelDir, "ggml-large-v3-turbo.bin")
+	if err := os.MkdirAll(modelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("legacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(defaultPath, []byte("default"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveVoiceSTT(config.VoiceSTTConfig{
+		Mode:      config.VoiceSTTAuto,
+		ModelPath: legacyPath,
+		Language:  "auto",
+		Timeout:   "60s",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := SetupLocalWhisper(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Downloaded {
+		t.Fatal("SetupLocalWhisper downloaded unexpectedly")
+	}
+	if result.Config.ModelPath != defaultPath {
+		t.Fatalf("model path = %q, want current default %q", result.Config.ModelPath, defaultPath)
+	}
+}
+
+func TestSetupLocalWhisperKeepsExternalConfiguredModel(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+	t.Setenv("PATH", t.TempDir())
+	externalModel := writeFile(t, "ggml-base.bin")
+	if err := config.SaveVoiceSTT(config.VoiceSTTConfig{
+		Mode:      config.VoiceSTTAuto,
+		ModelPath: externalModel,
+		Language:  "auto",
+		Timeout:   "60s",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := SetupLocalWhisper(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Config.ModelPath != externalModel {
+		t.Fatalf("model path = %q, want external model %q", result.Config.ModelPath, externalModel)
+	}
+}
+
 func writeFile(t *testing.T, name string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)

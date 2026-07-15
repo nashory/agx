@@ -115,12 +115,15 @@ func SetupLocalWhisper(ctx context.Context) (SetupResult, error) {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("whisper-cli was not found on PATH: %v", err))
 	}
 	modelPath, err := ResolveModel(next.ModelPath)
-	if err != nil {
-		modelPath = filepath.Join(DefaultModelDir(), defaultModelName)
-		if err := downloadFile(ctx, defaultModelURL, modelPath); err != nil {
-			return SetupResult{}, fmt.Errorf("download Whisper model: %w", err)
+	defaultModelPath := filepath.Join(DefaultModelDir(), defaultModelName)
+	if err != nil || shouldUseCurrentDefaultModel(next.ModelPath, modelPath) {
+		modelPath = defaultModelPath
+		if _, statErr := existingFile(modelPath); statErr != nil {
+			if err := downloadFile(ctx, defaultModelURL, modelPath); err != nil {
+				return SetupResult{}, fmt.Errorf("download Whisper model: %w", err)
+			}
+			result.Downloaded = true
 		}
-		result.Downloaded = true
 	}
 	next.ModelPath = modelPath
 	if err := config.SaveVoiceSTT(next); err != nil {
@@ -136,6 +139,24 @@ func SetupLocalWhisper(ctx context.Context) (SetupResult, error) {
 
 func DefaultModelDir() string {
 	return filepath.Join(config.ConfigDir(), "models", "whisper")
+}
+
+func shouldUseCurrentDefaultModel(configured, resolved string) bool {
+	if strings.TrimSpace(configured) == "" {
+		return false
+	}
+	resolved = filepath.Clean(resolved)
+	if filepath.Clean(filepath.Dir(resolved)) != filepath.Clean(DefaultModelDir()) {
+		return false
+	}
+	switch filepath.Base(resolved) {
+	case defaultModelName:
+		return false
+	case "ggml-base.bin", "ggml-small.bin", "ggml-tiny.bin":
+		return true
+	default:
+		return false
+	}
 }
 
 func ConfigDTO(cfg config.VoiceSTTConfig) LocalWhisperConfig {
