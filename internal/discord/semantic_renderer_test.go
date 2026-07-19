@@ -50,7 +50,7 @@ func TestSemanticRendererRendersProgress(t *testing.T) {
 	}
 }
 
-func TestSemanticRendererRendersFullError(t *testing.T) {
+func TestSemanticRendererRendersSummarizedError(t *testing.T) {
 	renderer := NewSemanticRenderer()
 	actions := renderer.Render(agentstream.Event{
 		Kind:  agentstream.EventError,
@@ -63,8 +63,11 @@ func TestSemanticRendererRendersFullError(t *testing.T) {
 	if send.Kind != RenderSend || !send.HighPriority {
 		t.Fatalf("action = %#v, want high-priority send", send)
 	}
-	if !strings.Contains(send.Content, "AGX agent error") || !strings.Contains(send.Content, "connection refused while starting the agent") {
-		t.Fatalf("content dropped the error detail: %q", send.Content)
+	if !strings.Contains(send.Content, "AGX agent error: detailed failure: connection refused while starting the agent") {
+		t.Fatalf("content dropped the error summary: %q", send.Content)
+	}
+	if !strings.Contains(send.Content, "Details are available") || !strings.Contains(send.Content, "`/logs`") {
+		t.Fatalf("content = %q, want logs guidance", send.Content)
 	}
 }
 
@@ -74,12 +77,12 @@ func TestSemanticRendererRendersEmptyErrorWithFallback(t *testing.T) {
 	if len(actions) != 2 {
 		t.Fatalf("len(actions) = %d, want clear + message", len(actions))
 	}
-	if !strings.Contains(actions[1].Content, "did not include any details") {
+	if !strings.Contains(actions[1].Content, "did not include details") {
 		t.Fatalf("content = %q, want empty-error fallback", actions[1].Content)
 	}
 }
 
-func TestSemanticRendererSplitsLongErrorAcrossMessages(t *testing.T) {
+func TestSemanticRendererRendersLongErrorAsSingleSummary(t *testing.T) {
 	renderer := NewSemanticRenderer()
 	actions := renderer.Render(agentstream.Event{
 		Kind:  agentstream.EventError,
@@ -91,12 +94,51 @@ func TestSemanticRendererSplitsLongErrorAcrossMessages(t *testing.T) {
 			continue
 		}
 		sends++
-		if len(action.Content) > maxDiscordMessage {
-			t.Fatalf("error chunk length = %d, want <= %d", len(action.Content), maxDiscordMessage)
-		}
 	}
-	if sends < 2 {
-		t.Fatalf("error sends = %d, want multiple chunks", sends)
+	if sends != 1 {
+		t.Fatalf("error sends = %d, want one summarized message", sends)
+	}
+	if strings.Contains(actions[1].Content, "stacktrace line\nstacktrace line") {
+		t.Fatalf("content includes raw multiline error: %q", actions[1].Content)
+	}
+}
+
+func TestSemanticRendererStripsANSIEscapesFromErrorSummary(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	actions := renderer.Render(agentstream.Event{
+		Kind:  agentstream.EventError,
+		Error: "\x1b[31mERROR\x1b[0m codex_core::tools::router: apply_patch verification failed\nfull details",
+	})
+	if len(actions) != 2 {
+		t.Fatalf("len(actions) = %d, want clear + message", len(actions))
+	}
+	content := actions[1].Content
+	if strings.Contains(content, "\x1b[") {
+		t.Fatalf("content includes ANSI escape: %q", content)
+	}
+	if !strings.Contains(content, "tool error: apply_patch verification failed") {
+		t.Fatalf("content = %q, want summarized tool error", content)
+	}
+	if strings.Contains(content, "codex_core::tools::router") {
+		t.Fatalf("content includes raw tool detail: %q", content)
+	}
+}
+
+func TestSemanticRendererSummarizesTelemetryErrors(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	actions := renderer.Render(agentstream.Event{
+		Kind:  agentstream.EventError,
+		Error: "\x1b[31mERROR\x1b[0m opentelemetry_sdk: name=\"BatchLogProcessor.ExportError\" error=\"Bad Gateway\"",
+	})
+	if len(actions) != 2 {
+		t.Fatalf("len(actions) = %d, want clear + message", len(actions))
+	}
+	content := actions[1].Content
+	if !strings.Contains(content, "telemetry export error") {
+		t.Fatalf("content = %q, want telemetry summary", content)
+	}
+	if strings.Contains(content, "Bad Gateway") {
+		t.Fatalf("content includes raw telemetry detail: %q", content)
 	}
 }
 

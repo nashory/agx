@@ -18,6 +18,7 @@ const (
 	assistantSentenceMinRunes   = 24
 	assistantProgressForceRunes = 220
 	assistantProgressInterval   = 2 * time.Second
+	errorSummaryMaxRunes        = 180
 )
 
 type RenderActionKind string
@@ -350,29 +351,53 @@ func (r SemanticRenderer) Unsupported(task agentstream.TaskSummary) RenderAction
 	}
 }
 
-// errorMessages renders an agent error in full. The error is wrapped in a code
-// block so the raw text is never mangled by Discord markdown, and split across
-// several messages when it exceeds a single message so nothing is truncated. An
-// empty error still produces a message rather than a bare "AGX agent error:".
+// errorMessages intentionally keeps Discord terse. Full agent/tool errors are
+// already preserved in task logs; sending raw multi-line failures to Discord can
+// flood a task channel.
 func (r SemanticRenderer) errorMessages(errText string) []RenderAction {
-	errText = strings.TrimSpace(errText)
+	summary := summarizeAgentError(errText)
+	content := "❌ AGX agent error"
+	if summary != "" {
+		content += ": " + summary
+	}
+	content += "\nDetails are available in AGX Desktop or `/logs`."
+	return []RenderAction{{
+		Kind:         RenderSend,
+		Content:      content,
+		HighPriority: true,
+	}}
+}
+
+func summarizeAgentError(errText string) string {
+	errText = strings.TrimSpace(stripANSI(errText))
 	if errText == "" {
-		errText = "The agent reported an error but did not include any details."
+		return "the agent did not include details"
 	}
-	chunks := splitOutput(errText, streamCodeBlockBudget)
-	actions := make([]RenderAction, 0, len(chunks))
-	for index, chunk := range chunks {
-		header := "❌ AGX agent error:"
-		if len(chunks) > 1 {
-			header = fmt.Sprintf("❌ AGX agent error (%d/%d):", index+1, len(chunks))
+	for _, line := range strings.Split(strings.ReplaceAll(errText, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
 		}
-		actions = append(actions, RenderAction{
-			Kind:         RenderSend,
-			Content:      header + "\n" + codeBlock(strings.TrimSpace(chunk)),
-			HighPriority: true,
-		})
+		return summarizeAgentErrorLine(line)
 	}
-	return actions
+	return "the agent did not include details"
+}
+
+func summarizeAgentErrorLine(line string) string {
+	switch {
+	case strings.Contains(line, "apply_patch verification failed"):
+		return "tool error: apply_patch verification failed"
+	case strings.Contains(line, "unable to locate image"):
+		return "tool error: unable to locate image"
+	case strings.Contains(line, "codex_core::tools::router"):
+		return "tool error"
+	case strings.Contains(line, "BatchLogProcessor.ExportError"),
+		strings.Contains(line, "BatchSpanProcessor.Flush.ExportError"),
+		strings.Contains(line, "opentelemetry_sdk"):
+		return "telemetry export error"
+	default:
+		return truncateRunesWithEllipsis(line, errorSummaryMaxRunes)
+	}
 }
 
 func (r SemanticRenderer) sendChunks(text string, highPriority bool) []RenderAction {
