@@ -15,7 +15,7 @@ tasks:
     cmds:
       - |
         {{if eq OS "windows"}}
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Force -Path 'bin' | Out-Null; $commit = 'unknown'; try { $commit = (& git rev-parse --short HEAD 2>$null).Trim() } catch {}; $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); go build -ldflags \"-X main.version={{.VERSION}} -X main.commit=$commit -X main.date=$date\" -o '{{.AGX_BIN}}' ./cmd/agx"
+        powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Version "{{.VERSION}}" -Output "{{.AGX_BIN}}"
         {{else}}
         mkdir -p bin
         COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -30,7 +30,7 @@ tasks:
       - task: frontend-build
       - |
         {{if eq OS "windows"}}
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; New-Item -ItemType Directory -Force -Path 'bin' | Out-Null; go build -tags '{{.DESKTOP_TAGS}}' -o '{{.DESKTOP_BIN}}' ./desktop"
+        powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-build-windows.ps1 -Tags "{{.DESKTOP_TAGS}}" -Output "{{.DESKTOP_BIN}}"
         {{else}}
         mkdir -p bin
         go build -tags "{{.DESKTOP_TAGS}}" -o "{{.DESKTOP_BIN}}" ./desktop
@@ -244,6 +244,14 @@ tasks:
         test ! -s bin/logs/runtime.err.log || tail -40 bin/logs/runtime.err.log >&2
         exit 1
 
+  runtime-bg-win:
+    desc: Start the runtime in the background (Windows)
+    deps:
+      - build
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/runtime-bg-windows.ps1
+
   desktop-run:
     desc: Build and run Desktop
     deps:
@@ -252,12 +260,30 @@ tasks:
       - '{{.DESKTOP_BIN}}'
 
   dev:
-    desc: Build everything, start the runtime in the background, and run Desktop
+    desc: Build everything, start the runtime, and run Desktop (auto-detects OS)
+    cmds:
+      - |
+        {{if eq OS "windows"}}
+        task dev-win
+        {{else}}
+        task dev-macos
+        {{end}}
+
+  dev-macos:
+    desc: Build everything, start the runtime in the background, and run Desktop (macOS/Linux)
     platforms: [darwin, linux]
     cmds:
       - task: app
       - task: runtime-bg
       - ./bin/agx-desktop
+
+  dev-win:
+    desc: Build everything, start the runtime in the background, and run Desktop (Windows)
+    platforms: [windows]
+    cmds:
+      - task: app
+      - task: runtime-bg-win
+      - '{{.DESKTOP_BIN}}'
 
   service-install:
     desc: Build and install the runtime service
