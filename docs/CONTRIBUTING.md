@@ -80,8 +80,10 @@ Run the local CLI and Desktop app:
 ./bin/agx-desktop
 ```
 
-For local end-to-end development, this builds the CLI and Desktop app, starts
-the runtime in the background, and opens Desktop:
+For local command examples across macOS, Windows, and Linux, use
+[../COMMANDS.md](../COMMANDS.md). The Makefile is still available as a
+maintainer shortcut; this legacy POSIX loop builds the CLI and Desktop app,
+starts the runtime in the background, and opens Desktop:
 
 ```bash
 task dev

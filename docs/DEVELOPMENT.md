@@ -140,6 +140,10 @@ the Docker build context to be free of secrets.
 
 ## Run Locally
 
+Use [../COMMANDS.md](../COMMANDS.md) as the user-facing command guide for
+macOS, Windows, and Linux. The commands below are maintainer shortcuts for
+POSIX-style development environments.
+
 Start the runtime in the foreground:
 
 ```bash
@@ -165,8 +169,8 @@ Run Desktop against the local runtime:
 task desktop-run
 ```
 
-For the common end-to-end development loop, build everything, start the runtime,
-and open Desktop:
+For the legacy POSIX end-to-end development loop, build everything, start the
+runtime, and open Desktop:
 
 ```bash
 task dev

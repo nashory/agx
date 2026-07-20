@@ -76,6 +76,39 @@ func TestLocalWhisperTranscriberRunsFFmpegAndWhisper(t *testing.T) {
 	}
 }
 
+func TestLocalWhisperTranscriberPassesAutoLanguage(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("AGX_CONFIG_DIR", configDir)
+	ffmpegPath := writeExecutable(t, "ffmpeg")
+	whisperPath := writeExecutable(t, "whisper-cli")
+	modelPath := filepath.Join(t.TempDir(), "ggml-base.bin")
+	if err := os.WriteFile(modelPath, []byte("model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SaveVoiceSTT(config.VoiceSTTConfig{
+		Mode:        config.VoiceSTTEnabled,
+		FFmpegPath:  ffmpegPath,
+		WhisperPath: whisperPath,
+		ModelPath:   modelPath,
+		Language:    "auto",
+		Timeout:     "30s",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingVoiceRunner{}
+
+	transcript, err := (localWhisperTranscriber{runner: runner}).Transcribe(context.Background(), filepath.Join(t.TempDir(), "voice-message.ogg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transcript.Language != "auto" {
+		t.Fatalf("transcript language = %q, want auto", transcript.Language)
+	}
+	if len(runner.calls) != 2 || !containsArgPair(runner.calls[1].args, "-l", "auto") {
+		t.Fatalf("whisper call = %#v, want explicit -l auto", runner.calls)
+	}
+}
+
 func TestLocalWhisperTranscriberReportsMissingModel(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("AGX_CONFIG_DIR", configDir)
@@ -90,6 +123,13 @@ func TestLocalWhisperTranscriberReportsMissingModel(t *testing.T) {
 	_, err := (localWhisperTranscriber{runner: &recordingVoiceRunner{}}).Transcribe(context.Background(), filepath.Join(t.TempDir(), "voice-message.ogg"))
 	if err == nil || !strings.Contains(err.Error(), "Whisper model is unavailable") {
 		t.Fatalf("Transcribe error = %v, want missing model", err)
+	}
+}
+
+func TestNormalizeVoiceTranscriptText(t *testing.T) {
+	got := normalizeVoiceTranscriptText(" Okay, then test file.\r\n Let's see   how it works.\n")
+	if got != "Okay, then test file. Let's see how it works." {
+		t.Fatalf("normalizeVoiceTranscriptText() = %q", got)
 	}
 }
 

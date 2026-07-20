@@ -506,6 +506,7 @@ use worktree mode when multiple agents are editing in parallel.
 | Guide | What it covers |
 | --- | --- |
 | [Install](docs/INSTALL.md) | macOS, Linux, Docker, first run, runtime setup, and troubleshooting. |
+| [Commands](COMMANDS.md) | Platform-specific run commands for CLI, runtime, Desktop, and voice STT. |
 | [Configuration](docs/CONFIGURATION.md) | Global config, project config, custom agents, and worktrees. |
 | [Discord](docs/DISCORD.md) | Discord setup, CLI configuration, and command reference. |
 | [Architecture](docs/ARCHITECTURE.md) | Runtime model, task states, local resources, and workspace behavior. |
@@ -540,6 +541,9 @@ Run the full development loop:
 ```bash
 task dev
 ```
+
+For platform-specific runtime and Desktop commands, see
+[COMMANDS.md](COMMANDS.md).
 
 Build release artifacts:
 
