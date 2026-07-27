@@ -253,6 +253,86 @@ func (s discordCommandService) ScheduleRuntimeRestart(ctx context.Context) error
 	return nil
 }
 
+func (s discordCommandService) RuntimeDoctor(ctx context.Context) (agxdiscord.RuntimeDoctorSummary, error) {
+	agxdiscord.ReportProgress(ctx, "AGX runtime doctor started.")
+	defer agxdiscord.ReportProgress(ctx, "AGX runtime doctor finished.")
+	manager := CurrentRuntimeServiceManager()
+	agxdiscord.ReportProgress(ctx, "Step 1/4: checking runtime service manager.")
+	serviceStatus := manager.Status(ctx)
+	agxdiscord.ReportProgress(ctx, fmt.Sprintf("Step 1/4 complete: service manager `%s` is `%s`.", unknownIfEmpty(serviceStatus.Manager), unknownIfEmpty(serviceStatus.State)))
+	before := s.runtime.discord.Status()
+	summary := agxdiscord.RuntimeDoctorSummary{
+		ServiceManager: serviceStatus.Manager,
+		ServiceState:   serviceStatus.State,
+		DiscordEnabled: before.Enabled,
+		DiscordBefore:  before.Connected,
+		DiscordAfter:   before.Connected,
+		Checks: []string{
+			"runtime API is reachable",
+			fmt.Sprintf("service manager %s state %s", unknownIfEmpty(serviceStatus.Manager), unknownIfEmpty(serviceStatus.State)),
+		},
+	}
+	if !isRuntimeServiceRestartable(serviceStatus) {
+		summary.Warnings = append(summary.Warnings, "runtime service is not active; `/runtime restart` may not work until the service is installed and running")
+		agxdiscord.ReportProgress(ctx, "Warning: runtime service is not active, so `/runtime restart` may not work.")
+	}
+	agxdiscord.ReportProgress(ctx, "Step 2/4: checking Discord bridge configuration.")
+	if !before.Enabled {
+		summary.Warnings = append(summary.Warnings, "Discord is disabled in AGX config")
+		logRuntimeOperation("discord_runtime_doctor", "discord_enabled", false, "service_state", serviceStatus.State)
+		agxdiscord.ReportProgress(ctx, "Step 2/4 complete: Discord is disabled in AGX config; no repair attempted.")
+		return summary, nil
+	}
+	agxdiscord.ReportProgress(ctx, fmt.Sprintf("Step 2/4 complete: Discord is enabled, connected=%t.", before.Connected))
+	agxdiscord.ReportProgress(ctx, "Step 3/4: checking Discord bridge connection.")
+	if !before.Connected {
+		agxdiscord.ReportProgress(ctx, "Step 3/4 repair: reconnecting Discord bridge.")
+		if err := s.runtime.ensureDiscordStarted(false); err != nil {
+			summary.Warnings = append(summary.Warnings, "Discord reconnect failed: "+err.Error())
+			logRuntimeOperation("discord_runtime_doctor", "discord_reconnect", "failed", "error", err)
+			agxdiscord.ReportProgress(ctx, "Step 3/4 failed: Discord reconnect did not complete.")
+			return summary, nil
+		}
+		summary.Repairs = append(summary.Repairs, "reconnected Discord bridge")
+		agxdiscord.ReportProgress(ctx, "Step 3/4 repaired: Discord bridge reconnected.")
+	} else {
+		agxdiscord.ReportProgress(ctx, "Step 3/4 complete: Discord bridge is already connected.")
+	}
+	afterStart := s.runtime.discord.Status()
+	summary.DiscordAfter = afterStart.Connected
+	agxdiscord.ReportProgress(ctx, "Step 4/4: checking Discord channel sync.")
+	if afterStart.Connected {
+		if err := s.runtime.discord.SoftSync(ctx); err != nil {
+			if errors.Is(err, agxdiscord.ErrSyncInProgress) {
+				summary.Checks = append(summary.Checks, "Discord sync already running")
+				agxdiscord.ReportProgress(ctx, "Step 4/4 complete: Discord sync is already running.")
+			} else {
+				summary.Warnings = append(summary.Warnings, "Discord soft sync failed: "+err.Error())
+				agxdiscord.ReportProgress(ctx, "Step 4/4 failed: Discord soft sync did not complete.")
+			}
+		} else {
+			summary.Repairs = append(summary.Repairs, "ran Discord soft sync")
+			agxdiscord.ReportProgress(ctx, "Step 4/4 repaired: Discord soft sync completed.")
+		}
+	} else {
+		summary.Warnings = append(summary.Warnings, "Discord bridge is still disconnected; skipped channel sync")
+		agxdiscord.ReportProgress(ctx, "Step 4/4 skipped: Discord bridge is still disconnected.")
+	}
+	final := s.runtime.discord.Status()
+	summary.DiscordAfter = final.Connected
+	s.runtime.bus.Publish("discord.status", final)
+	logRuntimeOperation("discord_runtime_doctor",
+		"service_manager", serviceStatus.Manager,
+		"service_state", serviceStatus.State,
+		"discord_enabled", final.Enabled,
+		"discord_before", before.Connected,
+		"discord_after", final.Connected,
+		"repairs", len(summary.Repairs),
+		"warnings", len(summary.Warnings),
+	)
+	return summary, nil
+}
+
 func isRuntimeServiceRestartable(status RuntimeServiceStatus) bool {
 	switch strings.ToLower(strings.TrimSpace(status.State)) {
 	case "active", "loaded":

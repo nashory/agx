@@ -98,6 +98,7 @@ alias for older scripts.
 | `/task delete task:<id>` | Delete a task and its Discord channel. |
 | `/soft-sync` | Sync AGX state and stale AGX channels in the configured AGX server. |
 | `/hard-sync` | Rebuild channels in the configured AGX server from current state. |
+| `/runtime doctor` | Check and repair recoverable runtime issues without restarting. |
 | `/runtime restart` | Restart the installed AGX runtime service. |
 | `/status task:<id>` | Show task status. |
 | `/logs` | Show a task log snapshot. |

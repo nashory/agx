@@ -23,6 +23,10 @@ type fakeCommandService struct {
 	hardPreserve            string
 	restartScheduled        bool
 	restartErr              error
+	doctorCalled            bool
+	doctorSummary           RuntimeDoctorSummary
+	doctorProgress          []string
+	doctorErr               error
 	syncStatus              SyncStatusSummary
 	control                 map[string]bool
 	tasks                   []TaskSummary
@@ -143,6 +147,20 @@ func (f *fakeCommandService) ScheduleRuntimeRestart(context.Context) error {
 	return f.restartErr
 }
 
+func (f *fakeCommandService) RuntimeDoctor(ctx context.Context) (RuntimeDoctorSummary, error) {
+	f.doctorCalled = true
+	for _, message := range f.doctorProgress {
+		ReportProgress(ctx, message)
+	}
+	if f.doctorErr != nil {
+		return RuntimeDoctorSummary{}, f.doctorErr
+	}
+	if len(f.doctorSummary.Checks) != 0 || len(f.doctorSummary.Repairs) != 0 || len(f.doctorSummary.Warnings) != 0 || f.doctorSummary.ServiceManager != "" {
+		return f.doctorSummary, nil
+	}
+	return RuntimeDoctorSummary{ServiceManager: "launchd", ServiceState: "loaded", DiscordEnabled: true, DiscordBefore: true, DiscordAfter: true}, nil
+}
+
 func (f *fakeCommandService) SyncStatus(ctx context.Context) SyncStatusSummary {
 	return f.syncStatus
 }
@@ -254,8 +272,8 @@ func TestApplicationCommandsExposeOnlySafeTaskControls(t *testing.T) {
 	if !hasSubcommand(commands["task"], "create") || !hasSubcommand(commands["task"], "delete") {
 		t.Fatal("ApplicationCommands missing task create/delete subcommands")
 	}
-	if !hasSubcommand(commands["runtime"], "restart") {
-		t.Fatal("ApplicationCommands missing runtime restart subcommand")
+	if !hasSubcommand(commands["runtime"], "restart") || !hasSubcommand(commands["runtime"], "doctor") {
+		t.Fatal("ApplicationCommands missing runtime subcommands")
 	}
 }
 
@@ -392,6 +410,41 @@ func TestCommandRouterSchedulesRuntimeRestartInControlChannel(t *testing.T) {
 	}
 	if !strings.Contains(response.Content, "restart requested") {
 		t.Fatalf("response = %q, want restart requested", response.Content)
+	}
+}
+
+func TestCommandRouterRunsRuntimeDoctorInControlChannel(t *testing.T) {
+	service := &fakeCommandService{
+		control: map[string]bool{"control-1": true},
+		doctorSummary: RuntimeDoctorSummary{
+			ServiceManager: "launchd",
+			ServiceState:   "loaded",
+			DiscordEnabled: true,
+			DiscordBefore:  false,
+			DiscordAfter:   true,
+			Repairs:        []string{"reconnected Discord bridge", "ran Discord soft sync"},
+		},
+	}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.Execute(context.Background(), CommandInput{
+		Name:       "runtime",
+		Subcommand: "doctor",
+		GuildID:    "guild-1",
+		ChannelID:  "control-1",
+		UserID:     "user",
+		Options:    map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !service.doctorCalled {
+		t.Fatal("RuntimeDoctor was not called")
+	}
+	for _, expected := range []string{"AGX runtime doctor", "launchd", "connected=true", "reconnected Discord bridge", "ran Discord soft sync"} {
+		if !strings.Contains(response.Content, expected) {
+			t.Fatalf("response = %q, missing %q", response.Content, expected)
+		}
 	}
 }
 

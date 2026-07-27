@@ -47,6 +47,7 @@ type CommandService interface {
 	SoftSync(ctx context.Context) error
 	HardSync(ctx context.Context, preserveControlChannelID string) error
 	ScheduleRuntimeRestart(ctx context.Context) error
+	RuntimeDoctor(ctx context.Context) (RuntimeDoctorSummary, error)
 	ResetEverything(ctx context.Context) (ResetSummary, error)
 	ResolveTaskByChannel(ctx context.Context, channelID string) (string, error)
 	ResolveTask(ctx context.Context, ref string) (TaskSummary, error)
@@ -73,6 +74,17 @@ type SyncStatusSummary struct {
 	StartedAt   *time.Time `json:"startedAt,omitempty"`
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 	Error       string     `json:"error,omitempty"`
+}
+
+type RuntimeDoctorSummary struct {
+	ServiceManager string
+	ServiceState   string
+	DiscordEnabled bool
+	DiscordBefore  bool
+	DiscordAfter   bool
+	Checks         []string
+	Repairs        []string
+	Warnings       []string
 }
 
 type TaskSummary struct {
@@ -116,6 +128,30 @@ type CommandResponse struct {
 	Content   string
 	Ephemeral bool
 	React     bool
+}
+
+type progressReporterKey struct{}
+
+// WithProgressReporter attaches a best-effort progress sink to a command
+// context. Long-running commands can use ReportProgress to show live status in
+// Discord without changing the normal request/response path.
+func WithProgressReporter(ctx context.Context, report func(string)) context.Context {
+	if report == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, progressReporterKey{}, report)
+}
+
+func ReportProgress(ctx context.Context, message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+	report, ok := ctx.Value(progressReporterKey{}).(func(string))
+	if !ok || report == nil {
+		return
+	}
+	report(message)
 }
 
 func CommandInputFromInteraction(i *discordgo.InteractionCreate) CommandInput {
@@ -210,6 +246,11 @@ func ApplicationCommands() []*discordgo.ApplicationCommand {
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "restart",
 					Description: "Restart the AGX runtime service",
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "doctor",
+					Description: "Check and repair recoverable AGX runtime issues",
 				},
 			},
 		},
@@ -346,6 +387,8 @@ func (r *CommandRouter) Execute(ctx context.Context, input CommandInput) (Comman
 		switch input.Subcommand {
 		case "restart":
 			return r.runtimeRestart(ctx)
+		case "doctor":
+			return r.runtimeDoctor(ctx)
 		}
 		return CommandResponse{}, fmt.Errorf("unknown runtime command %q", input.Subcommand)
 	case "dangerously-reset-everything":
@@ -740,6 +783,44 @@ func (r *CommandRouter) runtimeRestart(ctx context.Context) (CommandResponse, er
 	return CommandResponse{Content: "AGX runtime restart requested. Discord will reconnect after the service comes back."}, nil
 }
 
+func (r *CommandRouter) runtimeDoctor(ctx context.Context) (CommandResponse, error) {
+	summary, err := r.service.RuntimeDoctor(ctx)
+	if err != nil {
+		return CommandResponse{}, err
+	}
+	return CommandResponse{Content: renderRuntimeDoctor(summary)}, nil
+}
+
+func renderRuntimeDoctor(summary RuntimeDoctorSummary) string {
+	lines := []string{
+		"AGX runtime doctor",
+		fmt.Sprintf("- Service: %s (%s)", valueOrUnknown(summary.ServiceManager), valueOrUnknown(summary.ServiceState)),
+		fmt.Sprintf("- Discord: enabled=%t connected=%t", summary.DiscordEnabled, summary.DiscordAfter),
+	}
+	if len(summary.Repairs) == 0 && len(summary.Warnings) == 0 {
+		lines = append(lines, "- Result: no repair needed")
+	}
+	for _, check := range summary.Checks {
+		check = strings.TrimSpace(check)
+		if check != "" {
+			lines = append(lines, "- Check: "+check)
+		}
+	}
+	for _, repair := range summary.Repairs {
+		repair = strings.TrimSpace(repair)
+		if repair != "" {
+			lines = append(lines, "- Repaired: "+repair)
+		}
+	}
+	for _, warning := range summary.Warnings {
+		warning = strings.TrimSpace(warning)
+		if warning != "" {
+			lines = append(lines, "- Warning: "+warning)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (r *CommandRouter) taskAction(ctx context.Context, input CommandInput, verb string, fn func(context.Context, string) error) (CommandResponse, error) {
 	taskID, err := r.taskID(ctx, input)
 	if err != nil {
@@ -933,6 +1014,7 @@ func commandHelp() string {
 		"`/project list`, `/project create`, `/project delete` - manage registered projects from `#agx-control`",
 		"`/soft-sync` - sync Discord to the current AGX state",
 		"`/hard-sync` - rebuild managed Discord channels from AGX state",
+		"`/runtime doctor` - check and repair recoverable runtime issues",
 		"`/runtime restart` - restart the AGX runtime service",
 		"`/dangerously-reset-everything confirm:reset` - delete ALL projects, tasks, and managed channels",
 		"`/status task:<id>`, `/task logs task:<name-or-id>` - inspect tasks from `#agx-control`",

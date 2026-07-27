@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
@@ -83,6 +84,49 @@ func TestBotCommandHandlerDefersUnauthorizedSlashCommandEphemerally(t *testing.T
 	}
 	if len(session.webhookEdits) != 1 || session.webhookEdits[0].Content == nil || *session.webhookEdits[0].Content != "You are not allowed to control AGX from Discord." {
 		t.Fatalf("webhook edits = %#v, want unauthorized message", session.webhookEdits)
+	}
+}
+
+func TestBotCommandHandlerSendsRuntimeDoctorProgress(t *testing.T) {
+	bot := &Bot{}
+	session := &recordingBotSession{channelName: "agx-control"}
+	service := &fakeCommandService{
+		control:        map[string]bool{"control-1": true},
+		doctorProgress: []string{"Step 1/4: checking runtime service manager.", "Step 1/4 complete: service manager `launchd` is `loaded`."},
+		doctorSummary: RuntimeDoctorSummary{
+			ServiceManager: "launchd",
+			ServiceState:   "loaded",
+			DiscordEnabled: true,
+			DiscordAfter:   true,
+		},
+	}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user-1"}}, service)
+
+	bot.handleCommandInteraction(session, router, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		Type:      discordgo.InteractionApplicationCommand,
+		GuildID:   "guild-1",
+		ChannelID: "control-1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "user-1"}},
+		Data: discordgo.ApplicationCommandInteractionData{
+			Name: "runtime",
+			Options: []*discordgo.ApplicationCommandInteractionDataOption{{
+				Type: discordgo.ApplicationCommandOptionSubCommand,
+				Name: "doctor",
+			}},
+		},
+	}})
+
+	if len(session.responses) != 1 || session.responses[0].Type != discordgo.InteractionResponseDeferredChannelMessageWithSource {
+		t.Fatalf("responses = %#v, want deferred command response", session.responses)
+	}
+	if len(session.sent) != 2 {
+		t.Fatalf("sent = %#v, want runtime doctor progress messages", session.sent)
+	}
+	if session.sent[0].channelID != "control-1" || session.sent[0].content != "Step 1/4: checking runtime service manager." {
+		t.Fatalf("first progress = %#v", session.sent[0])
+	}
+	if len(session.webhookEdits) != 1 || session.webhookEdits[0].Content == nil || !strings.Contains(*session.webhookEdits[0].Content, "AGX runtime doctor") {
+		t.Fatalf("webhook edits = %#v, want final doctor summary", session.webhookEdits)
 	}
 }
 
@@ -290,6 +334,11 @@ func (s panicCommandService) HardSync(context.Context, string) error {
 func (s panicCommandService) ScheduleRuntimeRestart(context.Context) error {
 	s.t.Fatal("ScheduleRuntimeRestart should not be called")
 	return nil
+}
+
+func (s panicCommandService) RuntimeDoctor(context.Context) (RuntimeDoctorSummary, error) {
+	s.t.Fatal("RuntimeDoctor should not be called")
+	return RuntimeDoctorSummary{}, nil
 }
 
 func (s panicCommandService) ResolveTaskByChannel(context.Context, string) (string, error) {

@@ -751,6 +751,7 @@ func (b *Bot) AddCommandHandler(router *CommandRouter) {
 
 type commandHandlerSession interface {
 	Channel(string, ...discordgo.RequestOption) (*discordgo.Channel, error)
+	ChannelMessageSend(channelID, content string, options ...discordgo.RequestOption) (*discordgo.Message, error)
 	InteractionRespond(*discordgo.Interaction, *discordgo.InteractionResponse, ...discordgo.RequestOption) error
 	InteractionResponseEdit(*discordgo.Interaction, *discordgo.WebhookEdit, ...discordgo.RequestOption) (*discordgo.Message, error)
 }
@@ -766,6 +767,12 @@ func (b *Bot) handleCommandInteraction(session commandHandlerSession, router *Co
 		}
 	}
 	ctx := context.Background()
+	if input.ChannelID != "" {
+		channelID := input.ChannelID
+		ctx = WithProgressReporter(ctx, func(message string) {
+			_, _ = session.ChannelMessageSend(channelID, message)
+		})
+	}
 	flags := discordgo.MessageFlags(0)
 	if !router.IsAuthorized(input) {
 		flags = discordgo.MessageFlagsEphemeral
