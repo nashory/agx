@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nashory/agx/internal/agent"
 	"github.com/nashory/agx/internal/db"
@@ -225,6 +226,48 @@ func (s discordCommandService) SoftSync(ctx context.Context) error {
 
 func (s discordCommandService) HardSync(ctx context.Context, preserveControlChannelID string) error {
 	return s.runtime.startDiscordHardSync(preserveControlChannelID)
+}
+
+func (s discordCommandService) ScheduleRuntimeRestart(ctx context.Context) error {
+	manager := CurrentRuntimeServiceManager()
+	status := manager.Status(ctx)
+	if !isRuntimeServiceRestartable(status) {
+		detail := strings.TrimSpace(status.Detail)
+		if detail != "" {
+			detail = ": " + detail
+		}
+		return fmt.Errorf("AGX runtime service is not active (%s=%s%s); start AGX with `agx runtime install-service` before using Discord restart", unknownIfEmpty(status.Manager), unknownIfEmpty(status.State), detail)
+	}
+	logRuntimeOperation("discord_runtime_restart", "status", "scheduled", "manager", status.Manager)
+	go func() {
+		time.Sleep(1500 * time.Millisecond)
+		restartCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		message, err := manager.Restart(restartCtx)
+		if err != nil {
+			logRuntimeOperation("discord_runtime_restart", "status", "failed", "manager", status.Manager, "error", err)
+			return
+		}
+		logRuntimeOperation("discord_runtime_restart", "status", "requested", "manager", status.Manager, "message", message)
+	}()
+	return nil
+}
+
+func isRuntimeServiceRestartable(status RuntimeServiceStatus) bool {
+	switch strings.ToLower(strings.TrimSpace(status.State)) {
+	case "active", "loaded":
+		return true
+	default:
+		return false
+	}
+}
+
+func unknownIfEmpty(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	return value
 }
 
 // ResetEverything deletes every AGX project and task (stopping their sessions

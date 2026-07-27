@@ -127,6 +127,23 @@ func (systemdUserServiceManager) Uninstall(ctx context.Context) (string, error) 
 	return fmt.Sprintf("uninstalled %s", unitPath), nil
 }
 
+func (systemdUserServiceManager) Restart(ctx context.Context) (string, error) {
+	unitPath, err := SystemdUserUnitPath()
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(unitPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("AGX runtime systemd user service is not installed")
+		}
+		return "", err
+	}
+	if err := systemctlUser(ctx, "restart", systemdUnitName); err != nil {
+		return "", err
+	}
+	return "restarted AGX runtime service", nil
+}
+
 func (systemdUserServiceManager) Status(ctx context.Context) RuntimeServiceStatus {
 	status := RuntimeServiceStatus{
 		Manager:   "systemd",

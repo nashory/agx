@@ -24,6 +24,7 @@ type RuntimeServiceManager interface {
 	Name() string
 	Install(ctx context.Context, executable string, noStart bool) (string, error)
 	Uninstall(ctx context.Context) (string, error)
+	Restart(ctx context.Context) (string, error)
 	Status(ctx context.Context) RuntimeServiceStatus
 }
 

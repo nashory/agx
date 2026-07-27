@@ -384,6 +384,7 @@ Common Discord commands include:
 | `/clear` | Clear the current task channel's agent context. |
 | `/soft-sync` | Reconcile Discord channels with runtime state. |
 | `/hard-sync` | Rebuild Discord channels from runtime state. |
+| `/runtime restart` | Restart the installed AGX runtime service. |
 
 See [docs/DISCORD.md](docs/DISCORD.md) for setup details and the full command
 reference.

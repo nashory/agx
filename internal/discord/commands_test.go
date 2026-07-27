@@ -21,6 +21,8 @@ type fakeCommandService struct {
 	softSynced              bool
 	hardSynced              bool
 	hardPreserve            string
+	restartScheduled        bool
+	restartErr              error
 	syncStatus              SyncStatusSummary
 	control                 map[string]bool
 	tasks                   []TaskSummary
@@ -136,6 +138,11 @@ func (f *fakeCommandService) HardSync(ctx context.Context, preserveControlChanne
 	return nil
 }
 
+func (f *fakeCommandService) ScheduleRuntimeRestart(context.Context) error {
+	f.restartScheduled = true
+	return f.restartErr
+}
+
 func (f *fakeCommandService) SyncStatus(ctx context.Context) SyncStatusSummary {
 	return f.syncStatus
 }
@@ -246,6 +253,9 @@ func TestApplicationCommandsExposeOnlySafeTaskControls(t *testing.T) {
 	}
 	if !hasSubcommand(commands["task"], "create") || !hasSubcommand(commands["task"], "delete") {
 		t.Fatal("ApplicationCommands missing task create/delete subcommands")
+	}
+	if !hasSubcommand(commands["runtime"], "restart") {
+		t.Fatal("ApplicationCommands missing runtime restart subcommand")
 	}
 }
 
@@ -359,6 +369,29 @@ func TestCommandRouterRunsSyncCommandsInControlChannel(t *testing.T) {
 	}
 	if service.hardPreserve != "control-1" {
 		t.Fatalf("hardPreserve = %q, want control-1", service.hardPreserve)
+	}
+}
+
+func TestCommandRouterSchedulesRuntimeRestartInControlChannel(t *testing.T) {
+	service := &fakeCommandService{control: map[string]bool{"control-1": true}}
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
+
+	response, err := router.Execute(context.Background(), CommandInput{
+		Name:       "runtime",
+		Subcommand: "restart",
+		GuildID:    "guild-1",
+		ChannelID:  "control-1",
+		UserID:     "user",
+		Options:    map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !service.restartScheduled {
+		t.Fatal("ScheduleRuntimeRestart was not called")
+	}
+	if !strings.Contains(response.Content, "restart requested") {
+		t.Fatalf("response = %q, want restart requested", response.Content)
 	}
 }
 

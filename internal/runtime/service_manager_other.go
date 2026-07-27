@@ -25,6 +25,10 @@ func (unsupportedServiceManager) Uninstall(context.Context) (string, error) {
 	return "", fmt.Errorf("runtime service installation is not supported on this platform")
 }
 
+func (unsupportedServiceManager) Restart(context.Context) (string, error) {
+	return "", fmt.Errorf("runtime service restart is not supported on this platform")
+}
+
 func (unsupportedServiceManager) Status(context.Context) RuntimeServiceStatus {
 	return RuntimeServiceStatus{
 		Manager: "unsupported",

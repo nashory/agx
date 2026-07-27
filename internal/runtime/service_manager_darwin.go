@@ -64,6 +64,24 @@ func (launchdServiceManager) Uninstall(ctx context.Context) (string, error) {
 	return fmt.Sprintf("uninstalled %s", plistPath), nil
 }
 
+func (launchdServiceManager) Restart(ctx context.Context) (string, error) {
+	plistPath, err := LaunchAgentPath()
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(plistPath); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("AGX runtime launchd service is not installed")
+		}
+		return "", err
+	}
+	_ = launchctl(ctx, "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), plistPath)
+	if err := launchctl(ctx, "kickstart", "-k", fmt.Sprintf("gui/%d/%s", os.Getuid(), LaunchAgentLabel)); err != nil {
+		return "", err
+	}
+	return "restarted AGX runtime service", nil
+}
+
 func (launchdServiceManager) Status(ctx context.Context) RuntimeServiceStatus {
 	status := RuntimeServiceStatus{
 		Manager:   "launchd",

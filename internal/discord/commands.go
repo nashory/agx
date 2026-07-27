@@ -46,6 +46,7 @@ type CommandService interface {
 	IsControlChannel(ctx context.Context, channelID string) (bool, error)
 	SoftSync(ctx context.Context) error
 	HardSync(ctx context.Context, preserveControlChannelID string) error
+	ScheduleRuntimeRestart(ctx context.Context) error
 	ResetEverything(ctx context.Context) (ResetSummary, error)
 	ResolveTaskByChannel(ctx context.Context, channelID string) (string, error)
 	ResolveTask(ctx context.Context, ref string) (TaskSummary, error)
@@ -202,6 +203,17 @@ func ApplicationCommands() []*discordgo.ApplicationCommand {
 		{Name: "soft-sync", Description: "Sync AGX projects and active tasks to Discord"},
 		{Name: "hard-sync", Description: "Rebuild Discord managed channels from the current AGX state"},
 		{
+			Name:        "runtime",
+			Description: "Manage the AGX runtime",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "restart",
+					Description: "Restart the AGX runtime service",
+				},
+			},
+		},
+		{
 			Name:        "dangerously-reset-everything",
 			Description: "Delete ALL AGX projects, tasks, and managed Discord channels",
 			Options: []*discordgo.ApplicationCommandOption{
@@ -330,6 +342,12 @@ func (r *CommandRouter) Execute(ctx context.Context, input CommandInput) (Comman
 		return r.softSync(ctx)
 	case "hard-sync":
 		return r.hardSync(ctx, input)
+	case "runtime":
+		switch input.Subcommand {
+		case "restart":
+			return r.runtimeRestart(ctx)
+		}
+		return CommandResponse{}, fmt.Errorf("unknown runtime command %q", input.Subcommand)
 	case "dangerously-reset-everything":
 		return r.resetEverything(ctx, input)
 	case "project":
@@ -715,6 +733,13 @@ func (r *CommandRouter) hardSync(ctx context.Context, input CommandInput) (Comma
 	return CommandResponse{Content: "Hard sync started. Use `/heartbeat` in `#agx-control` to check progress."}, nil
 }
 
+func (r *CommandRouter) runtimeRestart(ctx context.Context) (CommandResponse, error) {
+	if err := r.service.ScheduleRuntimeRestart(ctx); err != nil {
+		return CommandResponse{}, err
+	}
+	return CommandResponse{Content: "AGX runtime restart requested. Discord will reconnect after the service comes back."}, nil
+}
+
 func (r *CommandRouter) taskAction(ctx context.Context, input CommandInput, verb string, fn func(context.Context, string) error) (CommandResponse, error) {
 	taskID, err := r.taskID(ctx, input)
 	if err != nil {
@@ -908,6 +933,7 @@ func commandHelp() string {
 		"`/project list`, `/project create`, `/project delete` - manage registered projects from `#agx-control`",
 		"`/soft-sync` - sync Discord to the current AGX state",
 		"`/hard-sync` - rebuild managed Discord channels from AGX state",
+		"`/runtime restart` - restart the AGX runtime service",
 		"`/dangerously-reset-everything confirm:reset` - delete ALL projects, tasks, and managed channels",
 		"`/status task:<id>`, `/task logs task:<name-or-id>` - inspect tasks from `#agx-control`",
 		"`/logs` - show recent output in an AGX task channel (crash/error diagnosis)",

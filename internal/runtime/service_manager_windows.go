@@ -5,6 +5,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -85,6 +86,25 @@ func (windowsServiceManager) Uninstall(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("delete runtime service: %w", err)
 	}
 	return fmt.Sprintf("uninstalled %s", windowsServiceName), nil
+}
+
+func (windowsServiceManager) Restart(ctx context.Context) (string, error) {
+	manager, err := mgr.Connect()
+	if err != nil {
+		return "", fmt.Errorf("connect to service manager (run as Administrator): %w", err)
+	}
+	defer manager.Disconnect()
+
+	service, err := manager.OpenService(windowsServiceName)
+	if err != nil {
+		return "", fmt.Errorf("%s is not installed", windowsServiceName)
+	}
+	defer service.Close()
+	command := fmt.Sprintf("Start-Sleep -Seconds 2; Restart-Service -Name %q -Force", windowsServiceName)
+	if err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command).Start(); err != nil {
+		return "", fmt.Errorf("schedule runtime service restart: %w", err)
+	}
+	return "scheduled AGX runtime service restart", nil
 }
 
 func (windowsServiceManager) Status(ctx context.Context) RuntimeServiceStatus {

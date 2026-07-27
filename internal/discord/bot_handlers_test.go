@@ -287,6 +287,11 @@ func (s panicCommandService) HardSync(context.Context, string) error {
 	return nil
 }
 
+func (s panicCommandService) ScheduleRuntimeRestart(context.Context) error {
+	s.t.Fatal("ScheduleRuntimeRestart should not be called")
+	return nil
+}
+
 func (s panicCommandService) ResolveTaskByChannel(context.Context, string) (string, error) {
 	s.t.Fatal("ResolveTaskByChannel should not be called")
 	return "", nil
