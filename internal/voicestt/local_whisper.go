@@ -16,10 +16,14 @@ import (
 )
 
 const (
-	defaultModelName = "ggml-large-v3-turbo.bin"
-	defaultModelURL  = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+	defaultModelName = "ggml-base.bin"
+	defaultModelURL  = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
 	maxModelBytes    = 2 << 30
 )
+
+var previousDefaultModelNames = map[string]struct{}{
+	"ggml-large-v3-turbo.bin": {},
+}
 
 type LocalWhisperConfig struct {
 	Mode        string `json:"mode"`
@@ -114,9 +118,10 @@ func SetupLocalWhisper(ctx context.Context) (SetupResult, error) {
 	} else {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("whisper-cli was not found on PATH: %v", err))
 	}
-	modelPath, err := ResolveModel(next.ModelPath)
+	configuredModelPath := strings.TrimSpace(next.ModelPath)
+	modelPath, err := ResolveModel(configuredModelPath)
 	defaultModelPath := filepath.Join(DefaultModelDir(), defaultModelName)
-	if err != nil || shouldUseCurrentDefaultModel(next.ModelPath, modelPath) {
+	if configuredModelPath == "" || err != nil || shouldUseCurrentDefaultModel(configuredModelPath, modelPath) {
 		modelPath = defaultModelPath
 		if _, statErr := existingFile(modelPath); statErr != nil {
 			if err := downloadFile(ctx, defaultModelURL, modelPath); err != nil {
@@ -149,14 +154,12 @@ func shouldUseCurrentDefaultModel(configured, resolved string) bool {
 	if filepath.Clean(filepath.Dir(resolved)) != filepath.Clean(DefaultModelDir()) {
 		return false
 	}
-	switch filepath.Base(resolved) {
-	case defaultModelName:
-		return false
-	case "ggml-base.bin", "ggml-small.bin", "ggml-tiny.bin":
-		return true
-	default:
+	name := filepath.Base(resolved)
+	if name == defaultModelName {
 		return false
 	}
+	_, ok := previousDefaultModelNames[name]
+	return ok
 }
 
 func ConfigDTO(cfg config.VoiceSTTConfig) LocalWhisperConfig {
@@ -201,7 +204,7 @@ func modelCandidates() []string {
 	modelDir := DefaultModelDir()
 	for _, name := range []string{
 		defaultModelName,
-		"ggml-base.bin",
+		"ggml-large-v3-turbo.bin",
 		"ggml-small.bin",
 		"ggml-tiny.bin",
 		"ggml-large-v3.bin",
