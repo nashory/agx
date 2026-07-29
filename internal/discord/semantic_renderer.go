@@ -344,7 +344,7 @@ func (r SemanticRenderer) Unsupported(task agentstream.TaskSummary) RenderAction
 	return RenderAction{
 		Kind: RenderSend,
 		Content: fmt.Sprintf(
-			"%s does not support structured Discord streaming yet.\nOpen the task in AGX Desktop, or use `/logs` for a terminal snapshot.",
+			"%s does not support structured Discord streaming yet.\nOpen the task in AGX Desktop, or use `/logs` for AGX runtime diagnostics.",
 			agent,
 		),
 		HighPriority: true,
@@ -360,7 +360,7 @@ func (r SemanticRenderer) errorMessages(errText string) []RenderAction {
 	if summary != "" {
 		content += ": " + summary
 	}
-	content += "\nDetails are available in AGX Desktop or `/logs`."
+	content += "\nDetails are available in AGX Desktop. Use `/logs` for runtime diagnostics."
 	return []RenderAction{{
 		Kind:         RenderSend,
 		Content:      content,

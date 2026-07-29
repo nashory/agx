@@ -376,6 +376,11 @@ func (s panicCommandService) TaskLogs(context.Context, string, int) (string, err
 	return "", nil
 }
 
+func (s panicCommandService) RuntimeLogs(context.Context, int) (string, error) {
+	s.t.Fatal("RuntimeLogs should not be called")
+	return "", nil
+}
+
 func (s panicCommandService) SendTaskMessage(context.Context, string, IncomingTaskMessage) (SendTaskMessageResult, error) {
 	s.t.Fatal("SendTaskMessage should not be called")
 	return SendTaskMessageResult{}, nil

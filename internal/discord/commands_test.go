@@ -36,6 +36,7 @@ type fakeCommandService struct {
 	createdProject          ProjectSummary
 	deletedProject          ProjectSummary
 	logs                    string
+	runtimeLogs             string
 	channel                 map[string]string
 	resolvedRef             string
 	resolveTaskErr          error
@@ -212,6 +213,10 @@ func (f *fakeCommandService) KillTask(ctx context.Context, taskID, channelID str
 
 func (f *fakeCommandService) TaskLogs(ctx context.Context, taskID string, lines int) (string, error) {
 	return f.logs, nil
+}
+
+func (f *fakeCommandService) RuntimeLogs(ctx context.Context, lines int) (string, error) {
+	return f.runtimeLogs, nil
 }
 
 func (f *fakeCommandService) SendTaskMessage(ctx context.Context, taskID string, message IncomingTaskMessage) (SendTaskMessageResult, error) {
@@ -756,8 +761,8 @@ func TestCommandRouterRequiresTaskIDInControlChannel(t *testing.T) {
 	}
 }
 
-func TestCommandRouterLogsUsesChannelTask(t *testing.T) {
-	service := &fakeCommandService{logs: "hello", channel: map[string]string{"channel-1": "task-1"}}
+func TestCommandRouterLogsShowsRuntimeLogs(t *testing.T) {
+	service := &fakeCommandService{runtimeLogs: "runtime crashed", channel: map[string]string{"channel-1": "task-1"}}
 	router := NewCommandRouter(config.DiscordConfig{AllowedUserIDs: []string{"user"}}, service)
 
 	response, err := router.Execute(context.Background(), CommandInput{
@@ -769,7 +774,7 @@ func TestCommandRouterLogsUsesChannelTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Content != "```\nhello\n```" {
+	if response.Content != "```\nruntime crashed\n```" {
 		t.Fatalf("response = %q", response.Content)
 	}
 }
@@ -867,7 +872,7 @@ func TestCommandRouterTaskLogsResolvesTaskRef(t *testing.T) {
 	}
 }
 
-func TestCommandRouterLogsRejectedInControlChannel(t *testing.T) {
+func TestCommandRouterLogsStillTaskScoped(t *testing.T) {
 	service := &fakeCommandService{control: map[string]bool{"control": true}}
 	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
 
@@ -885,18 +890,21 @@ func TestCommandRouterLogsRejectedInControlChannel(t *testing.T) {
 	}
 }
 
-func TestCommandRouterLogsCleansTerminalNoise(t *testing.T) {
+func TestCommandRouterTaskLogsCleansTerminalNoise(t *testing.T) {
 	service := &fakeCommandService{
 		logs:    "Using AI Gateway (Vertex upstream)\nactual log\n>> accept edits on (shift+tab to cycle)",
-		channel: map[string]string{"channel-1": "task-1"},
+		control: map[string]bool{"control": true},
+		tasks:   []TaskSummary{{ID: "task-1", Title: "My Task"}},
 	}
-	router := NewCommandRouter(config.DiscordConfig{AllowedUserIDs: []string{"user"}}, service)
+	router := NewCommandRouter(config.DiscordConfig{GuildID: "guild-1", AllowedUserIDs: []string{"user"}}, service)
 
 	response, err := router.Execute(context.Background(), CommandInput{
-		Name:      "logs",
-		ChannelID: "channel-1",
-		UserID:    "user",
-		Options:   map[string]string{"lines": "20"},
+		Name:       "task",
+		Subcommand: "logs",
+		GuildID:    "guild-1",
+		ChannelID:  "control",
+		UserID:     "user",
+		Options:    map[string]string{"task": "My Task", "lines": "20"},
 	})
 	if err != nil {
 		t.Fatal(err)

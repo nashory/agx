@@ -55,6 +55,7 @@ type CommandService interface {
 	InterruptTask(ctx context.Context, taskID string) error
 	KillTask(ctx context.Context, taskID, channelID string) error
 	TaskLogs(ctx context.Context, taskID string, lines int) (string, error)
+	RuntimeLogs(ctx context.Context, lines int) (string, error)
 	SendTaskMessage(ctx context.Context, taskID string, message IncomingTaskMessage) (SendTaskMessageResult, error)
 }
 
@@ -332,7 +333,7 @@ func ApplicationCommands() []*discordgo.ApplicationCommand {
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 					Name:        "logs",
-					Description: "Show recent output for an AGX task",
+					Description: "Show recent terminal output for an AGX task",
 					Options: []*discordgo.ApplicationCommandOption{
 						{Type: discordgo.ApplicationCommandOptionString, Name: "task", Description: "Task id, id prefix, or title", Required: true},
 						{Type: discordgo.ApplicationCommandOptionInteger, Name: "lines", Description: "Number of lines", Required: false},
@@ -352,7 +353,7 @@ func ApplicationCommands() []*discordgo.ApplicationCommand {
 		},
 		{
 			Name:        "logs",
-			Description: "Show recent output for this AGX task channel",
+			Description: "Show recent AGX runtime logs",
 			Options: []*discordgo.ApplicationCommandOption{
 				{Type: discordgo.ApplicationCommandOptionInteger, Name: "lines", Description: "Number of lines", Required: false},
 			},
@@ -412,7 +413,7 @@ func (r *CommandRouter) Execute(ctx context.Context, input CommandInput) (Comman
 		case "delete":
 			return r.taskDelete(ctx, input)
 		case "logs":
-			return r.logs(ctx, input)
+			return r.taskLogs(ctx, input)
 		}
 		return CommandResponse{}, fmt.Errorf("unknown task command %q", input.Subcommand)
 	case "interrupt":
@@ -424,7 +425,7 @@ func (r *CommandRouter) Execute(ctx context.Context, input CommandInput) (Comman
 	case "status":
 		return r.status(ctx, input)
 	case "logs":
-		return r.logs(ctx, input)
+		return r.runtimeLogs(ctx, input)
 	case "heartbeat":
 		return r.heartbeat(ctx, input)
 	case "help":
@@ -579,7 +580,7 @@ func (r *CommandRouter) handlePlainTaskMessage(ctx context.Context, taskID strin
 		if agentstream.IsUnsupported(err) {
 			task, taskErr := r.service.GetTask(ctx, taskID)
 			if taskErr != nil {
-				return CommandResponse{Content: "This agent does not support structured Discord streaming yet.\nOpen the task in AGX Desktop, or use `/logs` for a terminal snapshot."}, nil
+				return CommandResponse{Content: "This agent does not support structured Discord streaming yet.\nOpen the task in AGX Desktop, or use `/logs` for AGX runtime diagnostics."}, nil
 			}
 			return CommandResponse{Content: NewSemanticRenderer().Unsupported(toAgentStreamTask(task)).Content}, nil
 		}
@@ -844,21 +845,14 @@ func (r *CommandRouter) status(ctx context.Context, input CommandInput) (Command
 	return CommandResponse{Content: fmt.Sprintf("`%s` %s %s - %s", shortID(task.ID), task.Status, task.Agent, task.Title)}, nil
 }
 
-func (r *CommandRouter) logs(ctx context.Context, input CommandInput) (CommandResponse, error) {
+func (r *CommandRouter) taskLogs(ctx context.Context, input CommandInput) (CommandResponse, error) {
 	taskID, err := r.logsTaskID(ctx, input)
 	if err != nil {
 		return CommandResponse{}, err
 	}
-	lines := 50
-	if raw := strings.TrimSpace(input.Options["lines"]); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed <= 0 {
-			return CommandResponse{}, fmt.Errorf("lines must be a positive integer")
-		}
-		if parsed > 500 {
-			parsed = 500
-		}
-		lines = parsed
+	lines, err := commandLogLines(input)
+	if err != nil {
+		return CommandResponse{}, err
 	}
 	logs, err := r.service.TaskLogs(ctx, taskID, lines)
 	if err != nil {
@@ -868,6 +862,36 @@ func (r *CommandRouter) logs(ctx context.Context, input CommandInput) (CommandRe
 		logs = "(no output captured)"
 	}
 	return CommandResponse{Content: FormatLogOutputMessage(logs)}, nil
+}
+
+func (r *CommandRouter) runtimeLogs(ctx context.Context, input CommandInput) (CommandResponse, error) {
+	lines, err := commandLogLines(input)
+	if err != nil {
+		return CommandResponse{}, err
+	}
+	logs, err := r.service.RuntimeLogs(ctx, lines)
+	if err != nil {
+		return CommandResponse{}, err
+	}
+	if strings.TrimSpace(logs) == "" {
+		logs = "(no runtime logs captured)"
+	}
+	return CommandResponse{Content: FormatLogOutputMessage(logs)}, nil
+}
+
+func commandLogLines(input CommandInput) (int, error) {
+	lines := 50
+	if raw := strings.TrimSpace(input.Options["lines"]); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			return 0, fmt.Errorf("lines must be a positive integer")
+		}
+		if parsed > 500 {
+			parsed = 500
+		}
+		lines = parsed
+	}
+	return lines, nil
 }
 
 func (r *CommandRouter) heartbeat(ctx context.Context, input CommandInput) (CommandResponse, error) {
@@ -986,8 +1010,7 @@ func (r *CommandRouter) taskID(ctx context.Context, input CommandInput) (string,
 
 // logsTaskID resolves the task whose logs should be shown. An explicit `task`
 // option (used by `/task logs` in #agx-control) is resolved by id, id prefix, or
-// title; otherwise the task is inferred from the current task channel so a bare
-// `/logs` works in a task channel.
+// title; otherwise the task is inferred from the current task channel.
 func (r *CommandRouter) logsTaskID(ctx context.Context, input CommandInput) (string, error) {
 	if ref := strings.TrimSpace(input.Options["task"]); ref != "" {
 		task, err := r.service.ResolveTask(ctx, ref)
@@ -1018,7 +1041,7 @@ func commandHelp() string {
 		"`/runtime restart` - restart the AGX runtime service",
 		"`/dangerously-reset-everything confirm:reset` - delete ALL projects, tasks, and managed channels",
 		"`/status task:<id>`, `/task logs task:<name-or-id>` - inspect tasks from `#agx-control`",
-		"`/logs` - show recent output in an AGX task channel (crash/error diagnosis)",
+		"`/logs` - show recent AGX runtime logs for crash/error diagnosis",
 		"`/interrupt` - interrupt the current task turn in an AGX task channel",
 		"`/clear` - clear the current task agent context in an AGX task channel",
 		"`/kill` - delete the current task and remove its Discord task channel",
