@@ -64,6 +64,23 @@ describe('TaskBoardItems', () => {
     expect(screen.queryByRole('checkbox', { name: 'Select Ship it' })).toBeNull();
   });
 
+  it('shows Discord sync status on task cards', () => {
+    render(<TaskCard task={{
+      ...task,
+      interface: 'discord',
+      discordSync: {
+        status: 'failed',
+        attempts: 2,
+        lastFailureAt: '2026-01-01T00:00:00Z',
+        lastError: 'context deadline exceeded',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    }} busy={false} focused={false} onFocus={vi.fn()} onOpen={vi.fn()} onAction={vi.fn()} />);
+
+    expect(screen.getByText('Sync failed')).not.toBeNull();
+    expect(screen.getByText('2 attempts')).not.toBeNull();
+  });
+
   it('uses card clicks for selection while selection mode is active', async () => {
     const user = userEvent.setup();
     const onToggleSelect = vi.fn();

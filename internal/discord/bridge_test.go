@@ -163,6 +163,16 @@ func TestBridgeSoftSyncReturnsInProgress(t *testing.T) {
 	}
 }
 
+func TestUnsupportedCommandPermissionsError(t *testing.T) {
+	err := errors.New(`configure /status permissions: HTTP 403 Forbidden, {"message": "Bots cannot use this endpoint", "code": 20001}`)
+	if !isUnsupportedCommandPermissionsError(err) {
+		t.Fatalf("isUnsupportedCommandPermissionsError(%v) = false, want true", err)
+	}
+	if isUnsupportedCommandPermissionsError(errors.New("context deadline exceeded")) {
+		t.Fatal("context deadline exceeded should not be treated as unsupported command permissions")
+	}
+}
+
 func TestBridgeSyncTaskChannelReturnsInProgressDuringHardSync(t *testing.T) {
 	store, err := db.OpenMemory()
 	if err != nil {

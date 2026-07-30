@@ -2205,6 +2205,44 @@
   padding-right: 118px;
 }
 
+.task-sync-row {
+  max-width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-right: 118px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.task-sync-row span {
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: var(--surface-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-sync-row.synced span:first-child {
+  border-color: var(--success-border);
+  color: var(--success);
+}
+
+.task-sync-row.failed span:first-child {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: var(--danger);
+}
+
+.task-sync-row.pending span:first-child {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
 .task-card.selectable .task-open {
   padding-left: 28px;
 }

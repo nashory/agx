@@ -33,28 +33,28 @@ type Status struct {
 // Bridge owns the Discord bot connection and coordinates channel sync, command
 // routing, and live structured-agent event forwarding for one AGX runtime.
 type Bridge struct {
-	lifecycle          sync.Mutex
-	mu                 sync.Mutex
-	hardSync           sync.RWMutex
-	taskSync           chan struct{}
-	maintSync          chan struct{}
-	chanSync           chan struct{}
-	syncState          sync.Mutex
-	active             map[string]activeSync
-	permMu             sync.Mutex
-	permRun            bool
-	permNext           bool
-	cfg                config.DiscordConfig
-	bot                *Bot
-	lock               *Lock
-	service            CommandService
-	events             AgentEventSubscriber
-	store              *db.Store
-	streams            map[string]taskStream
-	ownerChan          string
-	startedAt          time.Time
-	lastErr            string
-	connected          bool
+	lifecycle sync.Mutex
+	mu        sync.Mutex
+	hardSync  sync.RWMutex
+	taskSync  chan struct{}
+	maintSync chan struct{}
+	chanSync  chan struct{}
+	syncState sync.Mutex
+	active    map[string]activeSync
+	permMu    sync.Mutex
+	permRun   bool
+	permNext  bool
+	cfg       config.DiscordConfig
+	bot       *Bot
+	lock      *Lock
+	service   CommandService
+	events    AgentEventSubscriber
+	store     *db.Store
+	streams   map[string]taskStream
+	ownerChan string
+	startedAt time.Time
+	lastErr   string
+	connected bool
 }
 
 type taskStream struct {
@@ -522,6 +522,10 @@ func (b *Bridge) refreshCommandPermissionsBestEffort() {
 		if err == nil {
 			return
 		}
+		if isUnsupportedCommandPermissionsError(err) {
+			log.Printf("operation=%q status=%q error=%q", "discord_permission_refresh", "skipped", err.Error())
+			return
+		}
 		if !errors.Is(err, ErrSyncInProgress) {
 			b.setError(err)
 			return
@@ -549,6 +553,14 @@ func (b *Bridge) refreshCommandPermissions(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func isUnsupportedCommandPermissionsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "bots cannot use this endpoint")
 }
 
 // SoftSync reconciles current AGX task/project state into Discord and removes

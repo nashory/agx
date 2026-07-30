@@ -7,6 +7,8 @@ import { AgentBadge, AllMightyBadge, DiscordBadge, WorkspaceBadge } from '../../
 import type { Task } from '../../types';
 import { IconButton } from '../../ui';
 import {
+  discordSyncLabel,
+  discordSyncTime,
   isDiscordTask,
   relativeTime,
   statusLabel,
@@ -80,12 +82,29 @@ export function TaskCard({
           {task.allMighty && <AllMightyBadge />}
           <AgentBadge agent={task.agent} />
         </span>
+        {isDiscordTask(task) && <TaskDiscordSyncSummary task={task} />}
         <span className="task-activity">Last activity {relativeTime(task.updatedAt)}</span>
         {task.lastUserPrompt && <span className="task-last-prompt">{task.lastUserPrompt}</span>}
       </button>
       <span className={`status-pill task-status-pin ${task.status}`}>{statusLabel(task.status)}</span>
       {!selectable && <TaskActions task={task} busy={busy} onAction={onAction} />}
     </article>
+  );
+}
+
+function TaskDiscordSyncSummary({ task }: { task: Task }) {
+  const sync = task.discordSync;
+  const status = sync?.status ?? 'not-started';
+  const time = discordSyncTime(sync);
+  const attempts = sync?.attempts ?? 0;
+  const title = sync?.lastError ? `Discord sync error: ${sync.lastError}` : 'Discord sync status';
+
+  return (
+    <span className={`task-sync-row ${status}`} title={title}>
+      <span>{discordSyncLabel(sync)}</span>
+      {attempts > 0 && <span>{attempts} attempt{attempts === 1 ? '' : 's'}</span>}
+      {time && <span>{time}</span>}
+    </span>
   );
 }
 
