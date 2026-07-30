@@ -355,7 +355,7 @@ func ApplicationCommands() []*discordgo.ApplicationCommand {
 			Name:        "logs",
 			Description: "Show recent AGX runtime logs",
 			Options: []*discordgo.ApplicationCommandOption{
-				{Type: discordgo.ApplicationCommandOptionInteger, Name: "lines", Description: "Number of lines", Required: false},
+				{Type: discordgo.ApplicationCommandOptionInteger, Name: "lines", Description: "Number of lines (default 10)", Required: false},
 			},
 		},
 		{Name: "heartbeat", Description: "Check AGX health for this channel"},
@@ -850,7 +850,7 @@ func (r *CommandRouter) taskLogs(ctx context.Context, input CommandInput) (Comma
 	if err != nil {
 		return CommandResponse{}, err
 	}
-	lines, err := commandLogLines(input)
+	lines, err := commandLogLines(input, 50)
 	if err != nil {
 		return CommandResponse{}, err
 	}
@@ -865,7 +865,7 @@ func (r *CommandRouter) taskLogs(ctx context.Context, input CommandInput) (Comma
 }
 
 func (r *CommandRouter) runtimeLogs(ctx context.Context, input CommandInput) (CommandResponse, error) {
-	lines, err := commandLogLines(input)
+	lines, err := commandLogLines(input, 10)
 	if err != nil {
 		return CommandResponse{}, err
 	}
@@ -879,8 +879,8 @@ func (r *CommandRouter) runtimeLogs(ctx context.Context, input CommandInput) (Co
 	return CommandResponse{Content: FormatLogOutputMessage(logs)}, nil
 }
 
-func commandLogLines(input CommandInput) (int, error) {
-	lines := 50
+func commandLogLines(input CommandInput, defaultLines int) (int, error) {
+	lines := defaultLines
 	if raw := strings.TrimSpace(input.Options["lines"]); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 {

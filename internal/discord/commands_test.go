@@ -36,7 +36,9 @@ type fakeCommandService struct {
 	createdProject          ProjectSummary
 	deletedProject          ProjectSummary
 	logs                    string
+	taskLogLines            int
 	runtimeLogs             string
+	runtimeLogLines         int
 	channel                 map[string]string
 	resolvedRef             string
 	resolveTaskErr          error
@@ -212,10 +214,12 @@ func (f *fakeCommandService) KillTask(ctx context.Context, taskID, channelID str
 }
 
 func (f *fakeCommandService) TaskLogs(ctx context.Context, taskID string, lines int) (string, error) {
+	f.taskLogLines = lines
 	return f.logs, nil
 }
 
 func (f *fakeCommandService) RuntimeLogs(ctx context.Context, lines int) (string, error) {
+	f.runtimeLogLines = lines
 	return f.runtimeLogs, nil
 }
 
@@ -769,13 +773,34 @@ func TestCommandRouterLogsShowsRuntimeLogs(t *testing.T) {
 		Name:      "logs",
 		ChannelID: "channel-1",
 		UserID:    "user",
+		Options:   map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.runtimeLogLines != 10 {
+		t.Fatalf("runtime log lines = %d, want default 10", service.runtimeLogLines)
+	}
+	if response.Content != "```\nruntime crashed\n```" {
+		t.Fatalf("response = %q", response.Content)
+	}
+}
+
+func TestCommandRouterLogsHonorsExplicitLineCount(t *testing.T) {
+	service := &fakeCommandService{runtimeLogs: "runtime crashed", channel: map[string]string{"channel-1": "task-1"}}
+	router := NewCommandRouter(config.DiscordConfig{AllowedUserIDs: []string{"user"}}, service)
+
+	_, err := router.Execute(context.Background(), CommandInput{
+		Name:      "logs",
+		ChannelID: "channel-1",
+		UserID:    "user",
 		Options:   map[string]string{"lines": "20"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Content != "```\nruntime crashed\n```" {
-		t.Fatalf("response = %q", response.Content)
+	if service.runtimeLogLines != 20 {
+		t.Fatalf("runtime log lines = %d, want explicit 20", service.runtimeLogLines)
 	}
 }
 
@@ -866,6 +891,9 @@ func TestCommandRouterTaskLogsResolvesTaskRef(t *testing.T) {
 	}
 	if service.resolvedRef != "My Task" {
 		t.Fatalf("resolvedRef = %q, want My Task", service.resolvedRef)
+	}
+	if service.taskLogLines != 50 {
+		t.Fatalf("task log lines = %d, want default 50", service.taskLogLines)
 	}
 	if response.Content != "```\nboom\n```" {
 		t.Fatalf("response = %q", response.Content)
