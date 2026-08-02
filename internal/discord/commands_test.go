@@ -1266,7 +1266,7 @@ func TestCommandRouterPlainMessageReportsUnsupportedAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(response.Content, "structured Discord streaming") || !strings.Contains(response.Content, "/logs") {
+	if !strings.Contains(response.Content, "structured Discord streaming") || !strings.Contains(response.Content, "AGX Desktop") || strings.Contains(response.Content, "/logs") {
 		t.Fatalf("response = %q, want unsupported guidance", response.Content)
 	}
 }

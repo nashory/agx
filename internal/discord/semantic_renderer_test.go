@@ -66,8 +66,34 @@ func TestSemanticRendererRendersSummarizedError(t *testing.T) {
 	if !strings.Contains(send.Content, "AGX agent error: detailed failure: connection refused while starting the agent") {
 		t.Fatalf("content dropped the error summary: %q", send.Content)
 	}
-	if !strings.Contains(send.Content, "Details are available") || !strings.Contains(send.Content, "`/logs`") {
-		t.Fatalf("content = %q, want logs guidance", send.Content)
+	if !strings.Contains(send.Content, "AGX Desktop task transcript") || strings.Contains(send.Content, "`/logs`") {
+		t.Fatalf("content = %q, want task transcript guidance without logs guidance", send.Content)
+	}
+}
+
+func TestSemanticRendererRendersReconnectingErrorAsProgress(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	actions := renderer.Render(agentstream.Event{
+		Kind: agentstream.EventError,
+		Error: strings.Join([]string{
+			"Reconnecting... 3/5",
+			"",
+			"Recent codex output:",
+			"ERROR opentelemetry_sdk: Bad Gateway",
+		}, "\n"),
+	})
+	if len(actions) != 1 {
+		t.Fatalf("len(actions) = %d, want progress update only", len(actions))
+	}
+	action := actions[0]
+	if action.Kind != RenderUpdateProgress || action.HighPriority {
+		t.Fatalf("action = %#v, want non-priority progress update", action)
+	}
+	if !strings.Contains(action.Content, "Reconnecting... 3/5") {
+		t.Fatalf("content = %q, want reconnect summary", action.Content)
+	}
+	if strings.Contains(action.Content, "Recent codex output") {
+		t.Fatalf("content includes raw recent output: %q", action.Content)
 	}
 }
 
@@ -221,8 +247,8 @@ func TestSemanticRendererRendersUnsupportedAgent(t *testing.T) {
 	if action.Kind != RenderSend || !action.HighPriority {
 		t.Fatalf("action = %#v, want high-priority send", action)
 	}
-	if !strings.Contains(action.Content, "gemini") || !strings.Contains(action.Content, "/logs") {
-		t.Fatalf("content = %q, want agent and logs guidance", action.Content)
+	if !strings.Contains(action.Content, "gemini") || !strings.Contains(action.Content, "AGX Desktop") || strings.Contains(action.Content, "/logs") {
+		t.Fatalf("content = %q, want agent and desktop guidance without logs guidance", action.Content)
 	}
 }
 

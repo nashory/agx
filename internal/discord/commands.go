@@ -580,7 +580,7 @@ func (r *CommandRouter) handlePlainTaskMessage(ctx context.Context, taskID strin
 		if agentstream.IsUnsupported(err) {
 			task, taskErr := r.service.GetTask(ctx, taskID)
 			if taskErr != nil {
-				return CommandResponse{Content: "This agent does not support structured Discord streaming yet.\nOpen the task in AGX Desktop, or use `/logs` for AGX runtime diagnostics."}, nil
+				return CommandResponse{Content: "This agent does not support structured Discord streaming yet.\nOpen the task in AGX Desktop to follow progress."}, nil
 			}
 			return CommandResponse{Content: NewSemanticRenderer().Unsupported(toAgentStreamTask(task)).Content}, nil
 		}

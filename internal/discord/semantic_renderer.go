@@ -329,6 +329,9 @@ func (r SemanticRenderer) Render(event agentstream.Event) []RenderAction {
 	case agentstream.EventInterrupted:
 		return []RenderAction{{Kind: RenderUpdateProgress, Content: "⏹️ Interrupted."}}
 	case agentstream.EventError:
+		if summary, ok := reconnectingAgentError(event.Error); ok {
+			return []RenderAction{{Kind: RenderUpdateProgress, Content: "⚠️ Agent stream reconnecting: " + summary}}
+		}
 		actions := []RenderAction{{Kind: RenderClearProgress}}
 		return append(actions, r.errorMessages(event.Error)...)
 	default:
@@ -344,7 +347,7 @@ func (r SemanticRenderer) Unsupported(task agentstream.TaskSummary) RenderAction
 	return RenderAction{
 		Kind: RenderSend,
 		Content: fmt.Sprintf(
-			"%s does not support structured Discord streaming yet.\nOpen the task in AGX Desktop, or use `/logs` for AGX runtime diagnostics.",
+			"%s does not support structured Discord streaming yet.\nOpen the task in AGX Desktop to follow progress.",
 			agent,
 		),
 		HighPriority: true,
@@ -352,20 +355,28 @@ func (r SemanticRenderer) Unsupported(task agentstream.TaskSummary) RenderAction
 }
 
 // errorMessages intentionally keeps Discord terse. Full agent/tool errors are
-// already preserved in task logs; sending raw multi-line failures to Discord can
-// flood a task channel.
+// already preserved in the task transcript; sending raw multi-line failures to
+// Discord can flood a task channel.
 func (r SemanticRenderer) errorMessages(errText string) []RenderAction {
 	summary := summarizeAgentError(errText)
 	content := "❌ AGX agent error"
 	if summary != "" {
 		content += ": " + summary
 	}
-	content += "\nDetails are available in AGX Desktop. Use `/logs` for runtime diagnostics."
+	content += "\nDetails are available in the AGX Desktop task transcript."
 	return []RenderAction{{
 		Kind:         RenderSend,
 		Content:      content,
 		HighPriority: true,
 	}}
+}
+
+func reconnectingAgentError(errText string) (string, bool) {
+	summary := summarizeAgentError(errText)
+	if strings.HasPrefix(summary, "Reconnecting... ") {
+		return summary, true
+	}
+	return "", false
 }
 
 func summarizeAgentError(errText string) string {
