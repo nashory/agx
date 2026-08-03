@@ -86,6 +86,44 @@ func TestClientPublishesNotifications(t *testing.T) {
 	}
 }
 
+func TestClientPublishesLargeNotificationFrame(t *testing.T) {
+	server, clientConn := net.Pipe()
+	defer server.Close()
+	defer clientConn.Close()
+	client := NewClient(clientConn, clientConn, clientConn)
+
+	delta := strings.Repeat("x", 8*1024*1024+1024)
+	payload, err := json.Marshal(map[string]any{
+		"method": NotifyAgentMessageDelta,
+		"params": map[string]any{"delta": delta},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(payload, '\n')
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := server.Write(payload)
+		done <- err
+	}()
+
+	select {
+	case notification := <-client.Events():
+		if notification.Method != NotifyAgentMessageDelta {
+			t.Fatalf("method = %q, want %q", notification.Method, NotifyAgentMessageDelta)
+		}
+		if !strings.Contains(string(notification.Params[:128]), `"delta":"`) {
+			t.Fatalf("params prefix = %q, want delta JSON", string(notification.Params[:128]))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for large notification")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClientTreatsServerRequestAsNotification(t *testing.T) {
 	server, clientConn := net.Pipe()
 	defer server.Close()

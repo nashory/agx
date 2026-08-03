@@ -2,8 +2,10 @@ package codexapp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -48,6 +50,11 @@ type Client struct {
 // cannot grow the buffer without limit; only the most recent lines matter for
 // diagnosing a failure.
 const maxStderrLines = 100
+
+const (
+	maxAppServerFrameBytes = 64 * 1024 * 1024
+	maxStderrLineBytes     = 4 * 1024 * 1024
+)
 
 // Notification is a server-initiated Codex app-server message. A server-initiated
 // request (one that expects a response, such as an approval request) carries a
@@ -136,21 +143,38 @@ func (c *Client) captureStderr(reader io.Reader) {
 		return
 	}
 	go func() {
-		scanner := bufio.NewScanner(reader)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := strings.TrimRight(scanner.Text(), "\r")
+		buffered := bufio.NewReaderSize(reader, 64*1024)
+		for {
+			raw, ok, err := readLineLimited(buffered, maxStderrLineBytes, "codex app-server stderr line")
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return
+				}
+				c.appendStderrLine(err.Error())
+				if isLineTooLong(err) {
+					continue
+				}
+				return
+			}
+			if !ok {
+				return
+			}
+			line := strings.TrimRight(string(raw), "\r\n")
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			c.stderrMu.Lock()
-			c.stderrBuf = append(c.stderrBuf, line)
-			if len(c.stderrBuf) > maxStderrLines {
-				c.stderrBuf = c.stderrBuf[len(c.stderrBuf)-maxStderrLines:]
-			}
-			c.stderrMu.Unlock()
+			c.appendStderrLine(line)
 		}
 	}()
+}
+
+func (c *Client) appendStderrLine(line string) {
+	c.stderrMu.Lock()
+	defer c.stderrMu.Unlock()
+	c.stderrBuf = append(c.stderrBuf, line)
+	if len(c.stderrBuf) > maxStderrLines {
+		c.stderrBuf = c.stderrBuf[len(c.stderrBuf)-maxStderrLines:]
+	}
 }
 
 // RecentStderr returns the most recent app-server stderr lines captured so far.
@@ -307,15 +331,24 @@ func (c *Client) callRaw(ctx context.Context, method string, params any) (json.R
 func (c *Client) readLoop(reader io.Reader) {
 	defer close(c.done)
 	defer close(c.events)
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+	buffered := bufio.NewReaderSize(reader, 64*1024)
+	for {
+		line, ok, err := readLineLimited(buffered, maxAppServerFrameBytes, "codex app-server message")
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				c.fail(err)
+			}
+			return
+		}
+		if !ok {
+			return
+		}
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
 			continue
 		}
 		var message rpcMessage
-		if err := json.Unmarshal([]byte(line), &message); err != nil {
+		if err := json.Unmarshal(line, &message); err != nil {
 			c.fail(fmt.Errorf("decode codex app-server message: %w", err))
 			return
 		}
@@ -327,9 +360,71 @@ func (c *Client) readLoop(reader io.Reader) {
 			c.handleResponse(message)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		c.fail(err)
+}
+
+type lineTooLongError struct {
+	source string
+	limit  int
+}
+
+func (e lineTooLongError) Error() string {
+	return fmt.Sprintf("%s exceeded %s limit", e.source, formatByteLimit(e.limit))
+}
+
+func isLineTooLong(err error) bool {
+	var tooLong lineTooLongError
+	return errors.As(err, &tooLong)
+}
+
+func readLineLimited(reader *bufio.Reader, maxBytes int, source string) ([]byte, bool, error) {
+	var line []byte
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if len(fragment) > 0 {
+			if len(line)+len(fragment) > maxBytes {
+				if !bytes.Contains(fragment, []byte{'\n'}) {
+					discardLine(reader)
+				}
+				return nil, false, lineTooLongError{source: source, limit: maxBytes}
+			}
+			line = append(line, fragment...)
+		}
+		switch {
+		case err == nil:
+			return line, true, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			if len(line) > 0 {
+				return line, true, nil
+			}
+			return nil, false, io.EOF
+		default:
+			return nil, false, err
+		}
 	}
+}
+
+func discardLine(reader *bufio.Reader) {
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if bytes.Contains(fragment, []byte{'\n'}) || err == nil || errors.Is(err, io.EOF) {
+			return
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return
+		}
+	}
+}
+
+func formatByteLimit(size int) string {
+	if size%(1024*1024) == 0 {
+		return fmt.Sprintf("%d MiB", size/(1024*1024))
+	}
+	if size%1024 == 0 {
+		return fmt.Sprintf("%d KiB", size/1024)
+	}
+	return fmt.Sprintf("%d bytes", size)
 }
 
 func rawIDString(raw json.RawMessage) string {
