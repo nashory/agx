@@ -57,6 +57,9 @@ type Event struct {
 	Question *QuestionEvent
 	Result   *ResultEvent
 	Error    string
+
+	// DiagnosticID links terse UI error messages to local raw diagnostic logs.
+	DiagnosticID string
 }
 
 type CommandEvent struct {

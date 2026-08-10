@@ -65,6 +65,7 @@ func TestRuntimeBackedInvocationCoversStatefulCommands(t *testing.T) {
 		{args: []string{"agx", "interrupt"}, want: true},
 		{args: []string{"agx", "attach"}, want: true},
 		{args: []string{"agx", "discord", "connect"}, want: true},
+		{args: []string{"agx", "diagnostics", "show"}, want: true},
 		{args: []string{"agx", "chat", "sync"}, want: true},
 		{args: []string{"agx", "launch"}, want: true},
 		{args: []string{"agx", "task", "create"}, want: true},

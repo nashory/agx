@@ -726,6 +726,9 @@ func (s *agentEventService) taskIDForNotificationLocked(notification codexapp.No
 }
 
 func (s *agentEventService) publish(taskID string, event agentstream.Event) {
+	if event.Kind == agentstream.EventError {
+		event = s.attachAgentErrorDiagnostic(taskID, event)
+	}
 	s.persistTranscriptEvent(taskID, event)
 	s.mu.Lock()
 	subscribers := s.subscribers[taskID]
@@ -781,6 +784,9 @@ func (s *agentEventService) persistTranscriptEvent(taskID string, event agentstr
 			body = "Error: " + event.Error
 		} else {
 			body = event.Text
+		}
+		if diagnosticID := strings.TrimSpace(event.DiagnosticID); diagnosticID != "" {
+			body = strings.TrimSpace(body) + "\nDiagnostic ID: " + diagnosticID
 		}
 	case agentstream.EventInterrupted:
 		role = "status"

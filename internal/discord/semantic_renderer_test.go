@@ -71,6 +71,22 @@ func TestSemanticRendererRendersSummarizedError(t *testing.T) {
 	}
 }
 
+func TestSemanticRendererIncludesDiagnosticIDForErrors(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	actions := renderer.Render(agentstream.Event{
+		Kind:         agentstream.EventError,
+		Error:        "content was flagged",
+		DiagnosticID: "err_20260810_145300_ab12cd34",
+	})
+	if len(actions) != 2 {
+		t.Fatalf("len(actions) = %d, want clear + message", len(actions))
+	}
+	content := actions[1].Content
+	if !strings.Contains(content, "Diagnostic ID: `err_20260810_145300_ab12cd34`") {
+		t.Fatalf("content = %q, want diagnostic id", content)
+	}
+}
+
 func TestSemanticRendererRendersReconnectingErrorAsProgress(t *testing.T) {
 	renderer := NewSemanticRenderer()
 	actions := renderer.Render(agentstream.Event{

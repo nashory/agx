@@ -56,7 +56,7 @@ func isRuntimeBackedInvocation(args []string) bool {
 		return false
 	}
 	switch args[1] {
-	case "run", "ps", "logs", "send", "stop", "interrupt", "attach", "chat", "discord", "attachment", "launch":
+	case "run", "ps", "logs", "send", "stop", "interrupt", "attach", "chat", "discord", "attachment", "diagnostics", "launch":
 		return true
 	case "agent":
 		return len(args) >= 3 && args[2] == "list"
@@ -94,6 +94,7 @@ func executeRuntimeBackedCommand() {
 		newRuntimeClientProjectCmd(client),
 		newRuntimeClientAgentCmd(client),
 		newRuntimeClientDiscordCmd(client),
+		newDiagnosticsCmd(),
 		newLaunchCmd(),
 		newRuntimeClientAttachmentCmd(),
 		newVoiceSTTCmd(),

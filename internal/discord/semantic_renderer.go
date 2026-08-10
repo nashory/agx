@@ -333,7 +333,7 @@ func (r SemanticRenderer) Render(event agentstream.Event) []RenderAction {
 			return []RenderAction{{Kind: RenderUpdateProgress, Content: "⚠️ Agent stream reconnecting: " + summary}}
 		}
 		actions := []RenderAction{{Kind: RenderClearProgress}}
-		return append(actions, r.errorMessages(event.Error)...)
+		return append(actions, r.errorMessages(event.Error, event.DiagnosticID)...)
 	default:
 		return nil
 	}
@@ -357,11 +357,14 @@ func (r SemanticRenderer) Unsupported(task agentstream.TaskSummary) RenderAction
 // errorMessages intentionally keeps Discord terse. Full agent/tool errors are
 // already preserved in the task transcript; sending raw multi-line failures to
 // Discord can flood a task channel.
-func (r SemanticRenderer) errorMessages(errText string) []RenderAction {
+func (r SemanticRenderer) errorMessages(errText, diagnosticID string) []RenderAction {
 	summary := summarizeAgentError(errText)
 	content := "❌ AGX agent error"
 	if summary != "" {
 		content += ": " + summary
+	}
+	if diagnosticID = strings.TrimSpace(diagnosticID); diagnosticID != "" {
+		content += "\nDiagnostic ID: `" + diagnosticID + "`"
 	}
 	content += "\nDetails are available in the AGX Desktop task transcript."
 	return []RenderAction{{
