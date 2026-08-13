@@ -280,6 +280,7 @@ codex
 gemini
 cursor
 copilot
+muse
 opencode
 ```
 

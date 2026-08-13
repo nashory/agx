@@ -99,6 +99,7 @@ describe('appLogic', () => {
     expect(statusLabel('active')).toBe('⚡ active');
     expect(statusClass('unknown-status')).toBe('unknown');
     expect(agentLabel('codex')).toBe('Codex');
+    expect(agentLabel('muse')).toBe('Muse Code');
     expect(agentLabel('')).toBe('Default agent');
   });
 

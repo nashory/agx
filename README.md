@@ -72,6 +72,7 @@ Install at least one supported agent CLI and sign in outside AGX:
 which codex || true
 which claude || true
 which gemini || true
+which muse || true
 ```
 
 Open **AGX** from Applications, add a git project, grant project access, and
@@ -403,6 +404,7 @@ is the global default unless you change it in Desktop Settings or
 | Gemini CLI | `gemini` |
 | Cursor Agent | `agent` |
 | GitHub Copilot CLI | `copilot` |
+| Muse Code | `muse` |
 | OpenCode | `opencode` |
 | Custom agents | configured in `~/.config/agx/config.toml` or `.agx/config.toml` |
 

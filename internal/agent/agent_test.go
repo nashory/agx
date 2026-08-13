@@ -17,6 +17,8 @@ func TestBuildRunCommand(t *testing.T) {
 	codexWant = append(codexWant, "--dangerously-bypass-approvals-and-sandbox", "quote ' and $HOME")
 	claudeWant := append([]string{"missing-claude-for-test"}, SandboxDisableArgs()...)
 	claudeWant = append(claudeWant, "--dangerously-skip-permissions", "implement auth")
+	museWant := append([]string{"muse"}, museAllMightyArgs()...)
+	museWant = append(museWant, "implement auth")
 
 	tests := []struct {
 		name   string
@@ -41,6 +43,12 @@ func TestBuildRunCommand(t *testing.T) {
 			agent:  Agent{Name: "codex", Command: "codex"},
 			prompt: "quote ' and $HOME",
 			want:   codexWant,
+		},
+		{
+			name:   "muse with prompt",
+			agent:  Agent{Name: "muse", Command: "muse"},
+			prompt: "implement auth",
+			want:   museWant,
 		},
 		{
 			name:   "custom agent with args",
@@ -117,6 +125,20 @@ func TestBuildResumeAndPrintCommandForCustomAgent(t *testing.T) {
 	}
 }
 
+func TestBuildResumeAndPrintCommandForMuse(t *testing.T) {
+	ag := Agent{Name: "muse", Command: "muse"}
+	resumeWant := append([]string{"muse"}, museAllMightyArgs()...)
+	resumeWant = append(resumeWant, "resume", "--last")
+	if got, want := ag.BuildResumeCommand(), resumeWant; !reflect.DeepEqual(got, want) {
+		t.Fatalf("BuildResumeCommand() = %#v, want %#v", got, want)
+	}
+	printWant := append([]string{"muse"}, museLauncherSandboxDisableArgs()...)
+	printWant = append(printWant, "exec", "--yolo", "hello")
+	if got, want := ag.BuildPrintCommand("hello"), printWant; !reflect.DeepEqual(got, want) {
+		t.Fatalf("BuildPrintCommand() = %#v, want %#v", got, want)
+	}
+}
+
 func TestRegistryMergesCustomAgents(t *testing.T) {
 	registry := NewRegistry("local", Agent{
 		Name:        "local",
@@ -133,6 +155,9 @@ func TestRegistryMergesCustomAgents(t *testing.T) {
 	}
 	if _, err := registry.Get("claude"); err != nil {
 		t.Fatalf("known agent missing after merge: %v", err)
+	}
+	if _, err := registry.Get("muse"); err != nil {
+		t.Fatalf("muse agent missing after merge: %v", err)
 	}
 }
 

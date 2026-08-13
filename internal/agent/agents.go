@@ -7,6 +7,7 @@ func KnownAgents() []Agent {
 		{Name: "gemini", Command: "gemini", Description: "Gemini CLI", Env: map[string]string{"GEMINI_TRUST_WORKSPACE": "true"}},
 		{Name: "cursor", Command: "agent", Description: "Cursor Agent"},
 		{Name: "copilot", Command: "copilot", Description: "GitHub Copilot CLI"},
+		{Name: "muse", Command: "muse", Description: "Muse Code"},
 		{Name: "opencode", Command: "opencode", Description: "OpenCode"},
 	}
 }

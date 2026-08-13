@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -97,6 +98,14 @@ func (a Agent) BuildRunCommandMode(prompt string, allMighty bool) []string {
 		if prompt != "" {
 			args = append(args, "-p", prompt)
 		}
+	case "muse":
+		args = []string{a.Command}
+		if allMighty {
+			args = append(args, museAllMightyArgs()...)
+		}
+		if prompt != "" {
+			args = append(args, prompt)
+		}
 	case "opencode":
 		args = []string{a.Command}
 		if prompt != "" {
@@ -148,6 +157,12 @@ func (a Agent) BuildResumeCommandMode(allMighty bool) []string {
 			args = append(args, "--yolo")
 		}
 		return append(args, "--continue")
+	case "muse":
+		args := []string{a.Command}
+		if allMighty {
+			args = append(args, museAllMightyArgs()...)
+		}
+		return append(args, "resume", "--last")
 	case "opencode":
 		return []string{a.Command, "--continue"}
 	default:
@@ -215,6 +230,10 @@ func (a Agent) BuildPrintCommand(prompt string) []string {
 		return []string{a.Command, "--print", "--yolo", prompt}
 	case "copilot":
 		return []string{a.Command, "--allow-all-tools", "-p", prompt}
+	case "muse":
+		args := []string{a.Command}
+		args = append(args, museLauncherSandboxDisableArgs()...)
+		return append(args, "exec", "--yolo", prompt)
 	case "opencode":
 		return []string{a.Command, "-p", prompt}
 	default:
@@ -224,4 +243,16 @@ func (a Agent) BuildPrintCommand(prompt string) []string {
 		}
 		return args
 	}
+}
+
+func museAllMightyArgs() []string {
+	args := museLauncherSandboxDisableArgs()
+	return append(args, "--yolo")
+}
+
+func museLauncherSandboxDisableArgs() []string {
+	if runtime.GOOS == "darwin" {
+		return []string{"--dangerously-disable-osx-sandbox"}
+	}
+	return nil
 }

@@ -262,6 +262,8 @@ export function agentLabel(agent: string): string {
       return 'Cursor Agent';
     case 'copilot':
       return 'GitHub Copilot';
+    case 'muse':
+      return 'Muse Code';
     case 'opencode':
       return 'OpenCode';
     default:
