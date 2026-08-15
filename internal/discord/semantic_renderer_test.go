@@ -2,8 +2,10 @@ package discord
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nashory/agx/internal/agentstream"
 )
@@ -37,6 +39,20 @@ type failingProgressSender struct {
 func (s *failingProgressSender) UpdateProgressMessage(ctx context.Context, channelID, content string) error {
 	s.progress = append(s.progress, content)
 	return s.progressErr
+}
+
+type flakySemanticSender struct {
+	recordingSemanticSender
+	failures int
+	err      error
+}
+
+func (s *flakySemanticSender) SendMessage(ctx context.Context, channelID, content string) error {
+	if s.failures > 0 {
+		s.failures--
+		return s.err
+	}
+	return s.recordingSemanticSender.SendMessage(ctx, channelID, content)
 }
 
 func TestSemanticRendererRendersProgress(t *testing.T) {
@@ -560,6 +576,46 @@ func TestSemanticForwarderIgnoresProgressUpdateErrors(t *testing.T) {
 	}
 	if len(sender.messages) != 1 || sender.messages[0] != "final" {
 		t.Fatalf("messages = %#v, want final message despite progress failure", sender.messages)
+	}
+}
+
+func TestSemanticForwarderRetriesAssistantSend(t *testing.T) {
+	previousDelay := semanticSendRetryDelay
+	semanticSendRetryDelay = time.Millisecond
+	t.Cleanup(func() { semanticSendRetryDelay = previousDelay })
+
+	sender := &flakySemanticSender{failures: 1, err: context.DeadlineExceeded}
+	forwarder := NewSemanticEventForwarder(sender)
+	events := make(chan agentstream.Event, 2)
+	events <- agentstream.Event{TaskID: "task-1", TurnID: "turn-1", Kind: agentstream.EventAssistantMessage, Text: "final"}
+	events <- agentstream.Event{TaskID: "task-1", TurnID: "turn-1", Kind: agentstream.EventTurnCompleted}
+	close(events)
+
+	if err := forwarder.Forward(context.Background(), "channel-1", events); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.messages) != 1 || sender.messages[0] != "final" {
+		t.Fatalf("messages = %#v, want final assistant message after retry", sender.messages)
+	}
+}
+
+func TestSemanticForwarderReturnsAfterSendRetriesExhausted(t *testing.T) {
+	previousDelay := semanticSendRetryDelay
+	semanticSendRetryDelay = time.Millisecond
+	t.Cleanup(func() { semanticSendRetryDelay = previousDelay })
+
+	sendErr := errors.New("discord timeout")
+	sender := &flakySemanticSender{failures: semanticSendRetryAttempts, err: sendErr}
+	forwarder := NewSemanticEventForwarder(sender)
+	events := make(chan agentstream.Event, 1)
+	events <- agentstream.Event{TaskID: "task-1", TurnID: "turn-1", Kind: agentstream.EventAssistantMessage, Text: "final"}
+	close(events)
+
+	if err := forwarder.Forward(context.Background(), "channel-1", events); !errors.Is(err, sendErr) {
+		t.Fatalf("Forward() error = %v, want %v", err, sendErr)
+	}
+	if len(sender.messages) != 0 {
+		t.Fatalf("messages = %#v, want no successful sends", sender.messages)
 	}
 }
 

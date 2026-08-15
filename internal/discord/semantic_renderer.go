@@ -18,8 +18,11 @@ const (
 	assistantSentenceMinRunes   = 24
 	assistantProgressForceRunes = 220
 	assistantProgressInterval   = 2 * time.Second
+	semanticSendRetryAttempts   = 3
 	errorSummaryMaxRunes        = 180
 )
+
+var semanticSendRetryDelay = time.Second
 
 type RenderActionKind string
 
@@ -104,13 +107,17 @@ func (f *SemanticEventForwarder) forwardActions(ctx context.Context, channelID s
 			}
 			if action.Prompt != nil {
 				if sender, ok := f.sender.(InteractivePromptSender); ok {
-					if err := sender.SendInteractivePrompt(ctx, channelID, *action.Prompt); err != nil {
+					if err := retrySemanticSend(ctx, func() error {
+						return sender.SendInteractivePrompt(ctx, channelID, *action.Prompt)
+					}); err != nil {
 						return err
 					}
 					continue
 				}
 			}
-			if err := f.sender.SendMessage(ctx, channelID, action.Content); err != nil {
+			if err := retrySemanticSend(ctx, func() error {
+				return f.sender.SendMessage(ctx, channelID, action.Content)
+			}); err != nil {
 				return err
 			}
 		case RenderUpdateProgress:
@@ -127,6 +134,30 @@ func (f *SemanticEventForwarder) forwardActions(ctx context.Context, channelID s
 		}
 	}
 	return nil
+}
+
+func retrySemanticSend(ctx context.Context, send func() error) error {
+	var err error
+	for attempt := 0; attempt < semanticSendRetryAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		err = send()
+		if err == nil {
+			return nil
+		}
+		if attempt == semanticSendRetryAttempts-1 {
+			return err
+		}
+		timer := time.NewTimer(semanticSendRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
 }
 
 func (f *SemanticEventForwarder) render(event agentstream.Event) []RenderAction {
