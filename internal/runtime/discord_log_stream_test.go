@@ -137,25 +137,60 @@ func TestMuseLogEventsPublishesProgressAndMessageOnce(t *testing.T) {
 		"",
 		"◆ 태스크 SUSPECT 이슈 확인하고 수정해줄게.",
 		"",
+		"◆ Ran command · Inspect first 2000 chars truncation · ✓ · 0.2s · ctrl+o",
+		"",
+		"◆ 최근 지정된 ado-fyi 기준으로 해당 태스크의 소스 신호를 확인했습니다.",
+		"",
 		"── Voice input (⌥V to start) ───────────────────────────────────────────────────",
 		"⟩",
 	}, "\n")
 	state := &museLogState{}
 
 	events := museLogEvents("task-1", "turn-1", "muse", logs, state, time.Unix(1, 0))
-	if len(events) != 3 {
-		t.Fatalf("len(events) = %d, want progress, message, clear", len(events))
+	if len(events) != 6 {
+		t.Fatalf("len(events) = %d, want all progress/message blocks", len(events))
 	}
 	if events[0].Kind != agentstream.EventToolStarted || events[0].Tool == nil || !strings.Contains(events[0].Tool.Input, "Ran 4 commands") {
-		t.Fatalf("events[0] = %#v, want Muse progress", events[0])
+		t.Fatalf("events[0] = %#v, want first Muse progress", events[0])
 	}
 	if events[1].Kind != agentstream.EventAssistantMessage || !strings.Contains(events[1].Text, "SUSPECT") {
-		t.Fatalf("events[1] = %#v, want assistant message", events[1])
+		t.Fatalf("events[1] = %#v, want first assistant message", events[1])
 	}
 	if events[2].Kind != agentstream.EventTurnCompleted {
-		t.Fatalf("events[2] = %#v, want turn completed", events[2])
+		t.Fatalf("events[2] = %#v, want first turn completed", events[2])
+	}
+	if events[3].Kind != agentstream.EventToolStarted || events[3].Tool == nil || !strings.Contains(events[3].Tool.Input, "Inspect first 2000") {
+		t.Fatalf("events[3] = %#v, want second Muse progress", events[3])
+	}
+	if events[4].Kind != agentstream.EventAssistantMessage || !strings.Contains(events[4].Text, "소스 신호") {
+		t.Fatalf("events[4] = %#v, want second assistant message", events[4])
 	}
 	if again := museLogEvents("task-1", "turn-1", "muse", logs, state, time.Unix(2, 0)); len(again) != 0 {
 		t.Fatalf("second museLogEvents() = %#v, want no duplicate events", again)
+	}
+}
+
+func TestMuseLogEventsPublishesOnlyNewBlocks(t *testing.T) {
+	state := &museLogState{}
+	first := strings.Join([]string{
+		"◆ Ran 2 commands · ✓ ×2 · 0.3s · ctrl+o",
+		"",
+		"◆ 첫 답변",
+	}, "\n")
+	second := first + "\n\n" + strings.Join([]string{
+		"◆ Ran command · Test classifier · ✓ · 4.5s · ctrl+o",
+		"",
+		"◆ 두 번째 답변",
+	}, "\n")
+
+	if events := museLogEvents("task-1", "turn-1", "muse", first, state, time.Unix(1, 0)); len(events) != 3 {
+		t.Fatalf("first museLogEvents() len = %d, want 3", len(events))
+	}
+	events := museLogEvents("task-1", "turn-1", "muse", second, state, time.Unix(2, 0))
+	if len(events) != 3 {
+		t.Fatalf("second museLogEvents() len = %d, want only new progress/message", len(events))
+	}
+	if events[0].Kind != agentstream.EventToolStarted || events[1].Text != "두 번째 답변" {
+		t.Fatalf("second museLogEvents() = %#v, want only new blocks", events)
 	}
 }

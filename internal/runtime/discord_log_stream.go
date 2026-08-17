@@ -148,8 +148,7 @@ func (s discordLogSubscriber) forwardLogs(ctx context.Context, summary agxdiscor
 }
 
 type museLogState struct {
-	lastProgress         string
-	lastAssistantMessage string
+	processedBlocks int
 }
 
 type museLogBlock struct {
@@ -162,24 +161,28 @@ func museLogEvents(taskID, turnID, agent, logs string, state *museLogState, now 
 		state = &museLogState{}
 	}
 	var events []agentstream.Event
-	if progress, ok := latestMuseProgress(logs); ok && progress != state.lastProgress {
-		events = append(events, agentstream.Event{
-			TaskID:    taskID,
-			TurnID:    turnID,
-			Kind:      agentstream.EventToolStarted,
-			Agent:     agent,
-			CreatedAt: now,
-			Tool:      &agentstream.ToolEvent{Name: "Muse Code", Input: progress},
-		})
-		state.lastProgress = progress
+	blocks := museLogBlocks(logs)
+	if state.processedBlocks > len(blocks) {
+		state.processedBlocks = 0
 	}
-	if message, ok := latestMuseAssistantMessage(logs); ok && message != state.lastAssistantMessage {
+	for _, block := range blocks[state.processedBlocks:] {
+		if block.status {
+			events = append(events, agentstream.Event{
+				TaskID:    taskID,
+				TurnID:    turnID,
+				Kind:      agentstream.EventToolStarted,
+				Agent:     agent,
+				CreatedAt: now,
+				Tool:      &agentstream.ToolEvent{Name: "Muse Code", Input: block.text},
+			})
+			continue
+		}
 		events = append(events,
-			agentstream.Event{TaskID: taskID, TurnID: turnID, Kind: agentstream.EventAssistantMessage, Agent: agent, Text: message, CreatedAt: now},
+			agentstream.Event{TaskID: taskID, TurnID: turnID, Kind: agentstream.EventAssistantMessage, Agent: agent, Text: block.text, CreatedAt: now},
 			agentstream.Event{TaskID: taskID, TurnID: turnID, Kind: agentstream.EventTurnCompleted, Agent: agent, CreatedAt: now},
 		)
-		state.lastAssistantMessage = message
 	}
+	state.processedBlocks = len(blocks)
 	return events
 }
 
