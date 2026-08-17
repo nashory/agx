@@ -257,15 +257,9 @@ export function agentLabel(agent: string): string {
     case 'codex':
       return 'Codex';
     case 'gemini':
-      return 'Gemini';
-    case 'cursor':
-      return 'Cursor Agent';
-    case 'copilot':
-      return 'GitHub Copilot';
+      return 'Gemini CLI';
     case 'muse':
       return 'Muse Code';
-    case 'opencode':
-      return 'OpenCode';
     default:
       return agent || 'Default agent';
   }

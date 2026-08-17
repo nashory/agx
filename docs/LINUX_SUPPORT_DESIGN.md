@@ -278,10 +278,7 @@ Agent dependencies are user-managed:
 claude
 codex
 gemini
-cursor
-copilot
 muse
-opencode
 ```
 
 AGX should report missing dependencies through `agx doctor` and the TUI status

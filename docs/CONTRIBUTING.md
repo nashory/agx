@@ -39,7 +39,7 @@ Development from source requires:
 - `tmux`
 - `git`
 - At least one supported agent CLI if you want to run end-to-end tasks:
-  `claude`, `codex`, `gemini`, `agent`, `copilot`, `muse`, or `opencode`
+  `claude`, `codex`, `gemini`, or `muse`
 
 Install host tools with Homebrew:
 

@@ -99,6 +99,38 @@ func TestBuildTmuxCommandOmitsPromptForWrappedClaude(t *testing.T) {
 	}
 }
 
+func TestBuildTmuxCommandOmitsPromptForMuse(t *testing.T) {
+	cmd, err := BuildTmuxCommand(agent.Agent{Name: "muse", Command: "muse"}, "implement auth", "12345678-muse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scriptPath, ok := CommandScriptPath(cmd)
+	if !ok {
+		t.Fatalf("CommandScriptPath(%q) did not find script path", cmd)
+	}
+	defer os.Remove(scriptPath)
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if strings.Contains(content, "implement auth") {
+		t.Fatalf("Muse command should not include initial prompt argv:\n%s", content)
+	}
+	for _, unexpected := range []string{"status_file=", "record_exit()", "trap record_exit EXIT"} {
+		if strings.Contains(content, unexpected) {
+			t.Fatalf("Muse interactive command should not record launcher exit status %q:\n%s", unexpected, content)
+		}
+	}
+	museCommand := "script -q /dev/null 'muse' '--yolo'"
+	if flag := posixMuseSandboxDisableFlag(); flag != "" {
+		museCommand = "script -q /dev/null 'muse' '" + flag + "' '--yolo'"
+	}
+	if !strings.Contains(content, museCommand) {
+		t.Fatalf("script missing Muse interactive command:\n%s", content)
+	}
+}
+
 func posixSandboxDisableFlag() string {
 	switch runtime.GOOS {
 	case "darwin":
@@ -108,6 +140,13 @@ func posixSandboxDisableFlag() string {
 	default:
 		return ""
 	}
+}
+
+func posixMuseSandboxDisableFlag() string {
+	if runtime.GOOS == "darwin" {
+		return "--dangerously-disable-osx-sandbox"
+	}
+	return ""
 }
 
 func TestBuildTmuxCommandRecordsExitStatus(t *testing.T) {

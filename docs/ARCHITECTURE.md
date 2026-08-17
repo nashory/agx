@@ -30,7 +30,7 @@ AGX is a local runtime with three control surfaces: Desktop, Discord, and CLI.
 ```text
 ~/.config/agx/          SQLite state and config
 tmux -L agx             persistent agent sessions
-agent CLI processes     Claude, Codex, Gemini, Cursor, Copilot, OpenCode
+agent CLI processes     Claude, Codex, Gemini, Muse
 .agx/worktrees/         optional per-task git worktrees
 Discord bridge          optional server/channel sync and command handling
 ```

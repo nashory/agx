@@ -86,9 +86,9 @@ describe('SettingsView', () => {
   });
 
   it('shows an unavailable configured default agent instead of silently replacing it', () => {
-    renderSettings({ runtimeConfig: { defaultAgent: 'opencode', voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' } } });
+    renderSettings({ runtimeConfig: { defaultAgent: 'local-agent', voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' } } });
 
-    expect(screen.getByDisplayValue('OpenCode (not installed)')).not.toBeNull();
+    expect(screen.getByDisplayValue('local-agent (not installed)')).not.toBeNull();
   });
 
   it('shows the runtime transport instead of assuming a Unix socket', () => {

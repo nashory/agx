@@ -55,6 +55,7 @@ Install and sign in to at least one supported agent CLI:
 - `codex`
 - `claude`
 - `gemini`
+- `muse`
 
 Verify that your chosen agent is available:
 

@@ -58,6 +58,19 @@ func TestInjectedPromptReadyWaitsForComposerFooter(t *testing.T) {
 	if !injectedPromptReady("bypass permissions on (shift+tab to cycle) · ↵ for agents") {
 		t.Fatal("injectedPromptReady() = false for all-mighty composer footer")
 	}
+	museLogs := `Muse Code at Meta
+
+  Muse Code 0.1.0
+
+◆ Muse Code powered by Meta Muse Spark — how can I help?
+
+── Voice input (⌥V to start) ───────────────────────────────────────────────────
+⟩
+────────────────────────────────────────────────────────────────────────────────
+  muse-spark-1.2-internal · high · /repo/agx · YOLO`
+	if !injectedPromptReady(museLogs) {
+		t.Fatal("injectedPromptReady() = false for Muse composer")
+	}
 }
 
 func TestClaudeTrustPromptReady(t *testing.T) {

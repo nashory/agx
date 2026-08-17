@@ -62,14 +62,33 @@ describe('TaskCreateToolbar', () => {
 
     await user.type(screen.getByPlaceholderText('Task title'), ' now');
     await user.click(screen.getByRole('button', { name: 'Project' }));
-    await user.click(screen.getByLabelText('Agent'));
-    await user.selectOptions(screen.getByLabelText('Agent'), 'codex');
+    await user.click(screen.getByRole('button', { name: 'Agent: Default agent' }));
+    await user.click(screen.getByRole('option', { name: 'Codex' }));
     await user.click(screen.getByText('All-mighty'));
 
     expect(props.onTitleChange).toHaveBeenCalled();
     expect(props.onWorkspaceModeChange).toHaveBeenCalledWith('project');
     expect(props.onAgentChange).toHaveBeenCalledWith('codex');
     expect(props.onAllMightyChange).toHaveBeenCalledWith(true);
+  });
+
+  it('renders themed agent labels and missing state', async () => {
+    const user = userEvent.setup();
+    renderToolbar();
+
+    await user.click(screen.getByRole('button', { name: 'Agent: Default agent' }));
+
+    expect(screen.getByRole('option', { name: 'Codex' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Claude Code (missing)' })).toBeInTheDocument();
+  });
+
+  it('keeps an unavailable selected custom agent visible', async () => {
+    const user = userEvent.setup();
+    renderToolbar({ agent: 'local-agent' });
+
+    await user.click(screen.getByRole('button', { name: 'Agent: local-agent (missing)' }));
+
+    expect(screen.getByRole('option', { name: 'local-agent (missing)' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('blocks Discord-attached creation until Discord is connected', () => {

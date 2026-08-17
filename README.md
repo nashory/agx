@@ -4,8 +4,8 @@
 
 **Mission control for parallel coding agents.**
 
-Run Claude Code, Codex, Gemini, Cursor Agent, Copilot, OpenCode, or your own
-agent CLI in persistent local sessions. Start work from a native Desktop app,
+Run Claude Code, Codex, Gemini, Muse Code, or your own agent CLI in persistent
+local sessions. Start work from a native Desktop app,
 keep selected tasks reachable from Discord, and fall back to the CLI or TUI
 whenever terminal-level control is the better tool.
 
@@ -402,10 +402,7 @@ is the global default unless you change it in Desktop Settings or
 | Claude Code | `claude` |
 | OpenAI Codex CLI | `codex` |
 | Gemini CLI | `gemini` |
-| Cursor Agent | `agent` |
-| GitHub Copilot CLI | `copilot` |
 | Muse Code | `muse` |
-| OpenCode | `opencode` |
 | Custom agents | configured in `~/.config/agx/config.toml` or `.agx/config.toml` |
 
 Custom agents can define their command, arguments, resume behavior, print
@@ -478,7 +475,7 @@ Runtime-owned local resources:
 ```text
 ~/.config/agx/          SQLite state, config, logs, attachments
 tmux -L agx             persistent agent sessions
-agent CLI processes     Claude, Codex, Gemini, Cursor, Copilot, OpenCode
+agent CLI processes     Claude, Codex, Gemini, Muse
 .agx/worktrees/         optional per-task git worktrees
 Discord bridge          optional server/channel sync and command handling
 ```

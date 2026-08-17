@@ -30,10 +30,13 @@ func (a Agent) IsAvailable() bool {
 }
 
 // ShouldInjectInitialPrompt reports whether AGX should wait for an interactive
-// composer and paste the first prompt instead of passing it as argv. This is
-// needed for wrapped Claude binaries that do not accept a prompt argument.
+// composer and paste the first prompt instead of passing it as argv.
 func (a Agent) ShouldInjectInitialPrompt() bool {
-	return a.Name == "claude" && len(a.Args) == 0 && isWrappedClaudeCommand(a.Command)
+	if len(a.Args) > 0 {
+		return false
+	}
+	return (a.Name == "claude" && isWrappedClaudeCommand(a.Command)) ||
+		a.Name == "muse"
 }
 
 // BuildRunCommand returns the default all-mighty command for starting an agent
@@ -82,22 +85,6 @@ func (a Agent) BuildRunCommandMode(prompt string, allMighty bool) []string {
 		if prompt != "" {
 			args = append(args, "-i", prompt)
 		}
-	case "cursor":
-		args = []string{a.Command}
-		if allMighty {
-			args = append(args, "--yolo")
-		}
-		if prompt != "" {
-			args = append(args, prompt)
-		}
-	case "copilot":
-		args = []string{a.Command}
-		if allMighty {
-			args = append(args, "--allow-all-tools")
-		}
-		if prompt != "" {
-			args = append(args, "-p", prompt)
-		}
 	case "muse":
 		args = []string{a.Command}
 		if allMighty {
@@ -105,11 +92,6 @@ func (a Agent) BuildRunCommandMode(prompt string, allMighty bool) []string {
 		}
 		if prompt != "" {
 			args = append(args, prompt)
-		}
-	case "opencode":
-		args = []string{a.Command}
-		if prompt != "" {
-			args = append(args, "-p", prompt)
 		}
 	default:
 		args = append([]string{a.Command}, a.Args...)
@@ -151,20 +133,12 @@ func (a Agent) BuildResumeCommandMode(allMighty bool) []string {
 			args = append(args, "--approval-mode", "yolo")
 		}
 		return append(args, "--resume")
-	case "cursor":
-		args := []string{a.Command}
-		if allMighty {
-			args = append(args, "--yolo")
-		}
-		return append(args, "--continue")
 	case "muse":
 		args := []string{a.Command}
 		if allMighty {
 			args = append(args, museAllMightyArgs()...)
 		}
 		return append(args, "resume", "--last")
-	case "opencode":
-		return []string{a.Command, "--continue"}
 	default:
 		return []string{a.Command}
 	}
@@ -226,16 +200,10 @@ func (a Agent) BuildPrintCommand(prompt string) []string {
 		return append(args, "exec", "--dangerously-bypass-approvals-and-sandbox", prompt)
 	case "gemini":
 		return []string{a.Command, "-p", prompt}
-	case "cursor":
-		return []string{a.Command, "--print", "--yolo", prompt}
-	case "copilot":
-		return []string{a.Command, "--allow-all-tools", "-p", prompt}
 	case "muse":
 		args := []string{a.Command}
 		args = append(args, museLauncherSandboxDisableArgs()...)
 		return append(args, "exec", "--yolo", prompt)
-	case "opencode":
-		return []string{a.Command, "-p", prompt}
 	default:
 		args := []string{a.Command}
 		if prompt != "" {

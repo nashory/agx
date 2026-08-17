@@ -659,7 +659,9 @@ func (m *Manager) waitForInjectedPromptReady(target string) error {
 
 func injectedPromptReady(logs string) bool {
 	return strings.Contains(logs, "accept edits on") ||
-		strings.Contains(logs, "bypass permissions on")
+		strings.Contains(logs, "bypass permissions on") ||
+		strings.Contains(logs, "Voice input") ||
+		strings.Contains(logs, "how can I help?")
 }
 
 func claudeTrustPromptReady(logs string) bool {

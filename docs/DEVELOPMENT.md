@@ -21,9 +21,7 @@ Optional tools for end-to-end testing:
 - `codex`
 - `claude`
 - `gemini`
-- `agent`
-- `copilot`
-- `opencode`
+- `muse`
 - a Discord test server and bot token
 
 Install host tools on macOS:

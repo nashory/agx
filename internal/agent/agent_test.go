@@ -18,7 +18,6 @@ func TestBuildRunCommand(t *testing.T) {
 	claudeWant := append([]string{"missing-claude-for-test"}, SandboxDisableArgs()...)
 	claudeWant = append(claudeWant, "--dangerously-skip-permissions", "implement auth")
 	museWant := append([]string{"muse"}, museAllMightyArgs()...)
-	museWant = append(museWant, "implement auth")
 
 	tests := []struct {
 		name   string
@@ -45,7 +44,7 @@ func TestBuildRunCommand(t *testing.T) {
 			want:   codexWant,
 		},
 		{
-			name:   "muse with prompt",
+			name:   "muse waits for interactive prompt injection",
 			agent:  Agent{Name: "muse", Command: "muse"},
 			prompt: "implement auth",
 			want:   museWant,
@@ -70,6 +69,20 @@ func TestBuildRunCommand(t *testing.T) {
 				t.Fatalf("BuildRunCommand() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMuseInjectsInitialPrompt(t *testing.T) {
+	ag := Agent{Name: "muse", Command: "muse"}
+	if !ag.ShouldInjectInitialPrompt() {
+		t.Fatal("ShouldInjectInitialPrompt() = false, want true for Muse")
+	}
+	if got, want := ag.BuildRunCommand("implement auth"), append([]string{"muse"}, museAllMightyArgs()...); !reflect.DeepEqual(got, want) {
+		t.Fatalf("BuildRunCommand() = %#v, want %#v", got, want)
+	}
+	custom := Agent{Name: "muse", Command: "muse", Args: []string{"--provider", "echo"}}
+	if custom.ShouldInjectInitialPrompt() {
+		t.Fatal("custom Muse args should preserve explicit argv prompt behavior")
 	}
 }
 
@@ -158,6 +171,15 @@ func TestRegistryMergesCustomAgents(t *testing.T) {
 	}
 	if _, err := registry.Get("muse"); err != nil {
 		t.Fatalf("muse agent missing after merge: %v", err)
+	}
+}
+
+func TestKnownAgentsExcludesRetiredAgents(t *testing.T) {
+	retired := map[string]bool{"cursor": true, "copilot": true, "opencode": true}
+	for _, agent := range KnownAgents() {
+		if retired[agent.Name] {
+			t.Fatalf("KnownAgents() includes retired agent %q", agent.Name)
+		}
 	}
 }
 

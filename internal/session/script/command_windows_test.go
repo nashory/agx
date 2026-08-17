@@ -66,6 +66,29 @@ func TestPowerShellQuote(t *testing.T) {
 	}
 }
 
+func TestBuildCommandOmitsPromptForMuse(t *testing.T) {
+	cmd, err := BuildTmuxCommand(agent.Agent{Name: "muse", Command: "muse.exe"}, "implement auth", "12345678-muse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, ok := CommandScriptPath(cmd)
+	if !ok {
+		t.Fatalf("CommandScriptPath(%q) did not find script path", cmd)
+	}
+	defer os.Remove(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if strings.Contains(content, "implement auth") {
+		t.Fatalf("Muse command should not include initial prompt argv:\n%s", content)
+	}
+	if !strings.Contains(content, "& 'muse.exe' '--yolo'") {
+		t.Fatalf("script missing Muse interactive command:\n%s", content)
+	}
+}
+
 func TestRemoveCommandScriptDeletesPowerShellScript(t *testing.T) {
 	cmd, err := BuildTmuxCommandMode(agent.Agent{Name: "custom", Command: "my-agent.exe"}, "", "12345678-rm", false)
 	if err != nil {
