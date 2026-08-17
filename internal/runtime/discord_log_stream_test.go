@@ -4,7 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nashory/agx/internal/agentstream"
 	"github.com/nashory/agx/internal/codexapp"
 	"github.com/nashory/agx/internal/db"
 )
@@ -107,5 +109,53 @@ func TestLatestMuseAssistantMessageSkipsToolStatus(t *testing.T) {
 func TestLatestMuseAssistantMessageWaitsForComposer(t *testing.T) {
 	if message, ok := latestMuseAssistantMessage("◆ still generating"); ok || message != "" {
 		t.Fatalf("latestMuseAssistantMessage() = (%q, %v), want empty until composer returns", message, ok)
+	}
+}
+
+func TestLatestMuseProgressExtractsStatusBlocks(t *testing.T) {
+	logs := strings.Join([]string{
+		"◆ Ran 4 commands · ✓ ×4 · 0.7s · ctrl+o",
+		"",
+		"◆ Backgrounded · Try local classifier · 30s · ctrl+o",
+		"",
+		"◆ 업데이트 — 로컬 재현 결과 공유:",
+		"  p_3p: 0.999396",
+	}, "\n")
+
+	progress, ok := latestMuseProgress(logs)
+	if !ok {
+		t.Fatal("latestMuseProgress() ok = false, want true")
+	}
+	if !strings.Contains(progress, "Backgrounded") || strings.Contains(progress, "업데이트") {
+		t.Fatalf("latestMuseProgress() = %q", progress)
+	}
+}
+
+func TestMuseLogEventsPublishesProgressAndMessageOnce(t *testing.T) {
+	logs := strings.Join([]string{
+		"◆ Ran 4 commands · ✓ ×4 · 0.7s · ctrl+o",
+		"",
+		"◆ 태스크 SUSPECT 이슈 확인하고 수정해줄게.",
+		"",
+		"── Voice input (⌥V to start) ───────────────────────────────────────────────────",
+		"⟩",
+	}, "\n")
+	state := &museLogState{}
+
+	events := museLogEvents("task-1", "turn-1", "muse", logs, state, time.Unix(1, 0))
+	if len(events) != 3 {
+		t.Fatalf("len(events) = %d, want progress, message, clear", len(events))
+	}
+	if events[0].Kind != agentstream.EventToolStarted || events[0].Tool == nil || !strings.Contains(events[0].Tool.Input, "Ran 4 commands") {
+		t.Fatalf("events[0] = %#v, want Muse progress", events[0])
+	}
+	if events[1].Kind != agentstream.EventAssistantMessage || !strings.Contains(events[1].Text, "SUSPECT") {
+		t.Fatalf("events[1] = %#v, want assistant message", events[1])
+	}
+	if events[2].Kind != agentstream.EventTurnCompleted {
+		t.Fatalf("events[2] = %#v, want turn completed", events[2])
+	}
+	if again := museLogEvents("task-1", "turn-1", "muse", logs, state, time.Unix(2, 0)); len(again) != 0 {
+		t.Fatalf("second museLogEvents() = %#v, want no duplicate events", again)
 	}
 }

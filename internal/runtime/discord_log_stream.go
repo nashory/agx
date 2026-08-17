@@ -99,7 +99,7 @@ func (s discordLogSubscriber) forwardLogs(ctx context.Context, summary agxdiscor
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	var previous string
-	var lastAssistantMessage string
+	var museState museLogState
 	for {
 		task, project, err := s.runtime.taskAndProject(summary.ID)
 		if err != nil {
@@ -112,19 +112,28 @@ func (s discordLogSubscriber) forwardLogs(ctx context.Context, summary agxdiscor
 			return
 		}
 		cleaned := agxdiscord.CleanTerminalOutput(logs)
+		if isMuseTask(summary.Agent) {
+			for _, event := range museLogEvents(summary.ID, turnID, summary.Agent, cleaned, &museState, time.Now()) {
+				if !send(event) {
+					return
+				}
+			}
+			if !isRuntimeLogStreamLive(task.Status) {
+				_ = send(agentstream.Event{TaskID: summary.ID, TurnID: turnID, Kind: agentstream.EventTurnCompleted, Agent: summary.Agent, CreatedAt: time.Now()})
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			continue
+		}
 		if delta := logDelta(previous, cleaned); delta != "" {
 			if !send(agentstream.Event{TaskID: summary.ID, TurnID: turnID, Kind: agentstream.EventAssistantDelta, Agent: summary.Agent, Text: delta, CreatedAt: time.Now()}) {
 				return
 			}
 			previous = cleaned
-		}
-		if isMuseTask(summary.Agent) {
-			if message, ok := latestMuseAssistantMessage(cleaned); ok && message != lastAssistantMessage {
-				if !send(agentstream.Event{TaskID: summary.ID, TurnID: turnID, Kind: agentstream.EventAssistantMessage, Agent: summary.Agent, Text: message, CreatedAt: time.Now()}) {
-					return
-				}
-				lastAssistantMessage = message
-			}
 		}
 		if !isRuntimeLogStreamLive(task.Status) {
 			_ = send(agentstream.Event{TaskID: summary.ID, TurnID: turnID, Kind: agentstream.EventTurnCompleted, Agent: summary.Agent, CreatedAt: time.Now()})
@@ -138,6 +147,42 @@ func (s discordLogSubscriber) forwardLogs(ctx context.Context, summary agxdiscor
 	}
 }
 
+type museLogState struct {
+	lastProgress         string
+	lastAssistantMessage string
+}
+
+type museLogBlock struct {
+	text   string
+	status bool
+}
+
+func museLogEvents(taskID, turnID, agent, logs string, state *museLogState, now time.Time) []agentstream.Event {
+	if state == nil {
+		state = &museLogState{}
+	}
+	var events []agentstream.Event
+	if progress, ok := latestMuseProgress(logs); ok && progress != state.lastProgress {
+		events = append(events, agentstream.Event{
+			TaskID:    taskID,
+			TurnID:    turnID,
+			Kind:      agentstream.EventToolStarted,
+			Agent:     agent,
+			CreatedAt: now,
+			Tool:      &agentstream.ToolEvent{Name: "Muse Code", Input: progress},
+		})
+		state.lastProgress = progress
+	}
+	if message, ok := latestMuseAssistantMessage(logs); ok && message != state.lastAssistantMessage {
+		events = append(events,
+			agentstream.Event{TaskID: taskID, TurnID: turnID, Kind: agentstream.EventAssistantMessage, Agent: agent, Text: message, CreatedAt: now},
+			agentstream.Event{TaskID: taskID, TurnID: turnID, Kind: agentstream.EventTurnCompleted, Agent: agent, CreatedAt: now},
+		)
+		state.lastAssistantMessage = message
+	}
+	return events
+}
+
 func isMuseTask(agent string) bool {
 	return strings.EqualFold(strings.TrimSpace(agent), "muse")
 }
@@ -146,8 +191,34 @@ func latestMuseAssistantMessage(logs string) (string, bool) {
 	if !museComposerReady(logs) {
 		return "", false
 	}
+	var latest string
+	for _, block := range museLogBlocks(logs) {
+		if !block.status {
+			latest = block.text
+		}
+	}
+	if latest == "" {
+		return "", false
+	}
+	return latest, true
+}
+
+func latestMuseProgress(logs string) (string, bool) {
+	var latest string
+	for _, block := range museLogBlocks(logs) {
+		if block.status {
+			latest = block.text
+		}
+	}
+	if latest == "" {
+		return "", false
+	}
+	return latest, true
+}
+
+func museLogBlocks(logs string) []museLogBlock {
 	lines := strings.Split(logs, "\n")
-	var blocks []string
+	var blocks []museLogBlock
 	var current []string
 	flush := func() {
 		if len(current) == 0 {
@@ -155,8 +226,8 @@ func latestMuseAssistantMessage(logs string) (string, bool) {
 		}
 		block := strings.TrimSpace(strings.Join(current, "\n"))
 		current = nil
-		if block != "" && !isMuseToolStatus(block) {
-			blocks = append(blocks, block)
+		if block != "" {
+			blocks = append(blocks, museLogBlock{text: block, status: isMuseStatusBlock(block)})
 		}
 	}
 	for _, line := range lines {
@@ -176,23 +247,24 @@ func latestMuseAssistantMessage(logs string) (string, bool) {
 		current = append(current, trimmed)
 	}
 	flush()
-	if len(blocks) == 0 {
-		return "", false
-	}
-	return blocks[len(blocks)-1], true
+	return blocks
 }
 
 func museComposerReady(logs string) bool {
 	return strings.Contains(logs, "── Voice input") || strings.Contains(logs, "how can I help?")
 }
 
-func isMuseToolStatus(block string) bool {
+func isMuseStatusBlock(block string) bool {
 	first, _, _ := strings.Cut(block, "\n")
 	first = strings.TrimSpace(first)
 	for _, prefix := range []string{
+		"Backgrounded",
+		"Finished",
 		"Ran command",
-		"Wrote ",
+		"Ran ",
 		"Read ",
+		"Worked for",
+		"Wrote ",
 	} {
 		if strings.HasPrefix(first, prefix) {
 			return true
