@@ -100,11 +100,41 @@ func (s discordLogSubscriber) forwardLogs(ctx context.Context, summary agxdiscor
 	defer ticker.Stop()
 	var previous string
 	var museState museLogState
+	var museSessionState museSessionLogState
 	for {
 		task, project, err := s.runtime.taskAndProject(summary.ID)
 		if err != nil {
 			_ = send(agentstream.Event{TaskID: summary.ID, TurnID: turnID, Kind: agentstream.EventError, Agent: summary.Agent, Error: err.Error(), CreatedAt: time.Now()})
 			return
+		}
+		if isMuseTask(summary.Agent) {
+			events, ok := s.runtime.museSessionLogEvents(task, project, &museSessionState, time.Now())
+			if ok {
+				for _, event := range events {
+					if event.TaskID == "" {
+						event.TaskID = summary.ID
+					}
+					if event.Agent == "" {
+						event.Agent = summary.Agent
+					}
+					if event.TurnID == "" {
+						event.TurnID = turnID
+					}
+					if !send(event) {
+						return
+					}
+				}
+				if !isRuntimeLogStreamLive(task.Status) {
+					_ = send(agentstream.Event{TaskID: summary.ID, TurnID: turnID, Kind: agentstream.EventTurnCompleted, Agent: summary.Agent, CreatedAt: time.Now()})
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+				continue
+			}
 		}
 		logs, err := s.runtime.managerForProject(project).GetLogs(task, 2000)
 		if err != nil {
@@ -152,9 +182,18 @@ type museLogState struct {
 }
 
 type museLogBlock struct {
-	text   string
-	status bool
+	text string
+	kind museLogBlockKind
 }
+
+type museLogBlockKind string
+
+const (
+	museLogAssistant museLogBlockKind = "assistant"
+	museLogThinking  museLogBlockKind = "thinking"
+	museLogWorking   museLogBlockKind = "working"
+	museLogDone      museLogBlockKind = "done"
+)
 
 func museLogEvents(taskID, turnID, agent, logs string, state *museLogState, now time.Time) []agentstream.Event {
 	if state == nil {
@@ -166,7 +205,17 @@ func museLogEvents(taskID, turnID, agent, logs string, state *museLogState, now 
 		state.processedBlocks = 0
 	}
 	for _, block := range blocks[state.processedBlocks:] {
-		if block.status {
+		switch block.kind {
+		case museLogThinking:
+			events = append(events, agentstream.Event{
+				TaskID:    taskID,
+				TurnID:    turnID,
+				Kind:      agentstream.EventThinkingDelta,
+				Agent:     agent,
+				CreatedAt: now,
+				Text:      block.text,
+			})
+		case museLogWorking:
 			events = append(events, agentstream.Event{
 				TaskID:    taskID,
 				TurnID:    turnID,
@@ -175,12 +224,21 @@ func museLogEvents(taskID, turnID, agent, logs string, state *museLogState, now 
 				CreatedAt: now,
 				Tool:      &agentstream.ToolEvent{Name: "Muse Code", Input: block.text},
 			})
-			continue
+		case museLogDone:
+			events = append(events, agentstream.Event{
+				TaskID:    taskID,
+				TurnID:    turnID,
+				Kind:      agentstream.EventCommandCompleted,
+				Agent:     agent,
+				CreatedAt: now,
+				Command:   &agentstream.CommandEvent{Command: "Muse Code", Stdout: block.text},
+			})
+		default:
+			events = append(events,
+				agentstream.Event{TaskID: taskID, TurnID: turnID, Kind: agentstream.EventAssistantMessage, Agent: agent, Text: block.text, CreatedAt: now},
+				agentstream.Event{TaskID: taskID, TurnID: turnID, Kind: agentstream.EventTurnCompleted, Agent: agent, CreatedAt: now},
+			)
 		}
-		events = append(events,
-			agentstream.Event{TaskID: taskID, TurnID: turnID, Kind: agentstream.EventAssistantMessage, Agent: agent, Text: block.text, CreatedAt: now},
-			agentstream.Event{TaskID: taskID, TurnID: turnID, Kind: agentstream.EventTurnCompleted, Agent: agent, CreatedAt: now},
-		)
 	}
 	state.processedBlocks = len(blocks)
 	return events
@@ -196,7 +254,7 @@ func latestMuseAssistantMessage(logs string) (string, bool) {
 	}
 	var latest string
 	for _, block := range museLogBlocks(logs) {
-		if !block.status {
+		if block.kind == museLogAssistant {
 			latest = block.text
 		}
 	}
@@ -209,7 +267,7 @@ func latestMuseAssistantMessage(logs string) (string, bool) {
 func latestMuseProgress(logs string) (string, bool) {
 	var latest string
 	for _, block := range museLogBlocks(logs) {
-		if block.status {
+		if block.kind != museLogAssistant {
 			latest = block.text
 		}
 	}
@@ -230,7 +288,7 @@ func museLogBlocks(logs string) []museLogBlock {
 		block := strings.TrimSpace(strings.Join(current, "\n"))
 		current = nil
 		if block != "" {
-			blocks = append(blocks, museLogBlock{text: block, status: isMuseStatusBlock(block)})
+			blocks = append(blocks, museLogBlock{text: block, kind: classifyMuseLogBlock(block)})
 		}
 	}
 	for _, line := range lines {
@@ -257,23 +315,31 @@ func museComposerReady(logs string) bool {
 	return strings.Contains(logs, "── Voice input") || strings.Contains(logs, "how can I help?")
 }
 
-func isMuseStatusBlock(block string) bool {
+func classifyMuseLogBlock(block string) museLogBlockKind {
 	first, _, _ := strings.Cut(block, "\n")
 	first = strings.TrimSpace(first)
+	for _, prefix := range []string{"Thinking", "Analyzing", "Planning"} {
+		if strings.HasPrefix(first, prefix) {
+			return museLogThinking
+		}
+	}
+	for _, prefix := range []string{"Finished", "Worked for"} {
+		if strings.HasPrefix(first, prefix) {
+			return museLogDone
+		}
+	}
 	for _, prefix := range []string{
 		"Backgrounded",
-		"Finished",
 		"Ran command",
 		"Ran ",
 		"Read ",
-		"Worked for",
 		"Wrote ",
 	} {
 		if strings.HasPrefix(first, prefix) {
-			return true
+			return museLogWorking
 		}
 	}
-	return false
+	return museLogAssistant
 }
 
 func logDelta(previous, current string) string {
