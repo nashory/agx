@@ -55,3 +55,57 @@ func TestTaskLogsReadsStructuredTranscript(t *testing.T) {
 		t.Fatalf("TaskLogs() = %q, want role-labeled transcript", logs)
 	}
 }
+
+func TestLatestMuseAssistantMessageExtractsCompletedReply(t *testing.T) {
+	logs := strings.Join([]string{
+		"Muse Code at Meta",
+		"",
+		"⟩ 야",
+		"",
+		"◆ 야 뭐해? 뭘 도와줄까?",
+		"",
+		"── Voice input (⌥V to start) ───────────────────────────────────────────────────",
+		"⟩",
+		"────────────────────────────────────────────────────────────────────────────────",
+		"  muse-spark-1.2-internal · high · /repo/agx · YOLO",
+	}, "\n")
+
+	message, ok := latestMuseAssistantMessage(logs)
+	if !ok {
+		t.Fatal("latestMuseAssistantMessage() ok = false, want true")
+	}
+	if message != "야 뭐해? 뭘 도와줄까?" {
+		t.Fatalf("latestMuseAssistantMessage() = %q", message)
+	}
+}
+
+func TestLatestMuseAssistantMessageSkipsToolStatus(t *testing.T) {
+	logs := strings.Join([]string{
+		"◆ Ran command · List workspace · ✓ · 0.2s · ctrl+o",
+		"",
+		"◆ Wrote leakage-feature-quarantine-selector/environment/quarantine.py (+76) · ctrl+o",
+		"",
+		"◆ Fixed leakage-feature-quarantine-selector/environment/quarantine.py",
+		"  Verification passed.",
+		"",
+		"── Voice input (⌥V to start) ───────────────────────────────────────────────────",
+		"⟩",
+	}, "\n")
+
+	message, ok := latestMuseAssistantMessage(logs)
+	if !ok {
+		t.Fatal("latestMuseAssistantMessage() ok = false, want true")
+	}
+	if !strings.Contains(message, "Fixed leakage-feature-quarantine-selector") || !strings.Contains(message, "Verification passed.") {
+		t.Fatalf("latestMuseAssistantMessage() = %q", message)
+	}
+	if strings.Contains(message, "Ran command") || strings.Contains(message, "Wrote ") {
+		t.Fatalf("latestMuseAssistantMessage() included tool status: %q", message)
+	}
+}
+
+func TestLatestMuseAssistantMessageWaitsForComposer(t *testing.T) {
+	if message, ok := latestMuseAssistantMessage("◆ still generating"); ok || message != "" {
+		t.Fatalf("latestMuseAssistantMessage() = (%q, %v), want empty until composer returns", message, ok)
+	}
+}

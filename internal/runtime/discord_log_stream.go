@@ -99,6 +99,7 @@ func (s discordLogSubscriber) forwardLogs(ctx context.Context, summary agxdiscor
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	var previous string
+	var lastAssistantMessage string
 	for {
 		task, project, err := s.runtime.taskAndProject(summary.ID)
 		if err != nil {
@@ -117,6 +118,14 @@ func (s discordLogSubscriber) forwardLogs(ctx context.Context, summary agxdiscor
 			}
 			previous = cleaned
 		}
+		if isMuseTask(summary.Agent) {
+			if message, ok := latestMuseAssistantMessage(cleaned); ok && message != lastAssistantMessage {
+				if !send(agentstream.Event{TaskID: summary.ID, TurnID: turnID, Kind: agentstream.EventAssistantMessage, Agent: summary.Agent, Text: message, CreatedAt: time.Now()}) {
+					return
+				}
+				lastAssistantMessage = message
+			}
+		}
 		if !isRuntimeLogStreamLive(task.Status) {
 			_ = send(agentstream.Event{TaskID: summary.ID, TurnID: turnID, Kind: agentstream.EventTurnCompleted, Agent: summary.Agent, CreatedAt: time.Now()})
 			return
@@ -127,6 +136,69 @@ func (s discordLogSubscriber) forwardLogs(ctx context.Context, summary agxdiscor
 		case <-ticker.C:
 		}
 	}
+}
+
+func isMuseTask(agent string) bool {
+	return strings.EqualFold(strings.TrimSpace(agent), "muse")
+}
+
+func latestMuseAssistantMessage(logs string) (string, bool) {
+	if !museComposerReady(logs) {
+		return "", false
+	}
+	lines := strings.Split(logs, "\n")
+	var blocks []string
+	var current []string
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		block := strings.TrimSpace(strings.Join(current, "\n"))
+		current = nil
+		if block != "" && !isMuseToolStatus(block) {
+			blocks = append(blocks, block)
+		}
+	}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "◆ ") {
+			flush()
+			current = append(current, strings.TrimSpace(strings.TrimPrefix(trimmed, "◆ ")))
+			continue
+		}
+		if len(current) == 0 {
+			continue
+		}
+		if trimmed == "" || strings.HasPrefix(trimmed, "── ") || strings.HasPrefix(trimmed, "⟩") {
+			flush()
+			continue
+		}
+		current = append(current, trimmed)
+	}
+	flush()
+	if len(blocks) == 0 {
+		return "", false
+	}
+	return blocks[len(blocks)-1], true
+}
+
+func museComposerReady(logs string) bool {
+	return strings.Contains(logs, "── Voice input") || strings.Contains(logs, "how can I help?")
+}
+
+func isMuseToolStatus(block string) bool {
+	first, _, _ := strings.Cut(block, "\n")
+	first = strings.TrimSpace(first)
+	for _, prefix := range []string{
+		"Ran command",
+		"Wrote ",
+		"Read ",
+	} {
+		if strings.HasPrefix(first, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func logDelta(previous, current string) string {
