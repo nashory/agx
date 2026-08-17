@@ -309,7 +309,18 @@ func (m *Manager) SendMessage(task db.Task, text string) error {
 	if err := m.validateTaskTargetCWD(task, target); err != nil {
 		return err
 	}
+	if task.Agent == "muse" {
+		return m.sendMuseMessage(target, text)
+	}
 	return m.backend.SendKeys(target, text)
+}
+
+func (m *Manager) sendMuseMessage(target, text string) error {
+	if err := m.backend.SendLiteral(target, text); err != nil {
+		return err
+	}
+	time.Sleep(500 * time.Millisecond)
+	return m.backend.SendEnter(target)
 }
 
 func (m *Manager) ResizeTaskTerminal(task db.Task, cols, rows int) error {

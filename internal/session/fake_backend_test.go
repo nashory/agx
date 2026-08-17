@@ -109,6 +109,11 @@ func (f *fakeBackend) SendKey(target, key string) error {
 	return nil
 }
 
+func (f *fakeBackend) SendLiteral(target, text string) error {
+	f.record("SendLiteral %s %q", target, text)
+	return nil
+}
+
 func (f *fakeBackend) SendInput(target, data string) error {
 	f.record("SendInput %s %q", target, data)
 	return nil

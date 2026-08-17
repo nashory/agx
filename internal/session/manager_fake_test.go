@@ -191,3 +191,24 @@ func TestManagerSendMessageRestartsWhenWindowMissing(t *testing.T) {
 		t.Fatalf("SendMessage did not send text to live window:\n%v", backend.recorded())
 	}
 }
+
+func TestManagerSendMessageSubmitsMuseAfterLiteralInput(t *testing.T) {
+	store, project, task := newSessionStoreWithLiveTask(t)
+	task.Agent = "muse"
+	target := liveTaskTarget(project, task)
+
+	backend := newFakeBackend()
+	backend.windows[target] = true
+	manager := NewManager(store, backend, agent.NewRegistry("muse"))
+
+	if err := manager.SendMessage(task, "안녕?\n상태 봐줘"); err != nil {
+		t.Fatal(err)
+	}
+	calls := backend.recorded()
+	if !containsCall(calls, `SendLiteral `+target+` "안녕?\n상태 봐줘"`) {
+		t.Fatalf("SendMessage did not type Muse text literally:\n%v", calls)
+	}
+	if !containsCall(calls, `SendEnter `+target) {
+		t.Fatalf("SendMessage did not submit Muse text:\n%v", calls)
+	}
+}

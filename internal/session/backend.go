@@ -48,6 +48,8 @@ type Backend interface {
 	SendKeys(target, text string) error
 	// SendKey sends a single named key such as "C-c".
 	SendKey(target, key string) error
+	// SendLiteral writes text exactly as input without submitting it.
+	SendLiteral(target, text string) error
 	// SendInput streams raw terminal bytes, translating control sequences.
 	SendInput(target, data string) error
 	// SendEnter presses Enter without any preceding text.

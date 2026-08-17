@@ -271,6 +271,10 @@ func (b *conptyBackend) SendKey(target, key string) error {
 	return b.write(target, seq)
 }
 
+func (b *conptyBackend) SendLiteral(target, text string) error {
+	return b.write(target, []byte(text))
+}
+
 func (b *conptyBackend) SendInput(target, data string) error {
 	return b.write(target, []byte(data))
 }

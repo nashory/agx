@@ -148,7 +148,7 @@ func (t *Controller) ResizeWindow(target string, cols, rows int) error {
 }
 
 func (t *Controller) SendLiteral(target, text string) error {
-	return t.run("send-keys", "-t", target, text)
+	return t.run("send-keys", "-t", target, "-l", "--", text)
 }
 
 func (t *Controller) SendEnter(target string) error {
