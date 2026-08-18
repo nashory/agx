@@ -1019,7 +1019,10 @@ function TaskView({
         onBack();
         return;
       }
-      if (event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === 't') {
+      // Alt+T on Windows/Linux, Cmd+T on macOS. Alt+T emits a dead key on macOS
+      // layouts, so match event.code as well. Ctrl is excluded so AltGr (Ctrl+Alt)
+      // still types normally.
+      if ((event.code === 'KeyT' || event.key.toLowerCase() === 't') && !event.ctrlKey && (event.altKey || event.metaKey)) {
         event.preventDefault();
         setShowTaskOutput((value) => !value);
         return;

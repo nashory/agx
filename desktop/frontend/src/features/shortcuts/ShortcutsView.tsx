@@ -18,7 +18,7 @@ const shortcutGroups: ShortcutGroup[] = [
       { action: 'Focus new task title', keys: ['Ctrl / Cmd', 'N'] },
       { action: 'Switch to grid view', keys: ['Ctrl / Cmd', '1'] },
       { action: 'Switch to list view', keys: ['Ctrl / Cmd', '2'] },
-      { action: 'Toggle task output panel', keys: ['Alt', 'T'] },
+      { action: 'Toggle task output panel', keys: ['Alt / Cmd', 'T'] },
       { action: 'Reorder tasks', keys: ['Drag'] },
     ],
   },
