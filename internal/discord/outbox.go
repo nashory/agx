@@ -57,6 +57,7 @@ func (b *Bridge) QueueRenderActions(ctx context.Context, taskID, channelID, even
 			Kind:        kind,
 			Content:     action.Content,
 			PromptJSON:  promptJSON,
+			EventKey:    strings.TrimSpace(eventKey),
 		})
 	}
 	if err := store.EnqueueDiscordDeliveries(deliveries); err != nil {

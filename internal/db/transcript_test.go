@@ -50,3 +50,32 @@ func TestTaskTranscriptRejectsInvalidRole(t *testing.T) {
 		t.Fatal("AppendTaskTranscriptMessage accepted invalid role")
 	}
 }
+
+func TestTaskTranscriptEventMessagesAreDeduplicated(t *testing.T) {
+	store, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "task", nil, "codex", StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendTaskTranscriptEventMessage(task.ID, "assistant", "done", nil, "event-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendTaskTranscriptEventMessage(task.ID, "assistant", "done", nil, "event-1"); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := store.ListTaskTranscriptMessages(task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].EventKey == nil || *messages[0].EventKey != "event-1" {
+		t.Fatalf("messages = %#v, want one event-linked transcript", messages)
+	}
+}

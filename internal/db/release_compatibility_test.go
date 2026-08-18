@@ -45,6 +45,8 @@ func TestReleaseCompatibilitySchemaIncludesCurrentState(t *testing.T) {
 			"last_error",
 			"retry_after",
 		},
+		"task_transcript_messages": {"event_key"},
+		"discord_outbox":           {"event_key"},
 	} {
 		actual, err := tableColumns(store, table)
 		if err != nil {

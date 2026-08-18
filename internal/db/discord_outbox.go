@@ -34,10 +34,10 @@ func (s *Store) EnqueueDiscordDeliveries(deliveries []DiscordDelivery) error {
 			return fmt.Errorf("discord delivery content is required")
 		}
 		if _, err := tx.Exec(`
-INSERT INTO discord_outbox (delivery_key, task_id, channel_id, kind, content, prompt_json, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+INSERT INTO discord_outbox (delivery_key, task_id, channel_id, kind, content, prompt_json, event_key, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 ON CONFLICT(delivery_key) DO NOTHING
-`, delivery.DeliveryKey, delivery.TaskID, delivery.ChannelID, delivery.Kind, delivery.Content, cleanOptionalString(delivery.PromptJSON)); err != nil {
+`, delivery.DeliveryKey, delivery.TaskID, delivery.ChannelID, delivery.Kind, delivery.Content, cleanOptionalString(delivery.PromptJSON), cleanNullableString(delivery.EventKey)); err != nil {
 			return err
 		}
 	}
@@ -49,7 +49,7 @@ func (s *Store) ListPendingDiscordDeliveries(limit int) ([]DiscordDelivery, erro
 		limit = 100
 	}
 	rows, err := s.db.Query(`
-SELECT id, delivery_key, task_id, channel_id, kind, content, prompt_json, attempts, last_error, delivered_at, created_at, updated_at
+SELECT id, delivery_key, task_id, channel_id, kind, content, prompt_json, COALESCE(event_key, ''), attempts, last_error, delivered_at, created_at, updated_at
 FROM discord_outbox
 WHERE delivered_at IS NULL
 ORDER BY id ASC
@@ -62,7 +62,7 @@ LIMIT ?
 	var deliveries []DiscordDelivery
 	for rows.Next() {
 		var delivery DiscordDelivery
-		if err := rows.Scan(&delivery.ID, &delivery.DeliveryKey, &delivery.TaskID, &delivery.ChannelID, &delivery.Kind, &delivery.Content, &delivery.PromptJSON, &delivery.Attempts, &delivery.LastError, &delivery.DeliveredAt, &delivery.CreatedAt, &delivery.UpdatedAt); err != nil {
+		if err := rows.Scan(&delivery.ID, &delivery.DeliveryKey, &delivery.TaskID, &delivery.ChannelID, &delivery.Kind, &delivery.Content, &delivery.PromptJSON, &delivery.EventKey, &delivery.Attempts, &delivery.LastError, &delivery.DeliveredAt, &delivery.CreatedAt, &delivery.UpdatedAt); err != nil {
 			return nil, err
 		}
 		deliveries = append(deliveries, delivery)
@@ -107,9 +107,9 @@ func (s *Store) DiscordDelivery(deliveryKey string) (DiscordDelivery, error) {
 	}
 	var delivery DiscordDelivery
 	err := s.db.QueryRow(`
-SELECT id, delivery_key, task_id, channel_id, kind, content, prompt_json, attempts, last_error, delivered_at, created_at, updated_at
+SELECT id, delivery_key, task_id, channel_id, kind, content, prompt_json, COALESCE(event_key, ''), attempts, last_error, delivered_at, created_at, updated_at
 FROM discord_outbox
 WHERE delivery_key = ?
-`, deliveryKey).Scan(&delivery.ID, &delivery.DeliveryKey, &delivery.TaskID, &delivery.ChannelID, &delivery.Kind, &delivery.Content, &delivery.PromptJSON, &delivery.Attempts, &delivery.LastError, &delivery.DeliveredAt, &delivery.CreatedAt, &delivery.UpdatedAt)
+`, deliveryKey).Scan(&delivery.ID, &delivery.DeliveryKey, &delivery.TaskID, &delivery.ChannelID, &delivery.Kind, &delivery.Content, &delivery.PromptJSON, &delivery.EventKey, &delivery.Attempts, &delivery.LastError, &delivery.DeliveredAt, &delivery.CreatedAt, &delivery.UpdatedAt)
 	return delivery, err
 }

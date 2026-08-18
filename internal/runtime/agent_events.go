@@ -851,8 +851,8 @@ func (s *agentEventService) persistTranscriptEvent(taskID string, event agentstr
 	body := ""
 	switch event.Kind {
 	case agentstream.EventAssistantMessage:
-		role = "assistant"
-		body = event.Text
+		_ = s.runtime.store.AppendTaskTranscriptEventMessage(taskID, "assistant", event.Text, cleanTurnID(event.TurnID), event.DedupKey())
+		return
 	case agentstream.EventError:
 		role = "status"
 		if strings.TrimSpace(event.Error) != "" {
@@ -880,6 +880,14 @@ func (s *agentEventService) persistTranscriptEvent(taskID string, event agentstr
 		turnID = &value
 	}
 	_ = s.runtime.store.AppendTaskTranscriptMessage(taskID, role, body, turnID, nil)
+}
+
+func cleanTurnID(turnID string) *string {
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return nil
+	}
+	return &turnID
 }
 
 func (s *agentEventService) removeSubscriber(taskID string, subscriber *agentstream.EventQueue) {

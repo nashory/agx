@@ -166,6 +166,7 @@ type TaskTranscriptMessage struct {
 	Role             string
 	Body             string
 	DiscordMessageID *string
+	EventKey         *string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -180,6 +181,7 @@ type DiscordDelivery struct {
 	Kind        string
 	Content     string
 	PromptJSON  *string
+	EventKey    string
 	Attempts    int
 	LastError   *string
 	DeliveredAt *time.Time

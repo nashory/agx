@@ -26,7 +26,7 @@ func TestDiscordOutboxRetriesDurableSemanticMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 {
+	if len(pending) != 1 || pending[0].EventKey != "event-1" {
 		t.Fatalf("pending = %#v, want one deduplicated delivery", pending)
 	}
 

@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS task_transcript_messages (
 	role               TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system', 'status', 'tool_trace')),
 	body               TEXT NOT NULL,
 	discord_message_id TEXT,
+	event_key          TEXT,
 	created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS discord_outbox (
 	kind         TEXT NOT NULL CHECK (kind IN ('message', 'interactive')),
 	content      TEXT NOT NULL,
 	prompt_json  TEXT,
+	event_key    TEXT,
 	attempts     INTEGER NOT NULL DEFAULT 0,
 	last_error   TEXT,
 	delivered_at DATETIME,
@@ -174,6 +176,18 @@ INSERT OR IGNORE INTO schema_migrations(version) VALUES (1);
 	if err := s.ensureColumn("tasks", "workspace_mode", "TEXT NOT NULL DEFAULT 'worktree'"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("task_transcript_messages", "event_key", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("discord_outbox", "event_key", "TEXT"); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_transcript_event ON task_transcript_messages(task_id, event_key) WHERE event_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_discord_outbox_event ON discord_outbox(task_id, event_key);
+`); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(`
 UPDATE tasks
 SET interface = 'discord'
@@ -239,6 +253,8 @@ func validMigrationColumn(table, column, definition string) bool {
 			(column == "last_user_prompt" && definition == "TEXT") ||
 			(column == "interface" && definition == "TEXT NOT NULL DEFAULT 'local'") ||
 			(column == "workspace_mode" && definition == "TEXT NOT NULL DEFAULT 'worktree'")
+	case "task_transcript_messages", "discord_outbox":
+		return column == "event_key" && definition == "TEXT"
 	default:
 		return false
 	}

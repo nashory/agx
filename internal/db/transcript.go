@@ -10,6 +10,18 @@ import (
 const maxTranscriptBodyBytes = 64 * 1024
 
 func (s *Store) AppendTaskTranscriptMessage(taskID, role, body string, turnID, discordMessageID *string) error {
+	return s.appendTaskTranscriptMessage(taskID, role, body, turnID, discordMessageID, nil)
+}
+
+func (s *Store) AppendTaskTranscriptEventMessage(taskID, role, body string, turnID *string, eventKey string) error {
+	eventKey = strings.TrimSpace(eventKey)
+	if eventKey == "" {
+		return s.AppendTaskTranscriptMessage(taskID, role, body, turnID, nil)
+	}
+	return s.appendTaskTranscriptMessage(taskID, role, body, turnID, nil, &eventKey)
+}
+
+func (s *Store) appendTaskTranscriptMessage(taskID, role, body string, turnID, discordMessageID, eventKey *string) error {
 	taskID = strings.TrimSpace(taskID)
 	role = strings.TrimSpace(role)
 	body = strings.TrimSpace(body)
@@ -23,7 +35,7 @@ func (s *Store) AppendTaskTranscriptMessage(taskID, role, body string, turnID, d
 		return nil
 	}
 	body = truncateBytes(body, maxTranscriptBodyBytes)
-	return s.execTaskTranscriptInsert(taskID, role, body, cleanOptionalString(turnID), cleanOptionalString(discordMessageID))
+	return s.execTaskTranscriptInsert(taskID, role, body, cleanOptionalString(turnID), cleanOptionalString(discordMessageID), cleanOptionalString(eventKey))
 }
 
 func (s *Store) ListTaskTranscriptMessages(taskID string, limit int) ([]TaskTranscriptMessage, error) {
@@ -35,9 +47,9 @@ func (s *Store) ListTaskTranscriptMessages(taskID string, limit int) ([]TaskTran
 		limit = 100
 	}
 	rows, err := s.db.Query(`
-SELECT id, task_id, turn_id, role, body, discord_message_id, created_at, updated_at
+SELECT id, task_id, turn_id, role, body, discord_message_id, event_key, created_at, updated_at
 FROM (
-	SELECT id, task_id, turn_id, role, body, discord_message_id, created_at, updated_at
+	SELECT id, task_id, turn_id, role, body, discord_message_id, event_key, created_at, updated_at
 	FROM task_transcript_messages
 	WHERE task_id = ?
 	ORDER BY created_at DESC, id DESC
@@ -60,11 +72,15 @@ ORDER BY created_at ASC, id ASC
 	return messages, rows.Err()
 }
 
-func (s *Store) execTaskTranscriptInsert(taskID, role, body string, turnID, discordMessageID *string) error {
-	_, err := s.db.Exec(`
-INSERT INTO task_transcript_messages (task_id, turn_id, role, body, discord_message_id, updated_at)
-VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-`, taskID, turnID, role, body, discordMessageID)
+func (s *Store) execTaskTranscriptInsert(taskID, role, body string, turnID, discordMessageID, eventKey *string) error {
+	query := `
+INSERT INTO task_transcript_messages (task_id, turn_id, role, body, discord_message_id, event_key, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+`
+	if eventKey != nil {
+		query += ` ON CONFLICT DO NOTHING`
+	}
+	_, err := s.db.Exec(query, taskID, turnID, role, body, discordMessageID, eventKey)
 	return err
 }
 
@@ -72,7 +88,7 @@ func scanTaskTranscriptMessage(scanner interface {
 	Scan(dest ...any) error
 }) (TaskTranscriptMessage, error) {
 	var message TaskTranscriptMessage
-	if err := scanner.Scan(&message.ID, &message.TaskID, &message.TurnID, &message.Role, &message.Body, &message.DiscordMessageID, &message.CreatedAt, &message.UpdatedAt); err != nil {
+	if err := scanner.Scan(&message.ID, &message.TaskID, &message.TurnID, &message.Role, &message.Body, &message.DiscordMessageID, &message.EventKey, &message.CreatedAt, &message.UpdatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return TaskTranscriptMessage{}, err
 		}

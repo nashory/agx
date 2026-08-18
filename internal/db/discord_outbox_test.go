@@ -19,7 +19,7 @@ func TestDiscordOutboxPersistsAndDeduplicatesDeliveries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delivery := DiscordDelivery{DeliveryKey: "delivery-1", TaskID: task.ID, ChannelID: "channel-1", Kind: DiscordDeliveryMessage, Content: "done"}
+	delivery := DiscordDelivery{DeliveryKey: "delivery-1", TaskID: task.ID, ChannelID: "channel-1", Kind: DiscordDeliveryMessage, Content: "done", EventKey: "event-1"}
 	if err := store.EnqueueDiscordDeliveries([]DiscordDelivery{delivery, delivery}); err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestDiscordOutboxPersistsAndDeduplicatesDeliveries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 || pending[0].Content != "done" {
+	if len(pending) != 1 || pending[0].Content != "done" || pending[0].EventKey != "event-1" {
 		t.Fatalf("pending = %#v, want one delivery", pending)
 	}
 	sendErr := errors.New("discord unavailable")

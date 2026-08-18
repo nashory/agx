@@ -74,3 +74,52 @@ INSERT INTO tasks (id, project_id, title, status, agent) VALUES
 		t.Fatal("done task was not deleted during migration")
 	}
 }
+
+func TestMigrateAddsDiscordDeliveryEventKeys(t *testing.T) {
+	database, err := sql.Open("sqlite", "file:agx-event-key-migration?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.Exec(`
+CREATE TABLE task_transcript_messages (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	task_id TEXT NOT NULL,
+	turn_id TEXT,
+	role TEXT NOT NULL,
+	body TEXT NOT NULL,
+	discord_message_id TEXT,
+	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE discord_outbox (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	delivery_key TEXT NOT NULL UNIQUE,
+	task_id TEXT NOT NULL,
+	channel_id TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	content TEXT NOT NULL,
+	prompt_json TEXT,
+	attempts INTEGER NOT NULL DEFAULT 0,
+	last_error TEXT,
+	delivered_at DATETIME,
+	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+`); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{db: database}
+	if err := store.migrate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"task_transcript_messages", "discord_outbox"} {
+		columns, err := tableColumns(store, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !columns["event_key"] {
+			t.Fatalf("%s.event_key missing after migration", table)
+		}
+	}
+}
