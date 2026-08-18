@@ -87,7 +87,6 @@ func (s *Service) createStructuredDiscordTaskQueued(project db.Project, req crea
 	if err != nil {
 		return db.Task{}, err
 	}
-	s.syncDiscordTaskAsync(task.ID)
 	prompt := structuredInitialPrompt(req.Description, req.InitialPrompt)
 	go s.startStructuredDiscordTaskQueued(project, task.ID, workspaceMode, prompt)
 	return task, nil
@@ -133,7 +132,13 @@ func (s *Service) startStructuredDiscordTaskQueued(project db.Project, taskID st
 		return
 	}
 	s.publishStructuredTaskUpdate(task)
-	s.syncDiscordTaskAsync(task.ID)
+	// The first structured turn can finish before an asynchronous Discord sync
+	// subscribes to agent events. Reconcile the channel and install the stream
+	// subscriber synchronously before launching Codex, Claude, or Muse.
+	if err := s.syncDiscordTaskNow(task.ID); err != nil {
+		s.markStructuredDiscordTaskStartupFailed(task, fmt.Errorf("prepare Discord task stream: %w", err))
+		return
+	}
 	ctx, cancel := s.backgroundTimeout(2 * time.Minute)
 	defer cancel()
 	if err := s.startStructuredDiscordTask(ctx, project, task, prompt); err != nil {
