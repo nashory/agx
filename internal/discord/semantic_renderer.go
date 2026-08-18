@@ -48,8 +48,13 @@ type ProgressMessageSender interface {
 	ClearProgressMessage(ctx context.Context, channelID string) error
 }
 
+type RenderActionQueue interface {
+	QueueRenderActions(ctx context.Context, taskID, channelID, eventKey string, actions []RenderAction) error
+}
+
 type SemanticEventForwarder struct {
 	sender   MessageSender
+	queue    RenderActionQueue
 	renderer SemanticRenderer
 	turns    map[string]*semanticTurnState
 }
@@ -62,6 +67,12 @@ type semanticTurnState struct {
 
 func NewSemanticEventForwarder(sender MessageSender) *SemanticEventForwarder {
 	return &SemanticEventForwarder{sender: sender, renderer: NewSemanticRenderer(), turns: map[string]*semanticTurnState{}}
+}
+
+func NewQueuedSemanticEventForwarder(sender MessageSender, queue RenderActionQueue) *SemanticEventForwarder {
+	forwarder := NewSemanticEventForwarder(sender)
+	forwarder.queue = queue
+	return forwarder
 }
 
 func (f *SemanticEventForwarder) Forward(ctx context.Context, channelID string, events <-chan agentstream.Event) error {
@@ -81,27 +92,45 @@ func (f *SemanticEventForwarder) Forward(ctx context.Context, channelID string, 
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if err := f.forwardActions(ctx, channelID, f.flushAllAssistantProgress()); err != nil {
+			if err := f.forwardActions(ctx, "", channelID, "", f.flushAllAssistantProgress()); err != nil {
 				return err
 			}
 		case event, ok := <-events:
 			if !ok {
-				if err := f.forwardActions(ctx, channelID, f.flushAllAssistantProgress()); err != nil {
+				if err := f.forwardActions(ctx, "", channelID, "", f.flushAllAssistantProgress()); err != nil {
 					return err
 				}
 				return nil
 			}
-			if err := f.forwardActions(ctx, channelID, f.render(event)); err != nil {
+			if err := f.forwardActions(ctx, event.TaskID, channelID, event.DedupKey(), f.render(event)); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-func (f *SemanticEventForwarder) forwardActions(ctx context.Context, channelID string, actions []RenderAction) error {
+func (f *SemanticEventForwarder) forwardActions(ctx context.Context, taskID, channelID, eventKey string, actions []RenderAction) error {
+	if f.queue != nil {
+		queued := make([]RenderAction, 0, len(actions))
+		for _, action := range actions {
+			if action.Kind == RenderSend && strings.TrimSpace(action.Content) != "" {
+				queued = append(queued, action)
+			}
+		}
+		if len(queued) > 0 {
+			if err := retrySemanticSend(ctx, func() error {
+				return f.queue.QueueRenderActions(ctx, taskID, channelID, eventKey, queued)
+			}); err != nil {
+				return err
+			}
+		}
+	}
 	for _, action := range actions {
 		switch action.Kind {
 		case RenderSend:
+			if f.queue != nil {
+				continue
+			}
 			if strings.TrimSpace(action.Content) == "" {
 				continue
 			}

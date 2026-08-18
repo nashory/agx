@@ -448,7 +448,7 @@ func (b *Bot) sendMessageWithSession(ctx context.Context, session messageSendSes
 		return nil
 	}
 	b.stopProcessingIndicator(context.Background(), channelID)
-	_, err := session.ChannelMessageSend(channelID, content)
+	_, err := session.ChannelMessageSend(channelID, content, discordgo.WithContext(ctx))
 	return err
 }
 
@@ -462,7 +462,7 @@ func (b *Bot) SendInteractivePrompt(ctx context.Context, channelID string, promp
 	if len(components) > 0 {
 		message.Components = components
 	}
-	_, err := b.session.ChannelMessageSendComplex(channelID, message)
+	_, err := b.session.ChannelMessageSendComplex(channelID, message, discordgo.WithContext(ctx))
 	return err
 }
 

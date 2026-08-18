@@ -51,6 +51,8 @@ type Bridge struct {
 	events    AgentEventSubscriber
 	store     *db.Store
 	streams   map[string]taskStream
+	delivery  chan struct{}
+	deliverer context.CancelFunc
 	ownerChan string
 	startedAt time.Time
 	lastErr   string
@@ -106,6 +108,7 @@ func NewBridge(cfg config.DiscordConfig) *Bridge {
 		chanSync:  make(chan struct{}, 1),
 		active:    map[string]activeSync{},
 		streams:   map[string]taskStream{},
+		delivery:  make(chan struct{}, 1),
 	}
 }
 
@@ -231,12 +234,17 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error
 	b.mu.Lock()
 	b.bot = bot
 	b.lock = lock
+	deliveryCtx, deliveryCancel := context.WithCancel(context.Background())
+	b.deliverer = deliveryCancel
 	b.startedAt = time.Now()
 	b.connected = true
 	b.ownerChan = controlChannelID
 	b.lastErr = ""
 	b.mu.Unlock()
 	logConnectPhase("connected", started, "guild", cfg.GuildID)
+	if store != nil {
+		go b.runDiscordDeliveryLoop(deliveryCtx, store, bot)
+	}
 	if store != nil && initialSync {
 		go b.syncActiveTasksAfterStart(store, bot, cfg.GuildID)
 	} else {
@@ -284,14 +292,19 @@ func (b *Bridge) Stop() error {
 	b.mu.Lock()
 	bot := b.bot
 	lock := b.lock
+	deliverer := b.deliverer
 	b.cancelTaskStreamsLocked()
 	b.bot = nil
 	b.lock = nil
+	b.deliverer = nil
 	b.ownerChan = ""
 	b.connected = false
 	b.startedAt = time.Time{}
 	b.lastErr = ""
 	b.mu.Unlock()
+	if deliverer != nil {
+		deliverer()
+	}
 
 	var err error
 	if bot != nil {
@@ -884,7 +897,14 @@ func (b *Bridge) startTaskStream(service CommandService, events AgentEventSubscr
 	go func() {
 		defer cancel()
 		defer b.removeTaskStream(task.ID, task.ChannelID)
-		if err := NewSemanticEventForwarder(bot).Forward(ctx, task.ChannelID, stream); err != nil && ctx.Err() == nil {
+		forwarder := NewSemanticEventForwarder(bot)
+		b.mu.Lock()
+		hasStore := b.store != nil
+		b.mu.Unlock()
+		if hasStore {
+			forwarder = NewQueuedSemanticEventForwarder(bot, b)
+		}
+		if err := forwarder.Forward(ctx, task.ChannelID, stream); err != nil && ctx.Err() == nil {
 			b.setError(err)
 		}
 	}()

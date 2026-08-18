@@ -88,6 +88,23 @@ CREATE TABLE IF NOT EXISTS discord_processed_messages (
 	PRIMARY KEY(task_id, discord_message_id)
 );
 
+CREATE TABLE IF NOT EXISTS discord_outbox (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	delivery_key TEXT NOT NULL UNIQUE,
+	task_id      TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+	channel_id   TEXT NOT NULL,
+	kind         TEXT NOT NULL CHECK (kind IN ('message', 'interactive')),
+	content      TEXT NOT NULL,
+	prompt_json  TEXT,
+	attempts     INTEGER NOT NULL DEFAULT 0,
+	last_error   TEXT,
+	delivered_at DATETIME,
+	created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_discord_outbox_pending ON discord_outbox(delivered_at, id);
+
 CREATE TABLE IF NOT EXISTS discord_mappings (
 	id            TEXT PRIMARY KEY,
 	agx_type      TEXT NOT NULL,

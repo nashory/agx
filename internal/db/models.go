@@ -170,6 +170,23 @@ type TaskTranscriptMessage struct {
 	UpdatedAt        time.Time
 }
 
+// DiscordDelivery is a durable semantic message waiting to be delivered to a
+// task's Discord channel.
+type DiscordDelivery struct {
+	ID          int64
+	DeliveryKey string
+	TaskID      string
+	ChannelID   string
+	Kind        string
+	Content     string
+	PromptJSON  *string
+	Attempts    int
+	LastError   *string
+	DeliveredAt *time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 // TaskAttachment records a Discord attachment that AGX persisted for a task.
 // Files live on disk under the runtime attachment root; this row is the durable
 // index used for idempotency, transcript rendering, and cleanup.
