@@ -17,10 +17,32 @@ import (
 func TestMuseStreamArgsUsesPersistentSession(t *testing.T) {
 	threadID := "session-1"
 	task := db.Task{ID: "task-1", Agent: "muse", AllMighty: true, AgentThreadID: &threadID}
-	got := museStreamArgs(task, "/workspace", "hello")
-	want := []string{"exec", "--json", "--user-input-auto-resolve", "--workspace", "/workspace", "--session-id", "session-1", "--yolo", "hello"}
+	got := museStreamArgs(task, "/workspace", "/tmp/prompt")
+	want := []string{"exec", "--json", "--user-input-auto-resolve", "--prompt-file", "/tmp/prompt", "--workspace", "/workspace", "--session-id", "session-1", "--yolo"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("museStreamArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestWriteMusePromptUsesPrivateFile(t *testing.T) {
+	path, err := writeMusePrompt("private prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("prompt mode = %o, want 600", got)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "private prompt" {
+		t.Fatalf("prompt content = %q", content)
 	}
 }
 
@@ -225,5 +247,56 @@ func TestClaudeStreamRequiresTerminalResult(t *testing.T) {
 	err = service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "hello")
 	if err == nil || !strings.Contains(err.Error(), "without a terminal result") {
 		t.Fatalf("execClaudeStreamOnce() error = %v, want missing terminal error", err)
+	}
+}
+
+func TestClaudeStreamReadsPromptFromStdin(t *testing.T) {
+	commandDir := t.TempDir()
+	command := filepath.Join(commandDir, "claude")
+	argsFile := filepath.Join(commandDir, "args")
+	stdinFile := filepath.Join(commandDir, "stdin")
+	script := `#!/bin/sh
+printf '%s' "$*" > "$AGX_CLAUDE_ARGS"
+IFS= read -r prompt
+printf '%s' "$prompt" > "$AGX_CLAUDE_STDIN"
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}'
+`
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", commandDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("AGX_CLAUDE_ARGS", argsFile)
+	t.Setenv("AGX_CLAUDE_STDIN", stdinFile)
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := db.Task{ID: db.NewTaskID(), ProjectID: project.ID, Agent: "claude"}
+	service := NewService("test")
+	service.store = store
+	t.Cleanup(func() { _ = service.agents.Close() })
+
+	const prompt = "private-prompt-value"
+	if err := service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", prompt); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin, err := os.ReadFile(stdinFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(args), prompt) {
+		t.Fatalf("Claude argv exposed prompt: %q", args)
+	}
+	if string(stdin) != prompt {
+		t.Fatalf("Claude stdin = %q, want prompt", stdin)
 	}
 }

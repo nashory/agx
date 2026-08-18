@@ -598,9 +598,10 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	if err != nil {
 		return err
 	}
-	args := claudeStreamArgs(task, message)
+	args := claudeStreamArgs(task)
 	cmd := exec.CommandContext(ctx, ag.Command, args...)
 	cmd.Dir = taskWorkingDir(task, project)
+	cmd.Stdin = strings.NewReader(message)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -651,7 +652,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	return nil
 }
 
-func claudeStreamArgs(task db.Task, message string) []string {
+func claudeStreamArgs(task db.Task) []string {
 	args := []string{"--print", "--verbose", "--output-format", "stream-json", "--disallowedTools", "AskUserQuestion"}
 	threadID := claudeThreadID(task)
 	if task.AgentEventCursor != nil && strings.TrimSpace(*task.AgentEventCursor) != "" {
@@ -664,7 +665,7 @@ func claudeStreamArgs(task db.Task, message string) []string {
 		args = append(args, agent.SandboxDisableArgs()...)
 		args = append(args, "--dangerously-skip-permissions")
 	}
-	return append(args, message)
+	return args
 }
 
 func claudeThreadID(task db.Task) string {

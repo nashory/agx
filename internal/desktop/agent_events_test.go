@@ -523,7 +523,7 @@ func TestClaudeStreamArgsCreatesSessionBeforeCursor(t *testing.T) {
 	threadID := "11111111-1111-1111-1111-111111111111"
 	task := db.Task{ID: "task-1", Agent: "claude", AgentThreadID: &threadID, AllMighty: true}
 
-	args := strings.Join(claudeStreamArgs(task, "hello"), " ")
+	args := strings.Join(claudeStreamArgs(task), " ")
 	if !strings.Contains(args, "--session-id "+threadID) {
 		t.Fatalf("args = %q, want --session-id", args)
 	}
@@ -543,7 +543,7 @@ func TestClaudeStreamArgsResumesAfterCursor(t *testing.T) {
 	cursor := threadID
 	task := db.Task{ID: "task-1", Agent: "claude", AgentThreadID: &threadID, AgentEventCursor: &cursor}
 
-	args := strings.Join(claudeStreamArgs(task, "hello"), " ")
+	args := strings.Join(claudeStreamArgs(task), " ")
 	if !strings.Contains(args, "--resume "+threadID) {
 		t.Fatalf("args = %q, want --resume", args)
 	}

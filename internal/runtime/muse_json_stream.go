@@ -168,7 +168,12 @@ func (s *agentEventService) execMuseStreamOnce(ctx context.Context, task db.Task
 		return err
 	}
 	workingDir := taskWorkingDir(task, project)
-	cmd := exec.CommandContext(ctx, museExecCommand(ag.Command), museStreamArgs(task, workingDir, message)...)
+	promptFile, err := writeMusePrompt(message)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(promptFile)
+	cmd := exec.CommandContext(ctx, museExecCommand(ag.Command), museStreamArgs(task, workingDir, promptFile)...)
 	cmd.Dir = workingDir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -227,16 +232,34 @@ func museSessionAlreadyInUse(err error) bool {
 	return strings.Contains(message, "session") && strings.Contains(message, "already in use")
 }
 
-func museStreamArgs(task db.Task, workingDir, message string) []string {
+func museStreamArgs(task db.Task, workingDir, promptFile string) []string {
 	threadID := task.ID
 	if task.AgentThreadID != nil && strings.TrimSpace(*task.AgentThreadID) != "" {
 		threadID = strings.TrimSpace(*task.AgentThreadID)
 	}
-	args := []string{"exec", "--json", "--user-input-auto-resolve", "--workspace", workingDir, "--session-id", threadID}
+	args := []string{"exec", "--json", "--user-input-auto-resolve", "--prompt-file", promptFile, "--workspace", workingDir, "--session-id", threadID}
 	if task.AllMighty {
 		args = append(args, "--yolo")
 	}
-	return append(args, message)
+	return args
+}
+
+func writeMusePrompt(message string) (string, error) {
+	file, err := os.CreateTemp("", "agx-muse-prompt-*")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if _, err := file.WriteString(message); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
 }
 
 // Meta's launcher wraps muse.real and can remain alive after a headless child
