@@ -78,7 +78,7 @@ export const defaultPreferences: UserPreferences = {
   defaultTaskView: 'grid',
   monitorRefreshSeconds: 5,
   projectCandidateLimit: 18,
-  defaultAllMighty: false,
+  defaultAllMighty: true,
 };
 
 export const preferenceKey = 'agx-preferences';
