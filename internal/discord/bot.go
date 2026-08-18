@@ -439,6 +439,10 @@ func (b *Bot) SendMessage(ctx context.Context, channelID, content string) error 
 	return b.sendMessageWithSession(ctx, b.session, channelID, content)
 }
 
+func (b *Bot) SendMessageOnce(ctx context.Context, channelID, nonce, content string) error {
+	return b.sendMessageOnceWithSession(ctx, b.session, channelID, nonce, content, nil)
+}
+
 type messageSendSession interface {
 	ChannelMessageSend(string, string, ...discordgo.RequestOption) (*discordgo.Message, error)
 }
@@ -449,6 +453,32 @@ func (b *Bot) sendMessageWithSession(ctx context.Context, session messageSendSes
 	}
 	b.stopProcessingIndicator(context.Background(), channelID)
 	_, err := session.ChannelMessageSend(channelID, content, discordgo.WithContext(ctx))
+	return err
+}
+
+type messageCreateSession interface {
+	RequestWithBucketID(method, urlStr string, data interface{}, bucketID string, options ...discordgo.RequestOption) ([]byte, error)
+}
+
+type idempotentMessagePayload struct {
+	Content      string                       `json:"content,omitempty"`
+	Components   []discordgo.MessageComponent `json:"components,omitempty"`
+	Nonce        string                       `json:"nonce"`
+	EnforceNonce bool                         `json:"enforce_nonce"`
+}
+
+func (b *Bot) sendMessageOnceWithSession(ctx context.Context, session messageCreateSession, channelID, nonce, content string, components []discordgo.MessageComponent) error {
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	b.stopProcessingIndicator(context.Background(), channelID)
+	endpoint := discordgo.EndpointChannelMessages(channelID)
+	_, err := session.RequestWithBucketID("POST", endpoint, idempotentMessagePayload{
+		Content:      content,
+		Components:   components,
+		Nonce:        nonce,
+		EnforceNonce: strings.TrimSpace(nonce) != "",
+	}, endpoint, discordgo.WithContext(ctx))
 	return err
 }
 
@@ -464,6 +494,10 @@ func (b *Bot) SendInteractivePrompt(ctx context.Context, channelID string, promp
 	}
 	_, err := b.session.ChannelMessageSendComplex(channelID, message, discordgo.WithContext(ctx))
 	return err
+}
+
+func (b *Bot) SendInteractivePromptOnce(ctx context.Context, channelID, nonce string, prompt InteractivePrompt) error {
+	return b.sendMessageOnceWithSession(ctx, b.session, channelID, nonce, prompt.Content, choiceComponents(prompt))
 }
 
 func choiceComponents(prompt InteractivePrompt) []discordgo.MessageComponent {

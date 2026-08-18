@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,6 +98,47 @@ func TestDiscordOutboxPreservesChunkOrder(t *testing.T) {
 	if len(sender.messages) != 2 || sender.messages[0] != "first chunk" || sender.messages[1] != "second chunk" {
 		t.Fatalf("messages = %#v, want chunks in order", sender.messages)
 	}
+}
+
+func TestDiscordOutboxReusesNonceAcrossRetries(t *testing.T) {
+	delivery := db.DiscordDelivery{DeliveryKey: strings.Repeat("a", 64), ChannelID: "channel-1", Content: "done"}
+	sender := &nonceRecordingSender{failures: 1, seen: map[string]struct{}{}}
+	previousDelay := semanticSendRetryDelay
+	semanticSendRetryDelay = time.Millisecond
+	t.Cleanup(func() { semanticSendRetryDelay = previousDelay })
+	if err := retrySemanticSend(context.Background(), func() error {
+		return sendDiscordDelivery(context.Background(), sender, delivery)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if sender.calls != 2 || len(sender.seen) != 1 {
+		t.Fatalf("calls = %d unique nonces = %d, want 2 calls with one nonce", sender.calls, len(sender.seen))
+	}
+	for nonce := range sender.seen {
+		if len(nonce) != 25 {
+			t.Fatalf("nonce length = %d, want 25", len(nonce))
+		}
+	}
+}
+
+type nonceRecordingSender struct {
+	failures int
+	calls    int
+	seen     map[string]struct{}
+}
+
+func (s *nonceRecordingSender) SendMessage(context.Context, string, string) error {
+	return errors.New("non-idempotent send should not be used")
+}
+
+func (s *nonceRecordingSender) SendMessageOnce(_ context.Context, _, nonce, _ string) error {
+	s.calls++
+	s.seen[nonce] = struct{}{}
+	if s.failures > 0 {
+		s.failures--
+		return errors.New("response timeout")
+	}
+	return nil
 }
 
 type channelSelectiveSender struct {

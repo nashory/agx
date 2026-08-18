@@ -16,6 +16,14 @@ const discordOutboxBatchSize = 100
 
 var discordOutboxRetryDelay = time.Second
 
+type idempotentMessageSender interface {
+	SendMessageOnce(ctx context.Context, channelID, nonce, content string) error
+}
+
+type idempotentInteractivePromptSender interface {
+	SendInteractivePromptOnce(ctx context.Context, channelID, nonce string, prompt InteractivePrompt) error
+}
+
 func (b *Bridge) QueueRenderActions(ctx context.Context, taskID, channelID, eventKey string, actions []RenderAction) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -142,14 +150,29 @@ func deliverDiscordOutboxOnce(ctx context.Context, store *db.Store, sender Messa
 }
 
 func sendDiscordDelivery(ctx context.Context, sender MessageSender, delivery db.DiscordDelivery) error {
+	nonce := discordDeliveryNonce(delivery.DeliveryKey)
 	if delivery.Kind == db.DiscordDeliveryInteractive && delivery.PromptJSON != nil {
 		var prompt InteractivePrompt
 		if err := json.Unmarshal([]byte(*delivery.PromptJSON), &prompt); err != nil {
 			return err
 		}
+		if interactive, ok := sender.(idempotentInteractivePromptSender); ok {
+			return interactive.SendInteractivePromptOnce(ctx, delivery.ChannelID, nonce, prompt)
+		}
 		if interactive, ok := sender.(InteractivePromptSender); ok {
 			return interactive.SendInteractivePrompt(ctx, delivery.ChannelID, prompt)
 		}
 	}
+	if idempotent, ok := sender.(idempotentMessageSender); ok {
+		return idempotent.SendMessageOnce(ctx, delivery.ChannelID, nonce, delivery.Content)
+	}
 	return sender.SendMessage(ctx, delivery.ChannelID, delivery.Content)
+}
+
+func discordDeliveryNonce(deliveryKey string) string {
+	deliveryKey = strings.TrimSpace(deliveryKey)
+	if len(deliveryKey) > 25 {
+		return deliveryKey[:25]
+	}
+	return deliveryKey
 }
