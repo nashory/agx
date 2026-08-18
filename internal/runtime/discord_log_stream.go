@@ -43,7 +43,7 @@ func isRuntimeStructuredAgentTask(task agxdiscord.TaskSummary) bool {
 		return false
 	}
 	kind := strings.TrimSpace(*task.AgentStreamKind)
-	return kind == claudeStreamKind || kind == codexapp.StreamKind
+	return kind == claudeStreamKind || kind == codexapp.StreamKind || kind == museStreamKind
 }
 
 // isStructuredStreamTask reports whether a task is backed by a structured agent
@@ -54,7 +54,7 @@ func isStructuredStreamTask(task db.Task) bool {
 		return false
 	}
 	kind := strings.TrimSpace(*task.AgentStreamKind)
-	return kind == claudeStreamKind || kind == codexapp.StreamKind
+	return kind == claudeStreamKind || kind == codexapp.StreamKind || kind == museStreamKind
 }
 
 // structuredTaskTranscript renders a structured task's recent transcript as a

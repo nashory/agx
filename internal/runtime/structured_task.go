@@ -174,6 +174,9 @@ func (s *Service) markStructuredTaskStream(task db.Task) error {
 		streamKind := codexapp.StreamKind
 		return s.store.UpdateTaskAgentStream(task.ID, task.AgentThreadID, task.AgentEventCursor, &streamKind)
 	}
+	if isMuseTask(task.Agent) {
+		return s.agents.ensureMuseStreamTask(task)
+	}
 	return agentstreamUnsupported(task)
 }
 
@@ -276,7 +279,7 @@ func structuredInitialPrompt(description, override *string) string {
 // isStructuredAgentName reports whether an agent can be controlled through the
 // structured event pipeline instead of legacy tmux input.
 func isStructuredAgentName(agentName string) bool {
-	return isCodexTask(agentName) || isClaudeTask(agentName)
+	return isCodexTask(agentName) || isClaudeTask(agentName) || isMuseTask(agentName)
 }
 
 // isRuntimeStructuredDBTask identifies tasks whose runtime state is owned by an
@@ -286,7 +289,7 @@ func isRuntimeStructuredDBTask(task db.Task) bool {
 		return false
 	}
 	kind := *task.AgentStreamKind
-	return kind == claudeStreamKind || kind == codexapp.StreamKind
+	return kind == claudeStreamKind || kind == codexapp.StreamKind || kind == museStreamKind
 }
 
 func isPendingStructuredDiscordTask(task db.Task) bool {

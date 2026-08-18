@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -162,6 +163,81 @@ func TestFindMuseSessionLogPathUsesLatestMatchingWorkspace(t *testing.T) {
 	}
 }
 
+func TestFindMuseSessionLogPathFallsBackToRecentSessionMetadata(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	workspace := t.TempDir()
+	unrelatedWorkspace := t.TempDir()
+
+	oldLog := writeMuseSessionLog(t, dataHome, "2026", "08", "16", "old", unrelatedWorkspace)
+	if err := os.Chtimes(oldLog, time.Unix(10, 0), time.Unix(10, 0)); err != nil {
+		t.Fatal(err)
+	}
+	newLog := writeMuseSessionLog(t, dataHome, "2026", "08", "17", "new", workspace)
+	if err := os.Chtimes(newLog, time.Unix(20, 0), time.Unix(20, 0)); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := findMuseSessionLogPath(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != newLog {
+		t.Fatalf("findMuseSessionLogPath() = %q, want recent metadata match %q", path, newLog)
+	}
+}
+
+func TestMuseSessionLogEventsSwitchesToRestartedSession(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	workspace := t.TempDir()
+
+	oldLog := writeMuseSessionLog(t, dataHome, "2026", "08", "16", "old", workspace)
+	oldInfo, err := os.Stat(oldLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newLog := writeMuseSessionLog(t, dataHome, "2026", "08", "17", "new", workspace)
+	contents, err := os.ReadFile(newLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents = append(contents, []byte(strings.Join([]string{
+		`{"sequence":3,"recorded_at":3000000,"payload_type":"runtime.user_intent.materialized","payload":{"outcome":{"kind":"top_level_turn_started","run_id":"run-1"}}}`,
+		`{"sequence":4,"recorded_at":4000000,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"run-1","event":{"kind":"assistant_message_committed","message_id":"message-1","text":"new reply"}}}`,
+		`{"sequence":5,"recorded_at":5000000,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"run-1","event":{"kind":"terminal","terminal":"completed"}}}`,
+		"",
+	}, "\n"))...)
+	if err := os.WriteFile(newLog, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(oldLog, time.Unix(10, 0), time.Unix(10, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newLog, time.Unix(20, 0), time.Unix(20, 0)); err != nil {
+		t.Fatal(err)
+	}
+
+	state := &museSessionLogState{path: oldLog, offset: oldInfo.Size(), initialized: true}
+	task := db.Task{ID: "task-1", Agent: "muse", WorktreePath: &workspace}
+	events, ok := (&Service{}).museSessionLogEvents(task, db.Project{}, state, time.Now())
+	if !ok {
+		t.Fatal("museSessionLogEvents() did not use the restarted session")
+	}
+	if state.path != newLog {
+		t.Fatalf("state.path = %q, want %q", state.path, newLog)
+	}
+	wantKinds := []agentstream.EventKind{agentstream.EventTurnStarted, agentstream.EventAssistantMessage, agentstream.EventTurnCompleted}
+	if len(events) != len(wantKinds) {
+		t.Fatalf("events = %#v, want %d events", events, len(wantKinds))
+	}
+	for i, want := range wantKinds {
+		if events[i].Kind != want {
+			t.Fatalf("events[%d].Kind = %s, want %s", i, events[i].Kind, want)
+		}
+	}
+}
+
 func TestReadMuseSessionLogEventsMapsStructuredMuseEvents(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "session.jsonl")
 	initial := `{"sequence":1,"recorded_at":1000000,"payload_type":"runtime.session.metadata","payload":{"kind":"metadata"}}` + "\n"
@@ -231,6 +307,24 @@ func TestReadMuseSessionLogEventsMapsStructuredMuseEvents(t *testing.T) {
 	if events[4].Command == nil || events[4].Command.Stdout != " M file.go" {
 		t.Fatalf("command event = %#v, want command output", events[4])
 	}
+}
+
+func writeMuseSessionLog(t *testing.T, dataHome, year, month, day, sessionID, workspace string) string {
+	t.Helper()
+	logDir := filepath.Join(dataHome, "muse", "sessions", year, month, day, sessionID)
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(logDir, "session.jsonl")
+	contents := strings.Join([]string{
+		`{"sequence":1,"payload_type":"runtime.session.metadata","payload":{"kind":"metadata","record":{"workspace_root":` + strconv.Quote(workspace) + `}}}`,
+		`{"sequence":2,"payload_type":"runtime.session.route_facts","payload":{"kind":"route_facts","record":{"cwd":` + strconv.Quote(workspace) + `}}}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(logPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return logPath
 }
 
 func TestLatestMuseProgressExtractsStatusBlocks(t *testing.T) {

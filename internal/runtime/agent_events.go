@@ -32,6 +32,7 @@ type codexRuntime interface {
 }
 
 const claudeStreamKind = "claude-stream-json"
+const museStreamKind = "muse-jsonl"
 const agentEventSubscriberBuffer = 256
 
 type agentEventService struct {
@@ -47,6 +48,7 @@ type agentEventService struct {
 	activeTurns  map[string]string
 	turnCancels  map[string]context.CancelFunc
 	claudeQueues map[string][]string
+	museQueues   map[string][]string
 }
 
 func newAgentEventService(runtime *Service) *agentEventService {
@@ -60,6 +62,7 @@ func newAgentEventService(runtime *Service) *agentEventService {
 		activeTurns:  map[string]string{},
 		turnCancels:  map[string]context.CancelFunc{},
 		claudeQueues: map[string][]string{},
+		museQueues:   map[string][]string{},
 	}
 	service.startCodex = func(ctx context.Context) (codexRuntime, error) {
 		client, err := codexapp.Start(service.ctx, codexapp.Options{})
@@ -89,6 +92,7 @@ func (s *agentEventService) Close() error {
 	s.threadToTask = map[string]string{}
 	s.activeTurns = map[string]string{}
 	s.claudeQueues = map[string][]string{}
+	s.museQueues = map[string][]string{}
 	for _, cancel := range s.turnCancels {
 		cancel()
 	}
@@ -101,7 +105,7 @@ func (s *agentEventService) Close() error {
 }
 
 func (s *agentEventService) SubscribeAgentEvents(ctx context.Context, task agxdiscord.TaskSummary) (<-chan agentstream.Event, error) {
-	if !isCodexTask(task.Agent) && !isClaudeTask(task.Agent) {
+	if !isCodexTask(task.Agent) && !isClaudeTask(task.Agent) && !isMuseTask(task.Agent) {
 		return nil, agentstream.UnsupportedError{TaskID: task.ID, Agent: task.Agent}
 	}
 	if !isStructuredTask(task) {
@@ -116,6 +120,9 @@ func (s *agentEventService) SubscribeAgentEvents(ctx context.Context, task agxdi
 		}
 	}
 	if isClaudeTask(task.Agent) && strings.TrimSpace(*task.AgentStreamKind) != claudeStreamKind {
+		return nil, agentstream.UnsupportedError{TaskID: task.ID, Agent: task.Agent}
+	}
+	if isMuseTask(task.Agent) && strings.TrimSpace(*task.AgentStreamKind) != museStreamKind {
 		return nil, agentstream.UnsupportedError{TaskID: task.ID, Agent: task.Agent}
 	}
 	ch := make(chan agentstream.Event, agentEventSubscriberBuffer)
@@ -137,7 +144,7 @@ func (s *agentEventService) SendTaskMessage(ctx context.Context, task db.Task, p
 	lock := s.runtime.taskLock(task.ID)
 	lock.Lock()
 	defer lock.Unlock()
-	if !isCodexTask(task.Agent) && !isClaudeTask(task.Agent) {
+	if !isCodexTask(task.Agent) && !isClaudeTask(task.Agent) && !isMuseTask(task.Agent) {
 		return agentstream.UnsupportedError{TaskID: task.ID, Agent: task.Agent}
 	}
 	message = strings.TrimSpace(message)
@@ -149,6 +156,9 @@ func (s *agentEventService) SendTaskMessage(ctx context.Context, task db.Task, p
 	}
 	if isClaudeTask(task.Agent) {
 		return s.startClaudeTurn(ctx, task, project, message)
+	}
+	if isMuseTask(task.Agent) {
+		return s.startMuseTurn(ctx, task, project, message)
 	}
 	client, err := s.ensureCodex(ctx)
 	if err != nil {
@@ -182,6 +192,9 @@ func (s *agentEventService) SendTaskMessage(ctx context.Context, task db.Task, p
 func (s *agentEventService) clearTaskContext(ctx context.Context, task db.Task, project db.Project) error {
 	if isClaudeTask(task.Agent) {
 		return s.clearClaudeTaskContext(task)
+	}
+	if isMuseTask(task.Agent) {
+		return s.clearMuseTaskContext(task)
 	}
 	if !isCodexTask(task.Agent) {
 		return agentstream.UnsupportedError{TaskID: task.ID, Agent: task.Agent}
@@ -254,6 +267,33 @@ func (s *agentEventService) clearClaudeTaskContext(task db.Task) error {
 	return nil
 }
 
+func (s *agentEventService) clearMuseTaskContext(task db.Task) error {
+	s.mu.Lock()
+	cancel := s.turnCancels[task.ID]
+	delete(s.activeTurns, task.ID)
+	delete(s.turnCancels, task.ID)
+	delete(s.museQueues, task.ID)
+	for threadID, taskID := range s.threadToTask {
+		if taskID == task.ID {
+			delete(s.threadToTask, threadID)
+		}
+	}
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	threadID := db.NewTaskID()
+	streamKind := museStreamKind
+	if err := s.runtime.store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		return err
+	}
+	_ = s.runtime.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
+	s.recordContextCleared(task)
+	s.runtime.emitMetadataEvent(task.ProjectID)
+	s.runtime.syncDiscordAsync()
+	return nil
+}
+
 func (s *agentEventService) recordContextCleared(task db.Task) {
 	_ = s.runtime.store.AppendTaskTranscriptMessage(task.ID, "status", "Context cleared.", nil, nil)
 }
@@ -261,6 +301,9 @@ func (s *agentEventService) recordContextCleared(task db.Task) {
 func (s *agentEventService) PrepareTask(ctx context.Context, task db.Task, project db.Project) error {
 	if isClaudeTask(task.Agent) {
 		return s.ensureClaudeStreamTask(task)
+	}
+	if isMuseTask(task.Agent) {
+		return s.ensureMuseStreamTask(task)
 	}
 	if !isCodexTask(task.Agent) {
 		return agentstream.UnsupportedError{TaskID: task.ID, Agent: task.Agent}
@@ -274,10 +317,14 @@ func (s *agentEventService) PrepareTask(ctx context.Context, task db.Task, proje
 }
 
 func (s *agentEventService) InterruptTask(ctx context.Context, task db.Task) error {
-	if isClaudeTask(task.Agent) {
+	if isClaudeTask(task.Agent) || isMuseTask(task.Agent) {
 		s.mu.Lock()
 		cancel := s.turnCancels[task.ID]
-		delete(s.claudeQueues, task.ID)
+		if isClaudeTask(task.Agent) {
+			delete(s.claudeQueues, task.ID)
+		} else {
+			delete(s.museQueues, task.ID)
+		}
 		s.mu.Unlock()
 		if cancel != nil {
 			cancel()
@@ -362,7 +409,7 @@ func (s *agentEventService) StopTask(ctx context.Context, task db.Task) error {
 	if task.AgentStreamKind == nil || *task.AgentStreamKind == "" {
 		return agentstream.UnsupportedError{TaskID: task.ID, Agent: task.Agent}
 	}
-	if isClaudeTask(task.Agent) {
+	if isClaudeTask(task.Agent) || isMuseTask(task.Agent) {
 		_ = s.InterruptTask(ctx, task)
 		return s.runtime.store.UpdateTaskAgentStream(task.ID, nil, task.AgentEventCursor, nil)
 	}
@@ -382,6 +429,15 @@ func (s *agentEventService) ensureClaudeStreamTask(task db.Task) error {
 		return err
 	}
 	return nil
+}
+
+func (s *agentEventService) ensureMuseStreamTask(task db.Task) error {
+	threadID := task.ID
+	if task.AgentThreadID != nil && strings.TrimSpace(*task.AgentThreadID) != "" {
+		threadID = strings.TrimSpace(*task.AgentThreadID)
+	}
+	streamKind := museStreamKind
+	return s.runtime.store.UpdateTaskAgentStream(task.ID, &threadID, task.AgentEventCursor, &streamKind)
 }
 
 func (s *agentEventService) startClaudeTurn(ctx context.Context, task db.Task, project db.Project, message string) error {
@@ -840,6 +896,7 @@ func (s *agentEventService) forgetTask(taskID string) {
 	}
 	delete(s.activeTurns, taskID)
 	delete(s.claudeQueues, taskID)
+	delete(s.museQueues, taskID)
 	if cancel := s.turnCancels[taskID]; cancel != nil {
 		cancels = append(cancels, cancel)
 	}

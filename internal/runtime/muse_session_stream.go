@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bufio"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,8 @@ import (
 )
 
 const museSessionLogStreamKind = "muse-session-log"
+const maxMuseSessionLogCandidates = 200
+const maxMuseSessionLogHeaderLines = 300
 
 type museSessionLogState struct {
 	path        string
@@ -37,10 +40,16 @@ type musePayload struct {
 	Kind    string          `json:"kind"`
 	RunID   string          `json:"run_id"`
 	Event   json.RawMessage `json:"event"`
+	Record  json.RawMessage `json:"record"`
 	Outcome struct {
 		Kind  string `json:"kind"`
 		RunID string `json:"run_id"`
 	} `json:"outcome"`
+}
+
+type museSessionRootRecord struct {
+	CWD           string `json:"cwd"`
+	WorkspaceRoot string `json:"workspace_root"`
 }
 
 type museEventEnvelope struct {
@@ -93,15 +102,24 @@ func (s *Service) museSessionLogEvents(task db.Task, project db.Project, state *
 	if state == nil {
 		state = &museSessionLogState{}
 	}
+	path, err := findMuseSessionLogPath(taskWorkingDir(task, project))
+	if err != nil {
+		return nil, false
+	}
+	if path == "" {
+		return nil, false
+	}
 	if strings.TrimSpace(state.path) == "" {
-		path, err := findMuseSessionLogPath(taskWorkingDir(task, project))
-		if err != nil {
-			return nil, false
-		}
-		if path == "" {
-			return nil, false
-		}
 		state.path = path
+	} else if canonicalPath(path) != canonicalPath(state.path) {
+		// A restarted Muse process writes to a new session directory while the
+		// previous JSONL remains on disk. Switch immediately and read the new
+		// file from its beginning so a fast first response cannot be skipped.
+		state.path = path
+		state.offset = 0
+		state.pending = ""
+		state.turnID = ""
+		state.initialized = true
 	}
 	events, err := readMuseSessionLogEvents(task, state, now)
 	if err != nil {
@@ -122,6 +140,14 @@ func findMuseSessionLogPath(workspaceRoot string) (string, error) {
 	if workspaceRoot == "" {
 		return "", nil
 	}
+	path, err := findIndexedMuseSessionLogPath(workspaceRoot)
+	if err != nil || path != "" {
+		return path, err
+	}
+	return findRecentMuseSessionLogPath(workspaceRoot)
+}
+
+func findIndexedMuseSessionLogPath(workspaceRoot string) (string, error) {
 	indexPath := filepath.Join(museDataDir(), "session-index.db")
 	if _, err := os.Stat(indexPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -172,6 +198,80 @@ func findMuseSessionLogPath(workspaceRoot string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+func findRecentMuseSessionLogPath(workspaceRoot string) (string, error) {
+	paths, err := filepath.Glob(filepath.Join(museDataDir(), "sessions", "*", "*", "*", "*", "session.jsonl"))
+	if err != nil {
+		return "", err
+	}
+	type candidate struct {
+		path    string
+		modTime time.Time
+	}
+	candidates := make([]candidate, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		candidates = append(candidates, candidate{path: path, modTime: info.ModTime()})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].modTime.After(candidates[j].modTime)
+	})
+	if len(candidates) > maxMuseSessionLogCandidates {
+		candidates = candidates[:maxMuseSessionLogCandidates]
+	}
+	for _, candidate := range candidates {
+		matches, err := museSessionLogMatchesWorkspace(candidate.path, workspaceRoot)
+		if err != nil {
+			continue
+		}
+		if matches {
+			return candidate.path, nil
+		}
+	}
+	return "", nil
+}
+
+func museSessionLogMatchesWorkspace(path, workspaceRoot string) (bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	lines := 0
+	for scanner.Scan() {
+		lines++
+		if lines > maxMuseSessionLogHeaderLines {
+			break
+		}
+		var record museSessionRecord
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			continue
+		}
+		if record.PayloadType != "runtime.session.metadata" && record.PayloadType != "runtime.session.route_facts" {
+			continue
+		}
+		var rootRecord museSessionRootRecord
+		if len(record.Payload.Record) > 0 && json.Unmarshal(record.Payload.Record, &rootRecord) == nil {
+			if museSessionRecordMatchesWorkspace(rootRecord, workspaceRoot) {
+				return true, nil
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func museSessionRecordMatchesWorkspace(record museSessionRootRecord, workspaceRoot string) bool {
+	return canonicalPath(record.WorkspaceRoot) == workspaceRoot || canonicalPath(record.CWD) == workspaceRoot
 }
 
 func museDataDir() string {
