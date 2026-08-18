@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -156,12 +155,10 @@ func (s *agentEventService) execMuseStream(ctx context.Context, task db.Task, pr
 		return err
 	}
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	terminalSeen := false
 	failurePublished := false
-	for scanner.Scan() {
-		for _, event := range mapMuseJSONLine(task, turnID, scanner.Bytes()) {
+	readErr := agentstream.ReadJSONLines(stdout, func(line []byte) error {
+		for _, event := range mapMuseJSONLine(task, turnID, line) {
 			s.publish(task.ID, event)
 			if event.Kind == agentstream.EventTurnCompleted {
 				terminalSeen = true
@@ -175,11 +172,11 @@ func (s *agentEventService) execMuseStream(ctx context.Context, task db.Task, pr
 				_ = s.runtime.store.UpdateTaskAgentEventCursor(task.ID, &cursor)
 			}
 		}
-	}
-	scanErr := scanner.Err()
+		return nil
+	})
 	waitErr := cmd.Wait()
-	if scanErr != nil {
-		return scanErr
+	if readErr != nil {
+		return readErr
 	}
 	if failurePublished {
 		return errStructuredFailurePublished

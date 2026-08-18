@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -608,14 +607,12 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	terminalSeen := false
 	failurePublished := false
-	for scanner.Scan() {
-		event, ok := mapClaudeStreamLine(task, turnID, scanner.Bytes())
+	readErr := agentstream.ReadJSONLines(stdout, func(line []byte) error {
+		event, ok := mapClaudeStreamLine(task, turnID, line)
 		if !ok {
-			continue
+			return nil
 		}
 		s.publish(task.ID, event)
 		if event.Kind == agentstream.EventTurnCompleted {
@@ -631,11 +628,11 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 			streamKind := claudeStreamKind
 			_ = s.runtime.store.UpdateTaskAgentStream(task.ID, &threadID, &cursor, &streamKind)
 		}
-	}
-	scanErr := scanner.Err()
+		return nil
+	})
 	waitErr := cmd.Wait()
-	if scanErr != nil {
-		return scanErr
+	if readErr != nil {
+		return readErr
 	}
 	if failurePublished {
 		return errStructuredFailurePublished
