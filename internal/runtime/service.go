@@ -509,6 +509,7 @@ func (s *Service) syncDiscordAsync() {
 			ctx, cancel := s.backgroundTimeout(15 * time.Second)
 			if err := s.discord.SoftSync(ctx); err != nil {
 				logRuntimeOperation("discord_soft_sync_background", "error", err)
+				s.discord.RefreshTaskStreams(s.backgroundContext())
 			}
 			cancel()
 			s.bus.Publish("discord.status", s.discord.Status())
@@ -559,6 +560,7 @@ func (s *Service) syncDiscordTaskAsync(taskID string) {
 	go func() {
 		if err := s.syncDiscordTaskNow(taskID); err != nil {
 			logRuntimeOperation("discord_task_sync_background", "task", display.ShortID(taskID), "error", err)
+			s.discord.RefreshTaskStreams(s.backgroundContext())
 		}
 	}()
 }

@@ -51,6 +51,7 @@ type Bridge struct {
 	events    AgentEventSubscriber
 	store     *db.Store
 	streams   map[string]taskStream
+	streamSeq uint64
 	delivery  chan struct{}
 	deliverer context.CancelFunc
 	ownerChan string
@@ -60,8 +61,9 @@ type Bridge struct {
 }
 
 type taskStream struct {
-	channelID string
-	cancel    context.CancelFunc
+	channelID  string
+	cancel     context.CancelFunc
+	generation uint64
 }
 
 var ErrSyncInProgress = errors.New("discord sync is already running")
@@ -652,7 +654,7 @@ func (b *Bridge) SyncTaskChannel(ctx context.Context, taskID string) error {
 // RefreshTaskStreams starts or refreshes semantic event forwarders for already
 // mapped structured tasks without performing Discord channel REST sync.
 func (b *Bridge) RefreshTaskStreams(ctx context.Context) {
-	b.syncTaskStreams(ctx)
+	b.reconcileTaskStreams(ctx, true)
 }
 
 // DeleteTaskChannel stops any live event stream for taskID and deletes its
@@ -779,6 +781,10 @@ func deleteDiscordMappings(store *db.Store) error {
 // cancels streams whose task/channel mapping changed. It is called after channel
 // sync so each stream has a current Discord channel target.
 func (b *Bridge) syncTaskStreams(ctx context.Context) {
+	b.reconcileTaskStreams(ctx, false)
+}
+
+func (b *Bridge) reconcileTaskStreams(ctx context.Context, force bool) {
 	b.mu.Lock()
 	service := b.service
 	events := b.events
@@ -806,13 +812,16 @@ func (b *Bridge) syncTaskStreams(ctx context.Context) {
 	}
 	for taskID, stream := range existing {
 		task, ok := desired[taskID]
-		if ok && task.ChannelID == stream.channelID {
+		if ok && task.ChannelID == stream.channelID && !force {
 			continue
 		}
 		stream.cancel()
 		b.mu.Lock()
-		delete(b.streams, taskID)
+		if current, exists := b.streams[taskID]; exists && current.generation == stream.generation {
+			delete(b.streams, taskID)
+		}
 		b.mu.Unlock()
+		delete(existing, taskID)
 	}
 	for taskID, task := range desired {
 		if stream, ok := existing[taskID]; ok && stream.channelID == task.ChannelID {
@@ -876,13 +885,15 @@ func (b *Bridge) startTaskStream(service CommandService, events AgentEventSubscr
 	if existing, ok := b.streams[task.ID]; ok {
 		existing.cancel()
 	}
-	b.streams[task.ID] = taskStream{channelID: task.ChannelID, cancel: cancel}
+	b.streamSeq++
+	generation := b.streamSeq
+	b.streams[task.ID] = taskStream{channelID: task.ChannelID, cancel: cancel, generation: generation}
 	b.mu.Unlock()
 
 	stream, err := events.SubscribeAgentEvents(ctx, task)
 	if err != nil {
 		cancel()
-		b.removeTaskStream(task.ID, task.ChannelID)
+		b.removeTaskStream(task.ID, task.ChannelID, generation)
 		if agentstream.IsUnsupported(err) {
 			return
 		}
@@ -890,13 +901,13 @@ func (b *Bridge) startTaskStream(service CommandService, events AgentEventSubscr
 		return
 	}
 	if ctx.Err() != nil {
-		b.removeTaskStream(task.ID, task.ChannelID)
+		b.removeTaskStream(task.ID, task.ChannelID, generation)
 		return
 	}
 
 	go func() {
 		defer cancel()
-		defer b.removeTaskStream(task.ID, task.ChannelID)
+		defer b.removeTaskStream(task.ID, task.ChannelID, generation)
 		forwarder := NewSemanticEventForwarder(bot)
 		b.mu.Lock()
 		hasStore := b.store != nil
@@ -917,10 +928,10 @@ func (b *Bridge) cancelTaskStreamsLocked() {
 	}
 }
 
-func (b *Bridge) removeTaskStream(taskID, channelID string) {
+func (b *Bridge) removeTaskStream(taskID, channelID string, generation uint64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if stream, ok := b.streams[taskID]; ok && stream.channelID == channelID {
+	if stream, ok := b.streams[taskID]; ok && stream.channelID == channelID && stream.generation == generation {
 		delete(b.streams, taskID)
 	}
 }

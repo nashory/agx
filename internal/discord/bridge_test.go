@@ -244,6 +244,52 @@ func TestRefreshTaskStreamsStartsMappedStructuredTask(t *testing.T) {
 	bridge.mu.Unlock()
 }
 
+func TestRefreshTaskStreamsReplacesExistingSubscription(t *testing.T) {
+	bridge := NewBridge(config.DiscordConfig{})
+	bridge.connected = true
+	bridge.bot = &Bot{}
+	calls := make(chan struct{}, 2)
+	events := make(chan agentstream.Event)
+	defer close(events)
+	bridge.service = &fakeCommandService{tasks: []TaskSummary{{
+		ID:              "task-1",
+		ChannelID:       "channel-1",
+		Status:          "waiting",
+		Agent:           "codex",
+		AgentThreadID:   stringPtr("thread-1"),
+		AgentStreamKind: stringPtr("codex-app-server"),
+	}}}
+	bridge.events = scriptedAgentEvents{events: events, calls: calls}
+
+	bridge.RefreshTaskStreams(context.Background())
+	bridge.mu.Lock()
+	firstGeneration := bridge.streams["task-1"].generation
+	bridge.mu.Unlock()
+	bridge.RefreshTaskStreams(context.Background())
+
+	if got := len(calls); got != 2 {
+		t.Fatalf("SubscribeAgentEvents calls = %d, want forced resubscription", got)
+	}
+	bridge.mu.Lock()
+	secondGeneration := bridge.streams["task-1"].generation
+	bridge.cancelTaskStreamsLocked()
+	bridge.mu.Unlock()
+	if secondGeneration <= firstGeneration {
+		t.Fatalf("stream generation = %d after %d, want newer subscription", secondGeneration, firstGeneration)
+	}
+}
+
+func TestOldTaskStreamCannotRemoveReplacement(t *testing.T) {
+	bridge := NewBridge(config.DiscordConfig{})
+	bridge.streams["task-1"] = taskStream{channelID: "channel-1", generation: 2}
+
+	bridge.removeTaskStream("task-1", "channel-1", 1)
+
+	if _, ok := bridge.streams["task-1"]; !ok {
+		t.Fatal("old stream removed its replacement")
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }
