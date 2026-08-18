@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nashory/agx/internal/agentstream"
 	"github.com/nashory/agx/internal/db"
@@ -125,6 +126,77 @@ func TestMuseStreamPublishesTerminalFailureOnce(t *testing.T) {
 	}
 	if len(messages) != 1 || messages[0].Role != "status" || !strings.Contains(messages[0].Body, "boom") {
 		t.Fatalf("messages = %#v, want one persisted failure", messages)
+	}
+}
+
+func TestMuseStreamWaitsForBusySession(t *testing.T) {
+	commandDir := t.TempDir()
+	command := filepath.Join(commandDir, "muse")
+	attemptFile := filepath.Join(commandDir, "attempts")
+	script := `#!/bin/sh
+count=0
+if [ -f "$AGX_MUSE_ATTEMPTS" ]; then
+  count=$(sed -n '1p' "$AGX_MUSE_ATTEMPTS")
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$AGX_MUSE_ATTEMPTS"
+if [ "$count" -eq 1 ]; then
+  printf '%s\n' 'session test-session is already in use' >&2
+  exit 1
+fi
+printf '%s\n' '{"sequence":1,"payload_type":"run.terminal.completed","payload":{"terminal":"completed","text":"done","reason":null}}'
+`
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", commandDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("AGX_MUSE_ATTEMPTS", attemptFile)
+	previousDelay := museSessionBusyRetryDelay
+	museSessionBusyRetryDelay = time.Millisecond
+	t.Cleanup(func() { museSessionBusyRetryDelay = previousDelay })
+
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "muse", nil, "muse", true, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	t.Cleanup(func() { _ = service.agents.Close() })
+
+	if err := service.agents.execMuseStream(context.Background(), task, project, "turn-1", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	attempts, err := os.ReadFile(attemptFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(attempts)) != "2" {
+		t.Fatalf("attempts = %q, want 2", attempts)
+	}
+	messages, err := store.ListTaskTranscriptMessages(task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Role != "assistant" || messages[0].Body != "done" {
+		t.Fatalf("messages = %#v, want recovered assistant response", messages)
+	}
+}
+
+func TestMuseSessionAlreadyInUse(t *testing.T) {
+	if !museSessionAlreadyInUse(errors.New("session abc is already in use")) {
+		t.Fatal("expected busy session error to be detected")
+	}
+	if museSessionAlreadyInUse(errors.New("provider unavailable")) {
+		t.Fatal("unrelated error was detected as a busy session")
 	}
 }
 

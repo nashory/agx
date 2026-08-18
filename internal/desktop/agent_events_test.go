@@ -24,6 +24,7 @@ type fakeCodexRuntime struct {
 	nextThreadID string
 	nextTurnID   string
 	threadErr    error
+	resumeErr    error
 	dirtyThread  bool
 }
 
@@ -53,7 +54,7 @@ func (f *fakeCodexRuntime) ThreadStart(_ context.Context, cwd string, allMighty 
 }
 
 func (f *fakeCodexRuntime) ThreadResume(context.Context, string) (codexapp.ThreadStartResponse, error) {
-	return codexapp.ThreadStartResponse{}, nil
+	return codexapp.ThreadStartResponse{}, f.resumeErr
 }
 
 func (f *fakeCodexRuntime) TurnStart(_ context.Context, threadID, text, cwd string, allMighty bool) (codexapp.TurnStartResponse, error) {
@@ -79,6 +80,39 @@ func (f *fakeCodexRuntime) Events() <-chan codexapp.Notification {
 func (f *fakeCodexRuntime) Close() error {
 	close(f.events)
 	return nil
+}
+
+func TestEnsureCodexThreadPreservesContextOnTransientResumeFailure(t *testing.T) {
+	app, project := newTestApp(t)
+	threadID := "existing-thread"
+	streamKind := codexapp.StreamKind
+	task, err := app.store.CreateTask(project.ID, "structured", nil, "codex", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	task, err = app.store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeCodexRuntime()
+	fake.resumeErr = errors.New("app-server connection closed")
+
+	if _, err := app.agentEvents.ensureCodexThread(context.Background(), fake, task, project); err == nil || !strings.Contains(err.Error(), "connection closed") {
+		t.Fatalf("ensureCodexThread() error = %v, want resume failure", err)
+	}
+	if fake.startedCwd != "" {
+		t.Fatalf("ThreadStart cwd = %q, want no replacement thread", fake.startedCwd)
+	}
+	updated, err := app.store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.AgentThreadID == nil || *updated.AgentThreadID != threadID {
+		t.Fatalf("AgentThreadID = %#v, want preserved thread", updated.AgentThreadID)
+	}
 }
 
 func TestAgentEventServiceStartsCodexThreadAndPersistsMetadata(t *testing.T) {

@@ -532,6 +532,19 @@ func TestMapNotificationMapsIdleThreadStatusToTurnCompleted(t *testing.T) {
 	}
 }
 
+func TestIsThreadNotFound(t *testing.T) {
+	missing := &CallError{Code: -32600, Message: "no rollout found for thread id abc"}
+	if !IsThreadNotFound(missing) {
+		t.Fatal("expected missing rollout error to be recognized")
+	}
+	if IsThreadNotFound(&CallError{Code: -32600, Message: "connection closed"}) {
+		t.Fatal("transient resume error was recognized as a missing thread")
+	}
+	if IsThreadNotFound(errors.New("no rollout found for thread id abc")) {
+		t.Fatal("untyped error was recognized as a missing thread")
+	}
+}
+
 func testTask() agentstream.TaskSummary {
 	return agentstream.TaskSummary{ID: "task-1", Agent: "codex"}
 }

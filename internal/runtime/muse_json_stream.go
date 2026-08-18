@@ -24,6 +24,10 @@ type museJSONEnvelope struct {
 	Payload     json.RawMessage `json:"payload"`
 }
 
+const museSessionBusyRetryAttempts = 61
+
+var museSessionBusyRetryDelay = 2 * time.Second
+
 func (s *agentEventService) startMuseTurn(ctx context.Context, task db.Task, project db.Project, message string) error {
 	if err := s.ensureMuseStreamTask(task); err != nil {
 		return err
@@ -137,6 +141,27 @@ func (s *agentEventService) finishMuseTurn(task db.Task, project db.Project, com
 }
 
 func (s *agentEventService) execMuseStream(ctx context.Context, task db.Task, project db.Project, turnID, message string) error {
+	var err error
+	for attempt := 0; attempt < museSessionBusyRetryAttempts; attempt++ {
+		err = s.execMuseStreamOnce(ctx, task, project, turnID, message)
+		if ctx.Err() != nil || !museSessionAlreadyInUse(err) {
+			return err
+		}
+		if attempt == museSessionBusyRetryAttempts-1 {
+			break
+		}
+		timer := time.NewTimer(museSessionBusyRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return fmt.Errorf("Muse session remained busy after waiting for the previous process: %w", err)
+}
+
+func (s *agentEventService) execMuseStreamOnce(ctx context.Context, task db.Task, project db.Project, turnID, message string) error {
 	registry := agent.RegistryForProject(project.Path)
 	ag, err := registry.Get(task.Agent)
 	if err != nil {
@@ -192,6 +217,14 @@ func (s *agentEventService) execMuseStream(ctx context.Context, task db.Task, pr
 		return fmt.Errorf("Muse stream ended without a terminal result")
 	}
 	return nil
+}
+
+func museSessionAlreadyInUse(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "session") && strings.Contains(message, "already in use")
 }
 
 func museStreamArgs(task db.Task, workingDir, message string) []string {

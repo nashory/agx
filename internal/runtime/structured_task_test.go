@@ -25,6 +25,7 @@ type fakeCodexRuntime struct {
 	nextThreadID string
 	nextTurnID   string
 	threadErr    error
+	resumeErr    error
 	dirtyThread  bool
 	stderr       string
 }
@@ -55,7 +56,7 @@ func (f *fakeCodexRuntime) ThreadStart(_ context.Context, cwd string, allMighty 
 }
 
 func (f *fakeCodexRuntime) ThreadResume(context.Context, string) (codexapp.ThreadStartResponse, error) {
-	return codexapp.ThreadStartResponse{}, nil
+	return codexapp.ThreadStartResponse{}, f.resumeErr
 }
 
 func (f *fakeCodexRuntime) TurnStart(_ context.Context, threadID, text, cwd string, allMighty bool) (codexapp.TurnStartResponse, error) {
@@ -88,6 +89,89 @@ func (f *fakeCodexRuntime) RecentStderr() string {
 func (f *fakeCodexRuntime) Close() error {
 	close(f.events)
 	return nil
+}
+
+func TestEnsureCodexThreadPreservesContextOnTransientResumeFailure(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "structured", nil, "codex", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := "existing-thread"
+	streamKind := codexapp.StreamKind
+	if err := store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	task, err = store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	t.Cleanup(func() { _ = service.agents.Close() })
+	fake := newFakeCodexRuntime()
+	fake.resumeErr = errors.New("app-server connection closed")
+
+	if _, err := service.agents.ensureCodexThread(context.Background(), fake, task, project); err == nil || !strings.Contains(err.Error(), "connection closed") {
+		t.Fatalf("ensureCodexThread() error = %v, want resume failure", err)
+	}
+	if fake.threadCwd != "" {
+		t.Fatalf("ThreadStart cwd = %q, want no replacement thread", fake.threadCwd)
+	}
+	updated, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.AgentThreadID == nil || *updated.AgentThreadID != threadID {
+		t.Fatalf("AgentThreadID = %#v, want preserved thread", updated.AgentThreadID)
+	}
+}
+
+func TestEnsureCodexThreadReplacesMissingThread(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "structured", nil, "codex", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := "missing-thread"
+	streamKind := codexapp.StreamKind
+	if err := store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	task, err = store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	t.Cleanup(func() { _ = service.agents.Close() })
+	fake := newFakeCodexRuntime()
+	fake.nextThreadID = "replacement-thread"
+	fake.resumeErr = &codexapp.CallError{Code: -32600, Message: "no rollout found for thread id missing-thread"}
+
+	got, err := service.agents.ensureCodexThread(context.Background(), fake, task, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "replacement-thread" || fake.threadCwd != project.Path {
+		t.Fatalf("thread = %q cwd = %q, want replacement in project", got, fake.threadCwd)
+	}
 }
 
 func TestCreateStructuredDiscordTaskStartsCodexTurn(t *testing.T) {

@@ -343,6 +343,8 @@ func (s *agentEventService) ensureCodexThread(ctx context.Context, client codexR
 			}
 			s.rememberThread(task.ID, threadID)
 			return threadID, nil
+		} else if !codexapp.IsThreadNotFound(err) {
+			return "", fmt.Errorf("resume Codex thread %s: %w", threadID, err)
 		}
 	}
 	thread, err := client.ThreadStart(ctx, taskWorkingDir(task, project), task.AllMighty)

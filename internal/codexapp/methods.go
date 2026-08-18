@@ -95,6 +95,17 @@ func isManagedOverrideRejected(err error) bool {
 		strings.Contains(msg, "sandbox")
 }
 
+// IsThreadNotFound reports the specific resume failure that is safe to recover
+// from by creating a new thread. Other resume errors may be transient and must
+// not silently discard the task's conversation context.
+func IsThreadNotFound(err error) bool {
+	var ce *CallError
+	if !errors.As(err, &ce) || ce.Code != -32600 {
+		return false
+	}
+	return strings.Contains(strings.ToLower(ce.Message), "no rollout found for thread id")
+}
+
 // ThreadResume reconnects to an existing Codex thread by ID.
 func (c *Client) ThreadResume(ctx context.Context, threadID string) (ThreadStartResponse, error) {
 	var out ThreadStartResponse
