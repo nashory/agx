@@ -46,7 +46,7 @@ type agentEventService struct {
 	mu           sync.Mutex
 	codex        codexRuntime
 	startCodex   func(context.Context) (codexRuntime, error)
-	subscribers  map[string]map[chan agentstream.Event]struct{}
+	subscribers  map[string]map[*agentstream.EventQueue]struct{}
 	threadToTask map[string]string
 	activeTurns  map[string]string
 	turnCancels  map[string]context.CancelFunc
@@ -60,7 +60,7 @@ func newAgentEventService(runtime *Service) *agentEventService {
 		runtime:      runtime,
 		ctx:          ctx,
 		cancel:       cancel,
-		subscribers:  map[string]map[chan agentstream.Event]struct{}{},
+		subscribers:  map[string]map[*agentstream.EventQueue]struct{}{},
 		threadToTask: map[string]string{},
 		activeTurns:  map[string]string{},
 		turnCancels:  map[string]context.CancelFunc{},
@@ -87,8 +87,8 @@ func (s *agentEventService) Close() error {
 	codex := s.codex
 	s.codex = nil
 	for taskID, subscribers := range s.subscribers {
-		for ch := range subscribers {
-			close(ch)
+		for subscriber := range subscribers {
+			subscriber.Close()
 		}
 		delete(s.subscribers, taskID)
 	}
@@ -128,19 +128,19 @@ func (s *agentEventService) SubscribeAgentEvents(ctx context.Context, task agxdi
 	if isMuseTask(task.Agent) && strings.TrimSpace(*task.AgentStreamKind) != museStreamKind {
 		return nil, agentstream.UnsupportedError{TaskID: task.ID, Agent: task.Agent}
 	}
-	ch := make(chan agentstream.Event, agentEventSubscriberBuffer)
+	subscriber := agentstream.NewEventQueue(ctx, agentEventSubscriberBuffer)
 	s.mu.Lock()
 	if s.subscribers[task.ID] == nil {
-		s.subscribers[task.ID] = map[chan agentstream.Event]struct{}{}
+		s.subscribers[task.ID] = map[*agentstream.EventQueue]struct{}{}
 	}
-	s.subscribers[task.ID][ch] = struct{}{}
+	s.subscribers[task.ID][subscriber] = struct{}{}
 	s.threadToTask[*task.AgentThreadID] = task.ID
 	s.mu.Unlock()
 	go func() {
 		<-ctx.Done()
-		s.removeSubscriber(task.ID, ch)
+		s.removeSubscriber(task.ID, subscriber)
 	}()
-	return ch, nil
+	return subscriber.Events(), nil
 }
 
 func (s *agentEventService) SendTaskMessage(ctx context.Context, task db.Task, project db.Project, message string) error {
@@ -825,29 +825,10 @@ func (s *agentEventService) publish(taskID string, event agentstream.Event) {
 	s.persistTranscriptEvent(taskID, event)
 	s.mu.Lock()
 	subscribers := s.subscribers[taskID]
-	for ch := range subscribers {
-		publishAgentEventToSubscriber(ch, event)
+	for subscriber := range subscribers {
+		subscriber.Publish(event, isCriticalAgentEvent(event.Kind))
 	}
 	s.mu.Unlock()
-}
-
-func publishAgentEventToSubscriber(ch chan agentstream.Event, event agentstream.Event) {
-	select {
-	case ch <- event:
-		return
-	default:
-	}
-	if !isCriticalAgentEvent(event.Kind) {
-		return
-	}
-	select {
-	case <-ch:
-	default:
-	}
-	select {
-	case ch <- event:
-	default:
-	}
 }
 
 func isCriticalAgentEvent(kind agentstream.EventKind) bool {
@@ -900,12 +881,12 @@ func (s *agentEventService) persistTranscriptEvent(taskID string, event agentstr
 	_ = s.runtime.store.AppendTaskTranscriptMessage(taskID, role, body, turnID, nil)
 }
 
-func (s *agentEventService) removeSubscriber(taskID string, ch chan agentstream.Event) {
+func (s *agentEventService) removeSubscriber(taskID string, subscriber *agentstream.EventQueue) {
 	removed := false
 	s.mu.Lock()
 	if subscribers := s.subscribers[taskID]; subscribers != nil {
-		if _, ok := subscribers[ch]; ok {
-			delete(subscribers, ch)
+		if _, ok := subscribers[subscriber]; ok {
+			delete(subscribers, subscriber)
 			removed = true
 		}
 		if len(subscribers) == 0 {
@@ -914,16 +895,16 @@ func (s *agentEventService) removeSubscriber(taskID string, ch chan agentstream.
 	}
 	s.mu.Unlock()
 	if removed {
-		close(ch)
+		subscriber.Close()
 	}
 }
 
 func (s *agentEventService) forgetTask(taskID string) {
 	var cancels []context.CancelFunc
-	var subscribers []chan agentstream.Event
+	var subscribers []*agentstream.EventQueue
 	s.mu.Lock()
-	for ch := range s.subscribers[taskID] {
-		subscribers = append(subscribers, ch)
+	for subscriber := range s.subscribers[taskID] {
+		subscribers = append(subscribers, subscriber)
 	}
 	delete(s.subscribers, taskID)
 	for threadID, mappedTaskID := range s.threadToTask {
@@ -942,8 +923,8 @@ func (s *agentEventService) forgetTask(taskID string) {
 	for _, cancel := range cancels {
 		cancel()
 	}
-	for _, ch := range subscribers {
-		close(ch)
+	for _, subscriber := range subscribers {
+		subscriber.Close()
 	}
 }
 
