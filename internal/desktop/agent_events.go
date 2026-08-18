@@ -552,23 +552,21 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	terminalSeen := false
 	failurePublished := false
 	readErr := agentstream.ReadJSONLines(stdout, func(line []byte) error {
-		event, ok := mapClaudeStreamLine(task, turnID, line)
-		if !ok {
-			return nil
-		}
-		s.publish(task.ID, event)
-		if event.Kind == agentstream.EventTurnCompleted {
-			terminalSeen = true
-		}
-		if event.Kind == agentstream.EventError || event.Kind == agentstream.EventInterrupted {
-			terminalSeen = true
-			failurePublished = true
-		}
-		if event.Cursor != "" {
-			cursor := event.Cursor
-			threadID := cursor
-			streamKind := claudeStreamKind
-			_ = s.app.store.UpdateTaskAgentStream(task.ID, &threadID, &cursor, &streamKind)
+		for _, event := range mapClaudeStreamLine(task, turnID, line) {
+			s.publish(task.ID, event)
+			if event.Kind == agentstream.EventTurnCompleted {
+				terminalSeen = true
+			}
+			if event.Kind == agentstream.EventError || event.Kind == agentstream.EventInterrupted {
+				terminalSeen = true
+				failurePublished = true
+			}
+			if event.Cursor != "" {
+				cursor := event.Cursor
+				threadID := cursor
+				streamKind := claudeStreamKind
+				_ = s.app.store.UpdateTaskAgentStream(task.ID, &threadID, &cursor, &streamKind)
+			}
 		}
 		return nil
 	})
@@ -823,10 +821,10 @@ func isStructuredTask(task agxdiscord.TaskSummary) bool {
 		strings.TrimSpace(*task.AgentStreamKind) != ""
 }
 
-func mapClaudeStreamLine(task db.Task, turnID string, line []byte) (agentstream.Event, bool) {
+func mapClaudeStreamLine(task db.Task, turnID string, line []byte) []agentstream.Event {
 	line = bytes.TrimSpace(line)
 	if len(line) == 0 || line[0] != '{' {
-		return agentstream.Event{}, false
+		return nil
 	}
 	var envelope struct {
 		Type      string          `json:"type"`
@@ -844,12 +842,14 @@ func mapClaudeStreamLine(task db.Task, turnID string, line []byte) (agentstream.
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
-		return agentstream.Event{}, false
+		return nil
 	}
 	now := time.Now()
 	switch envelope.Type {
 	case "assistant":
 		return mapClaudeAssistantMessage(task, turnID, envelope.Message, now)
+	case "user":
+		return mapClaudeToolResults(task, turnID, envelope.Message, now)
 	case "result":
 		tokens := envelope.Usage.InputTokens + envelope.Usage.OutputTokens + envelope.Usage.CacheCreationInputTokens + envelope.Usage.CacheReadInputTokens
 		event := agentstream.Event{
@@ -873,13 +873,13 @@ func mapClaudeStreamLine(task db.Task, turnID string, line []byte) (agentstream.
 				event.Error = "Claude returned an error."
 			}
 		}
-		return event, true
+		return []agentstream.Event{event}
 	default:
-		return agentstream.Event{}, false
+		return nil
 	}
 }
 
-func mapClaudeAssistantMessage(task db.Task, turnID string, raw json.RawMessage, createdAt time.Time) (agentstream.Event, bool) {
+func mapClaudeAssistantMessage(task db.Task, turnID string, raw json.RawMessage, createdAt time.Time) []agentstream.Event {
 	var message struct {
 		ID      string `json:"id"`
 		Content []struct {
@@ -891,10 +891,10 @@ func mapClaudeAssistantMessage(task db.Task, turnID string, raw json.RawMessage,
 		} `json:"content"`
 	}
 	if len(raw) == 0 || string(raw) == "null" {
-		return agentstream.Event{}, false
+		return nil
 	}
 	if err := json.Unmarshal(raw, &message); err != nil {
-		return agentstream.Event{}, false
+		return nil
 	}
 	var textParts []string
 	for _, content := range message.Content {
@@ -902,9 +902,10 @@ func mapClaudeAssistantMessage(task db.Task, turnID string, raw json.RawMessage,
 			textParts = append(textParts, strings.TrimSpace(content.Text))
 		}
 	}
+	events := make([]agentstream.Event, 0, len(message.Content)+1)
 	if len(textParts) > 0 {
 		text := strings.Join(textParts, "\n\n")
-		return agentstream.Event{
+		events = append(events, agentstream.Event{
 			ID:        agentstream.StableEventID(task.ID, agentstream.EventAssistantMessage, turnID, message.ID, text),
 			TaskID:    task.ID,
 			TurnID:    turnID,
@@ -913,7 +914,7 @@ func mapClaudeAssistantMessage(task db.Task, turnID string, raw json.RawMessage,
 			Agent:     task.Agent,
 			Text:      text,
 			CreatedAt: createdAt,
-		}, true
+		})
 	}
 	for _, content := range message.Content {
 		if content.Type != "tool_use" || strings.TrimSpace(content.Name) == "" {
@@ -921,7 +922,7 @@ func mapClaudeAssistantMessage(task db.Task, turnID string, raw json.RawMessage,
 		}
 		toolID := strings.TrimSpace(content.ID)
 		input := strings.TrimSpace(string(content.Input))
-		return agentstream.Event{
+		events = append(events, agentstream.Event{
 			ID:        agentstream.StableEventID(task.ID, agentstream.EventToolStarted, turnID, toolID, content.Name),
 			TaskID:    task.ID,
 			TurnID:    turnID,
@@ -934,7 +935,63 @@ func mapClaudeAssistantMessage(task db.Task, turnID string, raw json.RawMessage,
 				Name:  content.Name,
 				Input: input,
 			},
-		}, true
+		})
 	}
-	return agentstream.Event{}, false
+	return events
+}
+
+func mapClaudeToolResults(task db.Task, turnID string, raw json.RawMessage, createdAt time.Time) []agentstream.Event {
+	var message struct {
+		Content []struct {
+			Type      string          `json:"type"`
+			ToolUseID string          `json:"tool_use_id"`
+			Content   json.RawMessage `json:"content"`
+			IsError   bool            `json:"is_error"`
+		} `json:"content"`
+	}
+	if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &message) != nil {
+		return nil
+	}
+	var events []agentstream.Event
+	for _, content := range message.Content {
+		if content.Type != "tool_result" || strings.TrimSpace(content.ToolUseID) == "" {
+			continue
+		}
+		toolID := strings.TrimSpace(content.ToolUseID)
+		output := claudeToolResultText(content.Content)
+		exitCode := 0
+		command := &agentstream.CommandEvent{ID: toolID, ExitCode: &exitCode, Stdout: output}
+		if content.IsError {
+			exitCode = 1
+			command.Stdout = ""
+			command.Stderr = output
+		}
+		events = append(events, agentstream.Event{
+			ID:     agentstream.StableEventID(task.ID, agentstream.EventCommandCompleted, turnID, toolID, fmt.Sprint(content.IsError), output),
+			TaskID: task.ID, TurnID: turnID, ItemID: toolID, Kind: agentstream.EventCommandCompleted,
+			Agent: task.Agent, CreatedAt: createdAt, Command: command,
+		})
+	}
+	return events
+}
+
+func claudeToolResultText(raw json.RawMessage) string {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &blocks) == nil {
+		parts := make([]string, 0, len(blocks))
+		for _, block := range blocks {
+			if block.Type == "text" && block.Text != "" {
+				parts = append(parts, block.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return strings.TrimSpace(string(raw))
 }

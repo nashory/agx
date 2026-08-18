@@ -417,10 +417,11 @@ func TestAgentEventServiceClearResetsClaudeContext(t *testing.T) {
 
 func TestMapClaudeStreamLineMapsAssistantText(t *testing.T) {
 	task := db.Task{ID: "task-1", Agent: "claude"}
-	event, ok := mapClaudeStreamLine(task, "turn-1", []byte(`{"type":"assistant","message":{"id":"msg-1","content":[{"type":"text","text":"hello\nworld"}]}}`))
-	if !ok {
-		t.Fatal("mapClaudeStreamLine returned ok=false")
+	events := mapClaudeStreamLine(task, "turn-1", []byte(`{"type":"assistant","message":{"id":"msg-1","content":[{"type":"text","text":"hello\nworld"}]}}`))
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one", events)
 	}
+	event := events[0]
 	if event.Kind != "assistant_message" || event.Text != "hello\nworld" || event.TaskID != "task-1" {
 		t.Fatalf("event = %#v", event)
 	}
@@ -428,10 +429,11 @@ func TestMapClaudeStreamLineMapsAssistantText(t *testing.T) {
 
 func TestMapClaudeStreamLineMapsToolUse(t *testing.T) {
 	task := db.Task{ID: "task-1", Agent: "claude"}
-	event, ok := mapClaudeStreamLine(task, "turn-1", []byte(`{"type":"assistant","message":{"id":"msg-1","content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"git status"}}]}}`))
-	if !ok {
-		t.Fatal("mapClaudeStreamLine returned ok=false")
+	events := mapClaudeStreamLine(task, "turn-1", []byte(`{"type":"assistant","message":{"id":"msg-1","content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"git status"}}]}}`))
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one", events)
 	}
+	event := events[0]
 	if event.Kind != "tool_started" || event.Tool == nil || event.Tool.Name != "Bash" || event.Tool.Input != `{"command":"git status"}` {
 		t.Fatalf("event = %#v", event)
 	}
@@ -439,10 +441,11 @@ func TestMapClaudeStreamLineMapsToolUse(t *testing.T) {
 
 func TestMapClaudeStreamLineMapsResult(t *testing.T) {
 	task := db.Task{ID: "task-1", Agent: "claude"}
-	event, ok := mapClaudeStreamLine(task, "turn-1", []byte(`{"type":"result","subtype":"success","is_error":false,"duration_ms":1500,"session_id":"session-1","usage":{"input_tokens":2,"output_tokens":3,"cache_creation_input_tokens":5,"cache_read_input_tokens":7}}`))
-	if !ok {
-		t.Fatal("mapClaudeStreamLine returned ok=false")
+	events := mapClaudeStreamLine(task, "turn-1", []byte(`{"type":"result","subtype":"success","is_error":false,"duration_ms":1500,"session_id":"session-1","usage":{"input_tokens":2,"output_tokens":3,"cache_creation_input_tokens":5,"cache_read_input_tokens":7}}`))
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want one", events)
 	}
+	event := events[0]
 	if event.Kind != "turn_completed" || event.Result == nil || event.Result.Tokens != 17 || event.Cursor != "session-1" {
 		t.Fatalf("event = %#v", event)
 	}
@@ -450,11 +453,36 @@ func TestMapClaudeStreamLineMapsResult(t *testing.T) {
 
 func TestMapClaudeStreamLineSkipsNonJSONAndSystemEvents(t *testing.T) {
 	task := db.Task{ID: "task-1", Agent: "claude"}
-	if _, ok := mapClaudeStreamLine(task, "turn-1", []byte("Claude Code Enterprise")); ok {
+	if events := mapClaudeStreamLine(task, "turn-1", []byte("Claude Code Enterprise")); len(events) != 0 {
 		t.Fatal("banner line should be skipped")
 	}
-	if _, ok := mapClaudeStreamLine(task, "turn-1", []byte(`{"type":"system","subtype":"init"}`)); ok {
+	if events := mapClaudeStreamLine(task, "turn-1", []byte(`{"type":"system","subtype":"init"}`)); len(events) != 0 {
 		t.Fatal("system line should be skipped")
+	}
+}
+
+func TestMapClaudeStreamLineKeepsTextAndAllToolUses(t *testing.T) {
+	task := db.Task{ID: "task-1", Agent: "claude"}
+	events := mapClaudeStreamLine(task, "turn-1", []byte(`{"type":"assistant","message":{"id":"msg-1","content":[{"type":"text","text":"checking"},{"type":"tool_use","id":"tool-1","name":"Read","input":{"file_path":"a"}},{"type":"tool_use","id":"tool-2","name":"Grep","input":{"pattern":"b"}}]}}`))
+	if len(events) != 3 {
+		t.Fatalf("events = %#v, want text and two tools", events)
+	}
+	if events[0].Kind != "assistant_message" || events[0].Text != "checking" || events[1].Tool == nil || events[1].Tool.ID != "tool-1" || events[2].Tool == nil || events[2].Tool.ID != "tool-2" {
+		t.Fatalf("events = %#v, want every content block represented", events)
+	}
+}
+
+func TestMapClaudeStreamLineMapsToolResults(t *testing.T) {
+	task := db.Task{ID: "task-1", Agent: "claude"}
+	events := mapClaudeStreamLine(task, "turn-1", []byte(`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"ok","is_error":false},{"type":"tool_result","tool_use_id":"tool-2","content":[{"type":"text","text":"failed"}],"is_error":true}]}}`))
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want two tool results", events)
+	}
+	if events[0].Command == nil || events[0].Command.ExitCode == nil || *events[0].Command.ExitCode != 0 || events[0].Command.Stdout != "ok" {
+		t.Fatalf("success event = %#v", events[0])
+	}
+	if events[1].Command == nil || events[1].Command.ExitCode == nil || *events[1].Command.ExitCode != 1 || events[1].Command.Stderr != "failed" {
+		t.Fatalf("failure event = %#v", events[1])
 	}
 }
 
