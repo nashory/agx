@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -34,6 +35,8 @@ type codexRuntime interface {
 const claudeStreamKind = "claude-stream-json"
 const museStreamKind = "muse-jsonl"
 const agentEventSubscriberBuffer = 256
+
+var errStructuredFailurePublished = errors.New("structured agent failure already published")
 
 type agentEventService struct {
 	runtime *Service
@@ -484,6 +487,13 @@ func (s *agentEventService) launchClaudeTurn(task db.Task, project db.Project, t
 func (s *agentEventService) runClaudeTurn(ctx context.Context, cancel context.CancelFunc, task db.Task, project db.Project, turnID, message string) {
 	defer cancel()
 	err := s.execClaudeStream(ctx, task, project, turnID, message)
+	if errors.Is(err, errStructuredFailurePublished) {
+		_ = s.runtime.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
+		s.runtime.emitMetadataEvent(task.ProjectID)
+		s.runtime.syncDiscordAsync()
+		s.finishClaudeTurn(task, project, turnID, false)
+		return
+	}
 	if err != nil {
 		kind := agentstream.EventError
 		text := strings.TrimSpace(err.Error())
@@ -600,12 +610,21 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	terminalSeen := false
+	failurePublished := false
 	for scanner.Scan() {
 		event, ok := mapClaudeStreamLine(task, turnID, scanner.Bytes())
 		if !ok {
 			continue
 		}
 		s.publish(task.ID, event)
+		if event.Kind == agentstream.EventTurnCompleted {
+			terminalSeen = true
+		}
+		if event.Kind == agentstream.EventError || event.Kind == agentstream.EventInterrupted {
+			terminalSeen = true
+			failurePublished = true
+		}
 		if event.Cursor != "" {
 			cursor := event.Cursor
 			threadID := cursor
@@ -618,12 +637,18 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	if scanErr != nil {
 		return scanErr
 	}
+	if failurePublished {
+		return errStructuredFailurePublished
+	}
 	if waitErr != nil {
 		errText := strings.TrimSpace(stderr.String())
 		if errText == "" {
 			errText = waitErr.Error()
 		}
 		return fmt.Errorf("Claude stream failed: %s", errText)
+	}
+	if !terminalSeen {
+		return fmt.Errorf("Claude stream ended without a terminal result")
 	}
 	return nil
 }

@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nashory/agx/internal/agentstream"
@@ -83,5 +85,73 @@ func TestStructuredTurnCleanupDoesNotClearReplacementTurn(t *testing.T) {
 	}
 	if service.agents.turnCancels[task.ID] == nil {
 		t.Fatal("replacement turn cancel was cleared")
+	}
+}
+
+func TestMuseStreamPublishesTerminalFailureOnce(t *testing.T) {
+	commandDir := t.TempDir()
+	command := filepath.Join(commandDir, "muse")
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"sequence\":1,\"payload_type\":\"run.terminal.failed\",\"payload\":{\"terminal\":\"failed\",\"text\":\"\",\"reason\":\"boom\"}}'\nexit 1\n"
+	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", commandDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "muse", nil, "muse", true, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	service.paths.ConfigDir = t.TempDir()
+	t.Cleanup(func() { _ = service.agents.Close() })
+
+	err = service.agents.execMuseStream(context.Background(), task, project, "turn-1", "hello")
+	if !errors.Is(err, errStructuredFailurePublished) {
+		t.Fatalf("execMuseStream() error = %v, want published failure sentinel", err)
+	}
+	messages, err := store.ListTaskTranscriptMessages(task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Role != "status" || !strings.Contains(messages[0].Body, "boom") {
+		t.Fatalf("messages = %#v, want one persisted failure", messages)
+	}
+}
+
+func TestClaudeStreamRequiresTerminalResult(t *testing.T) {
+	commandDir := t.TempDir()
+	command := filepath.Join(commandDir, "claude")
+	if err := os.WriteFile(command, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", commandDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := db.Task{ID: db.NewTaskID(), ProjectID: project.ID, Agent: "claude"}
+	service := NewService("test")
+	service.store = store
+	t.Cleanup(func() { _ = service.agents.Close() })
+
+	err = service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "hello")
+	if err == nil || !strings.Contains(err.Error(), "without a terminal result") {
+		t.Fatalf("execClaudeStreamOnce() error = %v, want missing terminal error", err)
 	}
 }
