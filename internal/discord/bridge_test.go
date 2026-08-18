@@ -183,12 +183,30 @@ func TestBridgeSyncTaskChannelReturnsInProgressDuringHardSync(t *testing.T) {
 	bridge.connected = true
 	bridge.bot = &Bot{}
 	bridge.store = store
+	calls := make(chan struct{}, 1)
+	events := make(chan agentstream.Event)
+	defer close(events)
+	bridge.service = &fakeCommandService{tasks: []TaskSummary{{
+		ID:              "task-1",
+		ChannelID:       "channel-1",
+		Status:          "waiting",
+		Agent:           "codex",
+		AgentThreadID:   stringPtr("thread-1"),
+		AgentStreamKind: stringPtr("codex-app-server"),
+	}}}
+	bridge.events = scriptedAgentEvents{events: events, calls: calls}
 	bridge.hardSync.Lock()
 	defer bridge.hardSync.Unlock()
 
 	if err := bridge.SyncTaskChannel(context.Background(), "task-1"); !errors.Is(err, ErrSyncInProgress) {
 		t.Fatalf("SyncTaskChannel() error = %v, want ErrSyncInProgress", err)
 	}
+	if got := len(calls); got != 1 {
+		t.Fatalf("SubscribeAgentEvents calls = %d, want stream refresh before REST sync", got)
+	}
+	bridge.mu.Lock()
+	bridge.cancelTaskStreamsLocked()
+	bridge.mu.Unlock()
 }
 
 func TestBridgeChannelSyncSerializesChannelMutations(t *testing.T) {

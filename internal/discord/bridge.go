@@ -636,6 +636,10 @@ func (b *Bridge) SyncTaskChannel(ctx context.Context, taskID string) error {
 	if !connected || bot == nil || store == nil {
 		return nil
 	}
+	// Restore the live event subscription before any Discord REST work. Channel
+	// reconciliation can time out even when the existing DB mapping is usable,
+	// and agent replies must not depend on that unrelated network operation.
+	b.RefreshTaskStreams(ctx)
 	release, err := b.beginTaskSync(ctx, taskID)
 	if err != nil {
 		return err
