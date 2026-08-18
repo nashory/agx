@@ -30,13 +30,7 @@ func TestWriteMusePromptUsesPrivateFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Remove(path) })
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("prompt mode = %o, want 600", got)
-	}
+	assertPromptFileIsPrivate(t, path)
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -112,13 +106,13 @@ func TestStructuredTurnCleanupDoesNotClearReplacementTurn(t *testing.T) {
 }
 
 func TestMuseStreamPublishesTerminalFailureOnce(t *testing.T) {
-	commandDir := t.TempDir()
-	command := filepath.Join(commandDir, "muse")
-	script := "#!/bin/sh\nprintf '%s\\n' '{\"sequence\":1,\"payload_type\":\"run.terminal.failed\",\"payload\":{\"terminal\":\"failed\",\"text\":\"\",\"reason\":\"boom\"}}'\nexit 1\n"
-	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", commandDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	posix := "#!/bin/sh\nprintf '%s\\n' '{\"sequence\":1,\"payload_type\":\"run.terminal.failed\",\"payload\":{\"terminal\":\"failed\",\"text\":\"\",\"reason\":\"boom\"}}'\nexit 1\n"
+	batch := batchLines(
+		"@echo off",
+		`echo {"sequence":1,"payload_type":"run.terminal.failed","payload":{"terminal":"failed","text":"","reason":"boom"}}`,
+		"exit /b 1",
+	)
+	writeStubCommandOnPath(t, "muse", posix, batch)
 
 	store, err := db.OpenMemory()
 	if err != nil {
@@ -152,10 +146,7 @@ func TestMuseStreamPublishesTerminalFailureOnce(t *testing.T) {
 }
 
 func TestMuseStreamWaitsForBusySession(t *testing.T) {
-	commandDir := t.TempDir()
-	command := filepath.Join(commandDir, "muse")
-	attemptFile := filepath.Join(commandDir, "attempts")
-	script := `#!/bin/sh
+	posix := `#!/bin/sh
 count=0
 if [ -f "$AGX_MUSE_ATTEMPTS" ]; then
   count=$(sed -n '1p' "$AGX_MUSE_ATTEMPTS")
@@ -168,10 +159,21 @@ if [ "$count" -eq 1 ]; then
 fi
 printf '%s\n' '{"sequence":1,"payload_type":"run.terminal.completed","payload":{"terminal":"completed","text":"done","reason":null}}'
 `
-	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", commandDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	batch := batchLines(
+		"@echo off",
+		"setlocal enabledelayedexpansion",
+		`set "count=0"`,
+		`if exist "%AGX_MUSE_ATTEMPTS%" set /p count=<"%AGX_MUSE_ATTEMPTS%"`,
+		"set /a count=count+1",
+		`> "%AGX_MUSE_ATTEMPTS%" echo !count!`,
+		"if !count! equ 1 (",
+		"echo session test-session is already in use 1>&2",
+		"exit /b 1",
+		")",
+		`echo {"sequence":1,"payload_type":"run.terminal.completed","payload":{"terminal":"completed","text":"done","reason":null}}`,
+	)
+	commandDir := writeStubCommandOnPath(t, "muse", posix, batch)
+	attemptFile := filepath.Join(commandDir, "attempts")
 	t.Setenv("AGX_MUSE_ATTEMPTS", attemptFile)
 	previousDelay := museSessionBusyRetryDelay
 	museSessionBusyRetryDelay = time.Millisecond
@@ -223,12 +225,7 @@ func TestMuseSessionAlreadyInUse(t *testing.T) {
 }
 
 func TestClaudeStreamRequiresTerminalResult(t *testing.T) {
-	commandDir := t.TempDir()
-	command := filepath.Join(commandDir, "claude")
-	if err := os.WriteFile(command, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", commandDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	writeStubCommandOnPath(t, "claude", stubExitZeroPosix, stubExitZeroBatch)
 
 	store, err := db.OpenMemory()
 	if err != nil {
@@ -251,20 +248,23 @@ func TestClaudeStreamRequiresTerminalResult(t *testing.T) {
 }
 
 func TestClaudeStreamReadsPromptFromStdin(t *testing.T) {
-	commandDir := t.TempDir()
-	command := filepath.Join(commandDir, "claude")
-	argsFile := filepath.Join(commandDir, "args")
-	stdinFile := filepath.Join(commandDir, "stdin")
-	script := `#!/bin/sh
+	posix := `#!/bin/sh
 printf '%s' "$*" > "$AGX_CLAUDE_ARGS"
 IFS= read -r prompt
 printf '%s' "$prompt" > "$AGX_CLAUDE_STDIN"
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}'
 `
-	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", commandDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	batch := batchLines(
+		"@echo off",
+		"setlocal enabledelayedexpansion",
+		`> "%AGX_CLAUDE_ARGS%" echo %*`,
+		"set /p prompt=",
+		`> "%AGX_CLAUDE_STDIN%" <nul set /p "=!prompt!"`,
+		`echo {"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}`,
+	)
+	commandDir := writeStubCommandOnPath(t, "claude", posix, batch)
+	argsFile := filepath.Join(commandDir, "args")
+	stdinFile := filepath.Join(commandDir, "stdin")
 	t.Setenv("AGX_CLAUDE_ARGS", argsFile)
 	t.Setenv("AGX_CLAUDE_STDIN", stdinFile)
 	store, err := db.OpenMemory()

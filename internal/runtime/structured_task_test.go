@@ -662,12 +662,7 @@ func TestAgentEventServiceClearResetsClaudeContext(t *testing.T) {
 
 func addExecutableToPath(t *testing.T, name string) {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	writeStubCommandOnPath(t, name, stubExitZeroPosix, stubExitZeroBatch)
 }
 
 func initRuntimeGitRepo(t *testing.T) string {

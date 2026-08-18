@@ -135,11 +135,7 @@ func TestNormalizeVoiceTranscriptText(t *testing.T) {
 
 func writeExecutable(t *testing.T, name string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return writeStubCommand(t, t.TempDir(), name, stubExitZeroPosix, stubExitZeroBatch)
 }
 
 func containsArg(args []string, want string) bool {
