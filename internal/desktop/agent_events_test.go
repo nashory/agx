@@ -464,3 +464,22 @@ func TestMergeQueuedClaudeMessages(t *testing.T) {
 		t.Fatalf("mergeQueuedClaudeMessages() = %q, want %q", got, want)
 	}
 }
+
+func TestClaudeTurnCleanupDoesNotClearReplacementTurn(t *testing.T) {
+	service := newAgentEventService(&App{})
+	t.Cleanup(func() { _ = service.Close() })
+	task := db.Task{ID: "task-1"}
+	_, replacementCancel := context.WithCancel(context.Background())
+	t.Cleanup(replacementCancel)
+	service.activeTurns[task.ID] = "replacement-turn"
+	service.turnCancels[task.ID] = replacementCancel
+
+	service.finishClaudeTurn(task, db.Project{}, "old-turn", false)
+
+	if got := service.activeTurns[task.ID]; got != "replacement-turn" {
+		t.Fatalf("active turn = %q, want replacement-turn", got)
+	}
+	if service.turnCancels[task.ID] == nil {
+		t.Fatal("replacement turn cancel was cleared")
+	}
+}

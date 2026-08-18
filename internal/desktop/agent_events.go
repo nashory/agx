@@ -445,21 +445,25 @@ func (s *agentEventService) runClaudeTurn(ctx context.Context, cancel context.Ca
 		_ = s.app.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
 		s.app.emitMetadataEvent(task.ProjectID)
 		s.app.syncDiscordAsync()
-		s.finishClaudeTurn(task, project, false)
+		s.finishClaudeTurn(task, project, turnID, false)
 		return
 	}
 	_ = s.app.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
 	s.app.emitMetadataEvent(task.ProjectID)
 	s.app.syncDiscordAsync()
-	s.finishClaudeTurn(task, project, true)
+	s.finishClaudeTurn(task, project, turnID, true)
 }
 
-func (s *agentEventService) finishClaudeTurn(task db.Task, project db.Project, startQueued bool) {
+func (s *agentEventService) finishClaudeTurn(task db.Task, project db.Project, completedTurnID string, startQueued bool) {
 	var nextMessage string
 	var turnID string
 	var turnCtx context.Context
 	var cancel context.CancelFunc
 	s.mu.Lock()
+	if s.activeTurns[task.ID] != completedTurnID {
+		s.mu.Unlock()
+		return
+	}
 	delete(s.activeTurns, task.ID)
 	delete(s.turnCancels, task.ID)
 	if !startQueued {

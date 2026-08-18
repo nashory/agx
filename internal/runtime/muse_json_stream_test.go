@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -62,5 +63,25 @@ func TestMuseIsStructuredRuntimeAgent(t *testing.T) {
 	task := db.Task{AgentStreamKind: &kind}
 	if !isRuntimeStructuredDBTask(task) || !isStructuredStreamTask(task) {
 		t.Fatal("Muse JSONL task should be recognized as structured")
+	}
+}
+
+func TestStructuredTurnCleanupDoesNotClearReplacementTurn(t *testing.T) {
+	service := NewService("test")
+	t.Cleanup(func() { _ = service.agents.Close() })
+	task := db.Task{ID: "task-1"}
+	_, replacementCancel := context.WithCancel(context.Background())
+	t.Cleanup(replacementCancel)
+	service.agents.activeTurns[task.ID] = "replacement-turn"
+	service.agents.turnCancels[task.ID] = replacementCancel
+
+	service.agents.finishClaudeTurn(task, db.Project{}, "old-turn", false)
+	service.agents.finishMuseTurn(task, db.Project{}, "old-turn", false)
+
+	if got := service.agents.activeTurns[task.ID]; got != "replacement-turn" {
+		t.Fatalf("active turn = %q, want replacement-turn", got)
+	}
+	if service.agents.turnCancels[task.ID] == nil {
+		t.Fatal("replacement turn cancel was cleared")
 	}
 }

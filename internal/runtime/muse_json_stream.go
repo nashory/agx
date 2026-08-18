@@ -82,21 +82,25 @@ func (s *agentEventService) runMuseTurn(ctx context.Context, cancel context.Canc
 		_ = s.runtime.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
 		s.runtime.emitMetadataEvent(task.ProjectID)
 		s.runtime.syncDiscordAsync()
-		s.finishMuseTurn(task, project, false)
+		s.finishMuseTurn(task, project, turnID, false)
 		return
 	}
 	_ = s.runtime.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
 	s.runtime.emitMetadataEvent(task.ProjectID)
 	s.runtime.syncDiscordAsync()
-	s.finishMuseTurn(task, project, true)
+	s.finishMuseTurn(task, project, turnID, true)
 }
 
-func (s *agentEventService) finishMuseTurn(task db.Task, project db.Project, startQueued bool) {
+func (s *agentEventService) finishMuseTurn(task db.Task, project db.Project, completedTurnID string, startQueued bool) {
 	var nextMessage string
 	var turnID string
 	var turnCtx context.Context
 	var cancel context.CancelFunc
 	s.mu.Lock()
+	if s.activeTurns[task.ID] != completedTurnID {
+		s.mu.Unlock()
+		return
+	}
 	delete(s.activeTurns, task.ID)
 	delete(s.turnCancels, task.ID)
 	if !startQueued {
