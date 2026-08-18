@@ -18,7 +18,7 @@ func TestMuseStreamArgsUsesPersistentSession(t *testing.T) {
 	threadID := "session-1"
 	task := db.Task{ID: "task-1", Agent: "muse", AllMighty: true, AgentThreadID: &threadID}
 	got := museStreamArgs(task, "/workspace", "hello")
-	want := []string{"exec", "--json", "--workspace", "/workspace", "--session-id", "session-1", "--yolo", "hello"}
+	want := []string{"exec", "--json", "--user-input-auto-resolve", "--workspace", "/workspace", "--session-id", "session-1", "--yolo", "hello"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("museStreamArgs() = %#v, want %#v", got, want)
 	}

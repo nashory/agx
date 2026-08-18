@@ -28,6 +28,7 @@ type fakeCodexRuntime struct {
 	resumeErr    error
 	dirtyThread  bool
 	stderr       string
+	inputCancels chan string
 }
 
 func newFakeCodexRuntime() *fakeCodexRuntime {
@@ -35,6 +36,7 @@ func newFakeCodexRuntime() *fakeCodexRuntime {
 		events:       make(chan codexapp.Notification, 1),
 		nextThreadID: "thread-1",
 		nextTurnID:   "turn-1",
+		inputCancels: make(chan string, 1),
 	}
 }
 
@@ -79,6 +81,11 @@ func (f *fakeCodexRuntime) Events() <-chan codexapp.Notification {
 }
 
 func (f *fakeCodexRuntime) ApproveRequest(codexapp.Notification, codexapp.ReviewDecision) error {
+	return nil
+}
+
+func (f *fakeCodexRuntime) CancelInputRequest(notification codexapp.Notification) error {
+	f.inputCancels <- notification.Method
 	return nil
 }
 
@@ -132,6 +139,31 @@ func TestEnsureCodexThreadPreservesContextOnTransientResumeFailure(t *testing.T)
 	}
 	if updated.AgentThreadID == nil || *updated.AgentThreadID != threadID {
 		t.Fatalf("AgentThreadID = %#v, want preserved thread", updated.AgentThreadID)
+	}
+}
+
+func TestCodexInputRequestIsCancelledHeadlessly(t *testing.T) {
+	service := NewService("test")
+	fake := newFakeCodexRuntime()
+	done := make(chan struct{})
+	go func() {
+		service.agents.forwardCodexEvents(fake)
+		close(done)
+	}()
+	fake.events <- codexapp.Notification{Method: codexapp.NotifyUserInputRequest, RequestID: "input-1"}
+	select {
+	case method := <-fake.inputCancels:
+		if method != codexapp.NotifyUserInputRequest {
+			t.Fatalf("cancelled method = %q", method)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Codex input request was not cancelled")
+	}
+	close(fake.events)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Codex event forwarder did not stop")
 	}
 }
 

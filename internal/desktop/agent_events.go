@@ -26,6 +26,7 @@ type codexRuntime interface {
 	TurnSteer(context.Context, string, string, string) (codexapp.TurnSteerResponse, error)
 	TurnInterrupt(context.Context, string, string) error
 	Events() <-chan codexapp.Notification
+	CancelInputRequest(codexapp.Notification) error
 	Close() error
 }
 
@@ -592,7 +593,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 }
 
 func claudeStreamArgs(task db.Task, message string) []string {
-	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
+	args := []string{"--print", "--verbose", "--output-format", "stream-json", "--disallowedTools", "AskUserQuestion"}
 	threadID := claudeThreadID(task)
 	if task.AgentEventCursor != nil && strings.TrimSpace(*task.AgentEventCursor) != "" {
 		args = append(args, "--resume", threadID)
@@ -647,6 +648,10 @@ func (s *agentEventService) forgetRuntime(client codexRuntime) {
 func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 	defer s.forgetRuntime(client)
 	for notification := range client.Events() {
+		if codexapp.IsInputRequest(notification) {
+			_ = client.CancelInputRequest(notification)
+			continue
+		}
 		s.mu.Lock()
 		taskID := s.taskIDForNotificationLocked(notification)
 		s.mu.Unlock()

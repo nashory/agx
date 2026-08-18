@@ -232,7 +232,7 @@ func museStreamArgs(task db.Task, workingDir, message string) []string {
 	if task.AgentThreadID != nil && strings.TrimSpace(*task.AgentThreadID) != "" {
 		threadID = strings.TrimSpace(*task.AgentThreadID)
 	}
-	args := []string{"exec", "--json", "--workspace", workingDir, "--session-id", threadID}
+	args := []string{"exec", "--json", "--user-input-auto-resolve", "--workspace", workingDir, "--session-id", threadID}
 	if task.AllMighty {
 		args = append(args, "--yolo")
 	}

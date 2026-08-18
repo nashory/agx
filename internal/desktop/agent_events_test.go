@@ -77,6 +77,10 @@ func (f *fakeCodexRuntime) Events() <-chan codexapp.Notification {
 	return f.events
 }
 
+func (f *fakeCodexRuntime) CancelInputRequest(codexapp.Notification) error {
+	return nil
+}
+
 func (f *fakeCodexRuntime) Close() error {
 	close(f.events)
 	return nil
@@ -468,6 +472,9 @@ func TestClaudeStreamArgsCreatesSessionBeforeCursor(t *testing.T) {
 	if !strings.Contains(args, "--permission-mode bypassPermissions") || !strings.Contains(args, "--dangerously-skip-permissions") {
 		t.Fatalf("args = %q, want all-mighty flags", args)
 	}
+	if !strings.Contains(args, "--disallowedTools AskUserQuestion") {
+		t.Fatalf("args = %q, want headless question tool disabled", args)
+	}
 }
 
 func TestClaudeStreamArgsResumesAfterCursor(t *testing.T) {
@@ -481,6 +488,9 @@ func TestClaudeStreamArgsResumesAfterCursor(t *testing.T) {
 	}
 	if strings.Contains(args, "--session-id") {
 		t.Fatalf("args = %q, did not expect --session-id", args)
+	}
+	if !strings.Contains(args, "--disallowedTools AskUserQuestion") {
+		t.Fatalf("args = %q, want headless question tool disabled", args)
 	}
 }
 

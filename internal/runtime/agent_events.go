@@ -27,6 +27,7 @@ type codexRuntime interface {
 	TurnInterrupt(context.Context, string, string) error
 	Events() <-chan codexapp.Notification
 	ApproveRequest(codexapp.Notification, codexapp.ReviewDecision) error
+	CancelInputRequest(codexapp.Notification) error
 	RecentStderr() string
 	Close() error
 }
@@ -653,7 +654,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 }
 
 func claudeStreamArgs(task db.Task, message string) []string {
-	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
+	args := []string{"--print", "--verbose", "--output-format", "stream-json", "--disallowedTools", "AskUserQuestion"}
 	threadID := claudeThreadID(task)
 	if task.AgentEventCursor != nil && strings.TrimSpace(*task.AgentEventCursor) != "" {
 		args = append(args, "--resume", threadID)
@@ -708,6 +709,16 @@ func (s *agentEventService) forgetRuntime(client codexRuntime) {
 func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 	defer s.forgetRuntime(client)
 	for notification := range client.Events() {
+		if codexapp.IsInputRequest(notification) {
+			if err := client.CancelInputRequest(notification); err != nil {
+				logRuntimeOperation("codex_user_input",
+					"status", "cancel_failed",
+					"method", notification.Method,
+					"error", err,
+				)
+			}
+			continue
+		}
 		if codexapp.IsApprovalRequest(notification) {
 			s.answerCodexApproval(client, notification)
 			continue
