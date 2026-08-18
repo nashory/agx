@@ -2,12 +2,14 @@ package desktop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nashory/agx/internal/codexapp"
 	"github.com/nashory/agx/internal/db"
@@ -26,6 +28,7 @@ type fakeCodexRuntime struct {
 	threadErr    error
 	resumeErr    error
 	dirtyThread  bool
+	approvals    chan codexapp.ReviewDecision
 }
 
 func newFakeCodexRuntime() *fakeCodexRuntime {
@@ -33,6 +36,7 @@ func newFakeCodexRuntime() *fakeCodexRuntime {
 		events:       make(chan codexapp.Notification, 16),
 		nextThreadID: "thread-1",
 		nextTurnID:   "turn-1",
+		approvals:    make(chan codexapp.ReviewDecision, 1),
 	}
 }
 
@@ -77,6 +81,11 @@ func (f *fakeCodexRuntime) Events() <-chan codexapp.Notification {
 	return f.events
 }
 
+func (f *fakeCodexRuntime) ApproveRequest(_ codexapp.Notification, decision codexapp.ReviewDecision) error {
+	f.approvals <- decision
+	return nil
+}
+
 func (f *fakeCodexRuntime) CancelInputRequest(codexapp.Notification) error {
 	return nil
 }
@@ -116,6 +125,30 @@ func TestEnsureCodexThreadPreservesContextOnTransientResumeFailure(t *testing.T)
 	}
 	if updated.AgentThreadID == nil || *updated.AgentThreadID != threadID {
 		t.Fatalf("AgentThreadID = %#v, want preserved thread", updated.AgentThreadID)
+	}
+}
+
+func TestDesktopCodexApprovalUsesTaskSafetyMode(t *testing.T) {
+	app, project := newTestApp(t)
+	task, err := app.store.CreateTaskRuntimeMode(db.NewTaskID(), project.ID, "structured", nil, "codex", true, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := "thread-approval"
+	app.agentEvents.rememberThread(task.ID, threadID)
+	fake := newFakeCodexRuntime()
+	notification := codexapp.Notification{
+		Method: codexapp.NotifyCommandApprovalRequest,
+		Params: json.RawMessage(`{"threadId":"thread-approval"}`),
+	}
+	app.agentEvents.answerCodexApproval(fake, notification)
+	select {
+	case decision := <-fake.approvals:
+		if decision != codexapp.DecisionAccept {
+			t.Fatalf("decision = %q, want accept", decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("approval request was not answered")
 	}
 }
 

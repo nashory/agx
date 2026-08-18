@@ -29,6 +29,7 @@ type fakeCodexRuntime struct {
 	dirtyThread  bool
 	stderr       string
 	inputCancels chan string
+	approvals    chan codexapp.ReviewDecision
 }
 
 func newFakeCodexRuntime() *fakeCodexRuntime {
@@ -37,6 +38,7 @@ func newFakeCodexRuntime() *fakeCodexRuntime {
 		nextThreadID: "thread-1",
 		nextTurnID:   "turn-1",
 		inputCancels: make(chan string, 1),
+		approvals:    make(chan codexapp.ReviewDecision, 1),
 	}
 }
 
@@ -80,7 +82,8 @@ func (f *fakeCodexRuntime) Events() <-chan codexapp.Notification {
 	return f.events
 }
 
-func (f *fakeCodexRuntime) ApproveRequest(codexapp.Notification, codexapp.ReviewDecision) error {
+func (f *fakeCodexRuntime) ApproveRequest(_ codexapp.Notification, decision codexapp.ReviewDecision) error {
+	f.approvals <- decision
 	return nil
 }
 
@@ -164,6 +167,20 @@ func TestCodexInputRequestIsCancelledHeadlessly(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("Codex event forwarder did not stop")
+	}
+}
+
+func TestCodexApprovalDefaultsToDeclineWhenTaskIsUnknown(t *testing.T) {
+	service := NewService("test")
+	fake := newFakeCodexRuntime()
+	service.agents.answerCodexApproval(fake, codexapp.Notification{Method: codexapp.NotifyCommandApprovalRequest})
+	select {
+	case decision := <-fake.approvals:
+		if decision != codexapp.DecisionDecline {
+			t.Fatalf("decision = %q, want decline", decision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("approval request was not answered")
 	}
 }
 

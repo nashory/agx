@@ -26,6 +26,7 @@ type codexRuntime interface {
 	TurnSteer(context.Context, string, string, string) (codexapp.TurnSteerResponse, error)
 	TurnInterrupt(context.Context, string, string) error
 	Events() <-chan codexapp.Notification
+	ApproveRequest(codexapp.Notification, codexapp.ReviewDecision) error
 	CancelInputRequest(codexapp.Notification) error
 	Close() error
 }
@@ -650,6 +651,10 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 			_ = client.CancelInputRequest(notification)
 			continue
 		}
+		if codexapp.IsApprovalRequest(notification) {
+			s.answerCodexApproval(client, notification)
+			continue
+		}
 		s.mu.Lock()
 		taskID := s.taskIDForNotificationLocked(notification)
 		s.mu.Unlock()
@@ -690,6 +695,19 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 			s.app.syncDiscordAsync()
 		}
 	}
+}
+
+func (s *agentEventService) answerCodexApproval(client codexRuntime, notification codexapp.Notification) {
+	decision := codexapp.DecisionDecline
+	s.mu.Lock()
+	taskID := s.taskIDForNotificationLocked(notification)
+	s.mu.Unlock()
+	if taskID != "" {
+		if task, err := s.app.store.GetTask(taskID); err == nil && task.AllMighty {
+			decision = codexapp.DecisionAccept
+		}
+	}
+	_ = client.ApproveRequest(notification, decision)
 }
 
 func (s *agentEventService) taskIDForNotificationLocked(notification codexapp.Notification) string {
