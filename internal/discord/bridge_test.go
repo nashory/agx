@@ -290,6 +290,43 @@ func TestOldTaskStreamCannotRemoveReplacement(t *testing.T) {
 	}
 }
 
+func TestStartTaskStreamQueuesMissedAssistantMessage(t *testing.T) {
+	store, taskID := openDiscordOutboxTestStore(t)
+	if err := store.AppendTaskTranscriptEventMessage(taskID, "assistant", "missed final answer", nil, "event-missed"); err != nil {
+		t.Fatal(err)
+	}
+	bridge := NewBridge(config.DiscordConfig{})
+	bridge.connected = true
+	bridge.bot = &Bot{}
+	bridge.store = store
+	events := make(chan agentstream.Event)
+	defer close(events)
+	task := TaskSummary{
+		ID:              taskID,
+		ChannelID:       "channel-1",
+		Status:          "waiting",
+		Agent:           "codex",
+		AgentThreadID:   stringPtr("thread-1"),
+		AgentStreamKind: stringPtr("codex-app-server"),
+	}
+
+	bridge.startTaskStream(nil, scriptedAgentEvents{events: events}, bridge.bot, task)
+	if err := bridge.queueAssistantCatchUp(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := store.ListPendingDiscordDeliveries(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Content != "missed final answer" || pending[0].EventKey != "event-missed" {
+		t.Fatalf("pending = %#v, want caught-up assistant answer", pending)
+	}
+	bridge.mu.Lock()
+	bridge.cancelTaskStreamsLocked()
+	bridge.mu.Unlock()
+}
+
 func stringPtr(value string) *string {
 	return &value
 }

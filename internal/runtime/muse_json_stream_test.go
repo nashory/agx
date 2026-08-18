@@ -208,7 +208,7 @@ printf '%s\n' '{"sequence":1,"payload_type":"run.terminal.completed","payload":{
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 1 || messages[0].Role != "assistant" || messages[0].Body != "done" {
+	if len(messages) != 1 || messages[0].Role != "assistant" || messages[0].Body != "done" || messages[0].EventKey == nil || *messages[0].EventKey == "" {
 		t.Fatalf("messages = %#v, want recovered assistant response", messages)
 	}
 }

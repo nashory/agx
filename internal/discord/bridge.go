@@ -66,6 +66,11 @@ type taskStream struct {
 	generation uint64
 }
 
+const (
+	discordAssistantCatchUpLimit  = 20
+	discordAssistantCatchUpWindow = 24 * time.Hour
+)
+
 var ErrSyncInProgress = errors.New("discord sync is already running")
 
 type activeSync struct {
@@ -904,6 +909,9 @@ func (b *Bridge) startTaskStream(service CommandService, events AgentEventSubscr
 		b.removeTaskStream(task.ID, task.ChannelID, generation)
 		return
 	}
+	if err := b.queueAssistantCatchUp(ctx, task); err != nil {
+		b.setError(err)
+	}
 
 	go func() {
 		defer cancel()
@@ -919,6 +927,36 @@ func (b *Bridge) startTaskStream(service CommandService, events AgentEventSubscr
 			b.setError(err)
 		}
 	}()
+}
+
+func (b *Bridge) queueAssistantCatchUp(ctx context.Context, task TaskSummary) error {
+	b.mu.Lock()
+	store := b.store
+	b.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	messages, err := store.ListUnqueuedAssistantTranscriptMessages(task.ID, time.Now().Add(-discordAssistantCatchUpWindow), discordAssistantCatchUpLimit)
+	if err != nil {
+		return err
+	}
+	renderer := NewSemanticRenderer()
+	for _, message := range messages {
+		if message.EventKey == nil || strings.TrimSpace(*message.EventKey) == "" {
+			continue
+		}
+		eventKey := strings.TrimSpace(*message.EventKey)
+		actions := renderer.Render(agentstream.Event{
+			TaskID: task.ID,
+			TurnID: valueOrEmpty(message.TurnID),
+			Kind:   agentstream.EventAssistantMessage,
+			Text:   message.Body,
+		})
+		if err := b.QueueRenderActions(ctx, task.ID, task.ChannelID, eventKey, actions); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *Bridge) cancelTaskStreamsLocked() {

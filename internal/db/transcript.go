@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -57,6 +58,49 @@ FROM (
 )
 ORDER BY created_at ASC, id ASC
 `, taskID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var messages []TaskTranscriptMessage
+	for rows.Next() {
+		message, err := scanTaskTranscriptMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	return messages, rows.Err()
+}
+
+func (s *Store) ListUnqueuedAssistantTranscriptMessages(taskID string, notBefore time.Time, limit int) ([]TaskTranscriptMessage, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, fmt.Errorf("task id is required")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.db.Query(`
+SELECT id, task_id, turn_id, role, body, discord_message_id, event_key, created_at, updated_at
+FROM (
+	SELECT t.id, t.task_id, t.turn_id, t.role, t.body, t.discord_message_id, t.event_key, t.created_at, t.updated_at
+	FROM task_transcript_messages t
+	WHERE t.task_id = ?
+	  AND t.role = 'assistant'
+	  AND t.event_key IS NOT NULL
+	  AND TRIM(t.event_key) != ''
+	  AND t.created_at >= ?
+	  AND NOT EXISTS (
+		SELECT 1
+		FROM discord_outbox o
+		WHERE o.task_id = t.task_id AND o.event_key = t.event_key
+	  )
+	ORDER BY t.created_at DESC, t.id DESC
+	LIMIT ?
+)
+ORDER BY created_at ASC, id ASC
+`, taskID, notBefore.UTC(), limit)
 	if err != nil {
 		return nil, err
 	}
