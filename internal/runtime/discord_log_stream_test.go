@@ -303,7 +303,8 @@ func TestReadMuseSessionLogEventsMapsStructuredMuseEvents(t *testing.T) {
 		`{"sequence":4,"recorded_at":4000000,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"run-1","event":{"kind":"assistant_message_committed","message_id":"msg-1","text":"중간 진행 상황"}}}`,
 		`{"sequence":5,"recorded_at":5000000,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"run-1","event":{"kind":"assistant_tool_calls_committed","tool_calls":[{"call_id":"call-1","name":"bash","args":"{\"command\":\"git status --short\",\"description\":\"Check status\"}"}]}}}`,
 		`{"sequence":6,"recorded_at":6000000,"payload_type":"runtime.session","payload":{"kind":"task","event":{"kind":"output","chunk":"{\"chunk_id\":\"exec-1\",\"command\":\"git status --short\",\"description\":\"Check status\",\"exit_code\":0,\"terminal_status\":\"completed\",\"output\":\" M file.go\"}"}}}`,
-		`{"sequence":7,"recorded_at":7000000,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"run-1","event":{"kind":"terminal","terminal":"completed"}}}`,
+		`{"sequence":7,"recorded_at":7000000,"payload_type":"runtime.session","payload":{"kind":"task","event":{"kind":"output","chunk":"{\"chunk_id\":\"exec-2\",\"command\":\"git diff\",\"description\":\"Review changes\",\"terminal_status\":\"failed\",\"output\":\"\"}"}}}`,
+		`{"sequence":8,"recorded_at":8000000,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"run-1","event":{"kind":"terminal","terminal":"completed"}}}`,
 		"",
 	}, "\n")
 	file, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0)
@@ -332,6 +333,7 @@ func TestReadMuseSessionLogEventsMapsStructuredMuseEvents(t *testing.T) {
 		agentstream.EventAssistantMessage,
 		agentstream.EventToolStarted,
 		agentstream.EventCommandCompleted,
+		agentstream.EventCommandCompleted,
 		agentstream.EventTurnCompleted,
 	}
 	if len(kinds) != len(wantKinds) {
@@ -353,6 +355,9 @@ func TestReadMuseSessionLogEventsMapsStructuredMuseEvents(t *testing.T) {
 	}
 	if events[4].Command == nil || events[4].Command.Stdout != " M file.go" {
 		t.Fatalf("command event = %#v, want command output", events[4])
+	}
+	if events[5].Command == nil || events[5].Command.ExitCode == nil || *events[5].Command.ExitCode == 0 {
+		t.Fatalf("failed command event = %#v, want terminal failure without output preserved", events[5])
 	}
 }
 
@@ -393,7 +398,7 @@ func TestLatestMuseProgressExtractsStatusBlocks(t *testing.T) {
 	}
 }
 
-func TestMuseLogEventsClassifiesThinkingWorkingAndDone(t *testing.T) {
+func TestMuseLogEventsIgnoresTerminalCompletionDecorations(t *testing.T) {
 	logs := strings.Join([]string{
 		"◆ Thinking (3m 17s · esc to interrupt)",
 		"",
@@ -404,8 +409,8 @@ func TestMuseLogEventsClassifiesThinkingWorkingAndDone(t *testing.T) {
 	state := &museLogState{}
 
 	events := museLogEvents("task-1", "turn-1", "muse", logs, state, time.Unix(1, 0))
-	if len(events) != 3 {
-		t.Fatalf("len(events) = %d, want thinking, working, done", len(events))
+	if len(events) != 2 {
+		t.Fatalf("len(events) = %d, want thinking and working only", len(events))
 	}
 	if events[0].Kind != agentstream.EventThinkingDelta || !strings.Contains(events[0].Text, "Thinking") {
 		t.Fatalf("events[0] = %#v, want thinking progress", events[0])
@@ -413,8 +418,25 @@ func TestMuseLogEventsClassifiesThinkingWorkingAndDone(t *testing.T) {
 	if events[1].Kind != agentstream.EventToolStarted || events[1].Tool == nil || !strings.Contains(events[1].Tool.Input, "Read new file") {
 		t.Fatalf("events[1] = %#v, want working progress", events[1])
 	}
-	if events[2].Kind != agentstream.EventCommandCompleted || events[2].Command == nil || !strings.Contains(events[2].Command.Stdout, "Finished") {
-		t.Fatalf("events[2] = %#v, want done progress", events[2])
+}
+
+func TestMuseLogEventsIgnoresWorkedForAndDoneBlocks(t *testing.T) {
+	logs := strings.Join([]string{
+		"◆ Worked for 1m 34s",
+		"",
+		"◆ Done.",
+	}, "\n")
+	events := museLogEvents("task-1", "turn-1", "muse", logs, &museLogState{}, time.Unix(1, 0))
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want terminal completion decorations ignored", events)
+	}
+}
+
+func TestMuseLogEventsKeepsMeaningfulAnswerStartingWithDone(t *testing.T) {
+	logs := "◆ Done fixing the Discord stream; the duplicate status is gone."
+	events := museLogEvents("task-1", "turn-1", "muse", logs, &museLogState{}, time.Unix(1, 0))
+	if len(events) != 2 || events[0].Kind != agentstream.EventAssistantMessage {
+		t.Fatalf("events = %#v, want meaningful Done-prefixed answer preserved", events)
 	}
 }
 

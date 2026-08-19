@@ -192,7 +192,7 @@ const (
 	museLogAssistant museLogBlockKind = "assistant"
 	museLogThinking  museLogBlockKind = "thinking"
 	museLogWorking   museLogBlockKind = "working"
-	museLogDone      museLogBlockKind = "done"
+	museLogIgnored   museLogBlockKind = "ignored"
 )
 
 func museLogEvents(taskID, turnID, agent, logs string, state *museLogState, now time.Time) []agentstream.Event {
@@ -224,15 +224,8 @@ func museLogEvents(taskID, turnID, agent, logs string, state *museLogState, now 
 				CreatedAt: now,
 				Tool:      &agentstream.ToolEvent{Name: "Muse Code", Input: block.text},
 			})
-		case museLogDone:
-			events = append(events, agentstream.Event{
-				TaskID:    taskID,
-				TurnID:    turnID,
-				Kind:      agentstream.EventCommandCompleted,
-				Agent:     agent,
-				CreatedAt: now,
-				Command:   &agentstream.CommandEvent{Command: "Muse Code", Stdout: block.text},
-			})
+		case museLogIgnored:
+			continue
 		default:
 			events = append(events,
 				agentstream.Event{TaskID: taskID, TurnID: turnID, Kind: agentstream.EventAssistantMessage, Agent: agent, Text: block.text, CreatedAt: now},
@@ -267,7 +260,7 @@ func latestMuseAssistantMessage(logs string) (string, bool) {
 func latestMuseProgress(logs string) (string, bool) {
 	var latest string
 	for _, block := range museLogBlocks(logs) {
-		if block.kind != museLogAssistant {
+		if block.kind != museLogAssistant && block.kind != museLogIgnored {
 			latest = block.text
 		}
 	}
@@ -323,10 +316,8 @@ func classifyMuseLogBlock(block string) museLogBlockKind {
 			return museLogThinking
 		}
 	}
-	for _, prefix := range []string{"Finished", "Worked for"} {
-		if strings.HasPrefix(first, prefix) {
-			return museLogDone
-		}
+	if first == "Done" || first == "Done." || strings.HasPrefix(first, "Done ·") || strings.HasPrefix(first, "Finished ·") || strings.HasPrefix(first, "Worked for ") {
+		return museLogIgnored
 	}
 	for _, prefix := range []string{
 		"Backgrounded",

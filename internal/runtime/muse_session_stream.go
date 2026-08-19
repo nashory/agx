@@ -447,7 +447,17 @@ func mapMuseSessionRecord(task db.Task, activeTurnID *string, record museSession
 			return nil
 		}
 		chunk, ok := parseMuseOutputChunk(event.Chunk)
-		if !ok || strings.TrimSpace(chunk.Output) == "" {
+		exitCode := chunk.ExitCode
+		failed := exitCode != nil && *exitCode != 0
+		if !failed {
+			switch strings.ToLower(strings.TrimSpace(chunk.TerminalStatus)) {
+			case "failed", "error", "cancelled", "canceled":
+				code := 1
+				exitCode = &code
+				failed = true
+			}
+		}
+		if !ok || (strings.TrimSpace(chunk.Output) == "" && !failed) {
 			return nil
 		}
 		return []agentstream.Event{{
@@ -459,7 +469,7 @@ func mapMuseSessionRecord(task db.Task, activeTurnID *string, record museSession
 			Agent:     task.Agent,
 			CreatedAt: createdAt,
 			Cursor:    cursor,
-			Command:   &agentstream.CommandEvent{ID: chunk.ChunkID, Command: firstNonEmpty(chunk.Description, chunk.Command), ExitCode: chunk.ExitCode, Stdout: chunk.Output},
+			Command:   &agentstream.CommandEvent{ID: chunk.ChunkID, Command: firstNonEmpty(chunk.Description, chunk.Command), ExitCode: exitCode, Stdout: chunk.Output},
 		}}
 	case "terminal":
 		var event museTerminalEvent

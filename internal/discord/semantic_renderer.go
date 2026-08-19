@@ -362,6 +362,9 @@ func (r SemanticRenderer) Render(event agentstream.Event) []RenderAction {
 		output := strings.TrimSpace(strings.Join([]string{event.Command.Stdout, event.Command.Stderr}, "\n"))
 		return []RenderAction{{Kind: RenderUpdateProgress, Content: r.progress("⚙️ Running...", output)}}
 	case agentstream.EventCommandCompleted:
+		if isMuseAgent(event.Agent) {
+			return r.renderMuseCommandCompleted(event)
+		}
 		return r.renderCommandCompleted(event)
 	case agentstream.EventFileChanged:
 		if event.File == nil || strings.TrimSpace(event.File.Path) == "" {
@@ -375,6 +378,9 @@ func (r SemanticRenderer) Render(event agentstream.Event) []RenderAction {
 	case agentstream.EventToolStarted:
 		if event.Tool == nil || strings.TrimSpace(event.Tool.Name) == "" {
 			return nil
+		}
+		if isMuseAgent(event.Agent) {
+			return []RenderAction{{Kind: RenderUpdateProgress, Content: r.renderMuseToolProgress(event.Tool)}}
 		}
 		trace := renderToolTrace(event.Tool)
 		return []RenderAction{{Kind: RenderUpdateProgress, Content: r.progress("🔧 Working...", trace)}}
@@ -521,6 +527,30 @@ func (r SemanticRenderer) renderCommandCompleted(event agentstream.Event) []Rend
 	return []RenderAction{{Kind: RenderUpdateProgress, Content: "✅ Done."}}
 }
 
+func (r SemanticRenderer) renderMuseCommandCompleted(event agentstream.Event) []RenderAction {
+	if event.Command == nil {
+		return nil
+	}
+	failed := event.Command.ExitCode != nil && *event.Command.ExitCode != 0
+	if !failed {
+		// The active progress message already says what Muse is doing. Successful
+		// shell output is implementation detail and turning every completion into
+		// "Done" makes a normal multi-step task look noisy and repetitive.
+		return nil
+	}
+	description := museProgressDescription(event.Command.Command)
+	label := "⚠️ A step could not be completed."
+	if description != "" {
+		label = "⚠️ Could not complete: " + truncateRunesWithEllipsis(strings.TrimSuffix(description, "."), 140) + "."
+	}
+	rawDetail := strings.TrimSpace(strings.Join([]string{event.Command.Stderr, event.Command.Stdout}, "\n"))
+	if rawDetail == "" {
+		return []RenderAction{{Kind: RenderUpdateProgress, Content: label}}
+	}
+	detail := summarizeAgentError(rawDetail)
+	return []RenderAction{{Kind: RenderUpdateProgress, Content: r.progress(label, detail)}}
+}
+
 func (r SemanticRenderer) messageBudget() int {
 	if r.MaxMessageBytes > 0 && r.MaxMessageBytes < maxDiscordMessage {
 		return r.MaxMessageBytes
@@ -664,6 +694,106 @@ func renderToolTrace(tool *agentstream.ToolEvent) string {
 		return inlineCode(name)
 	}
 	return inlineCode(name) + " " + detail
+}
+
+func isMuseAgent(agent string) bool {
+	return strings.EqualFold(strings.TrimSpace(agent), "muse")
+}
+
+func (r SemanticRenderer) renderMuseToolProgress(tool *agentstream.ToolEvent) string {
+	description := ""
+	if tool != nil {
+		description = museProgressDescription(tool.Input)
+		if description == "" {
+			description = museProgressDescription(tool.Name)
+		}
+	}
+	if description == "" || strings.EqualFold(description, "Muse Code") {
+		return "🔧 Working on the next step…"
+	}
+	return truncateUTF8(museProgressIcon(description)+" "+museProgressPhrase(description), r.messageBudget())
+}
+
+func museProgressDescription(input string) string {
+	input = strings.TrimSpace(strings.ReplaceAll(input, "\r\n", "\n"))
+	if input == "" {
+		return ""
+	}
+	first, _, _ := strings.Cut(input, "\n")
+	first = strings.TrimSpace(first)
+	parts := strings.Split(first, " · ")
+	if len(parts) > 1 {
+		switch {
+		case strings.HasPrefix(parts[0], "Ran command"), strings.HasPrefix(parts[0], "Backgrounded"), strings.HasPrefix(parts[0], "Finished"):
+			first = strings.TrimSpace(parts[1])
+		case strings.HasPrefix(parts[0], "Ran "):
+			return "Run workspace checks"
+		}
+	}
+	first = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(first, "..."), "…"))
+	switch strings.ToLower(first) {
+	case "check git/hg state", "check git state", "check repository state":
+		return "Review repository status"
+	case "check git history detail":
+		return "Review recent git history"
+	case "locate provenance skill":
+		return "Locate provenance instructions"
+	}
+	return first
+}
+
+func museProgressIcon(description string) string {
+	lower := strings.ToLower(strings.TrimSpace(description))
+	switch {
+	case startsWithAny(lower, "test ", "validate ", "verify "):
+		return "🧪"
+	case startsWithAny(lower, "write ", "wrote ", "edit ", "update ", "create ", "fix ", "remove ", "delete "):
+		return "✏️"
+	case startsWithAny(lower, "run ", "ran ", "execute ", "build ", "install "):
+		return "⚙️"
+	case startsWithAny(lower, "inspect ", "check ", "find ", "locate ", "read ", "review ", "search ", "list ", "explore ", "analyze ", "compare "):
+		return "🔍"
+	default:
+		return "🔧"
+	}
+}
+
+func museProgressPhrase(description string) string {
+	description = strings.TrimSpace(strings.TrimSuffix(description, "."))
+	if description == "" {
+		return "Working on the next step…"
+	}
+	first, rest, hasRest := strings.Cut(description, " ")
+	lower := strings.ToLower(first)
+	verbs := map[string]string{
+		"analyze": "Analyzing", "backgrounded": "Running", "build": "Building", "check": "Checking",
+		"compare": "Comparing", "create": "Creating", "delete": "Removing", "edit": "Editing",
+		"execute": "Running", "explore": "Exploring", "find": "Finding", "fix": "Fixing",
+		"inspect": "Inspecting", "install": "Installing", "list": "Listing", "locate": "Locating",
+		"monitor": "Monitoring", "push": "Pushing", "ran": "Running", "read": "Reading",
+		"remove": "Removing", "review": "Reviewing", "run": "Running", "search": "Searching",
+		"test": "Testing", "try": "Trying", "update": "Updating", "validate": "Validating",
+		"verify": "Verifying", "wait": "Waiting", "write": "Writing", "wrote": "Updating",
+	}
+	if progressive, ok := verbs[lower]; ok {
+		if hasRest {
+			return progressive + " " + rest + "…"
+		}
+		return progressive + "…"
+	}
+	if strings.HasSuffix(lower, "ing") {
+		return description + "…"
+	}
+	return description + "…"
+}
+
+func startsWithAny(text string, prefixes ...string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(text, prefix) || text == strings.TrimSpace(prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func toolTraceDetail(name, input string) string {

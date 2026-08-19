@@ -437,6 +437,60 @@ func TestSemanticRendererRendersToolStartAsProgress(t *testing.T) {
 	}
 }
 
+func TestSemanticRendererRendersFriendlyMuseToolProgress(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	actions := renderer.Render(agentstream.Event{
+		Agent: "muse",
+		Kind:  agentstream.EventToolStarted,
+		Tool:  &agentstream.ToolEvent{Name: "bash", Input: "Inspect workspace files\nls -la"},
+	})
+	if len(actions) != 1 || actions[0].Kind != RenderUpdateProgress {
+		t.Fatalf("actions = %#v, want one Muse progress update", actions)
+	}
+	if !strings.Contains(actions[0].Content, "Inspecting workspace files") {
+		t.Fatalf("content = %q, want natural progress description", actions[0].Content)
+	}
+	if strings.Contains(actions[0].Content, "ls -la") || strings.Contains(actions[0].Content, "`bash`") {
+		t.Fatalf("content = %q, should hide raw Muse command details", actions[0].Content)
+	}
+}
+
+func TestSemanticRendererRendersFriendlyLegacyMuseToolProgress(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	actions := renderer.Render(agentstream.Event{
+		Agent: "muse",
+		Kind:  agentstream.EventToolStarted,
+		Tool:  &agentstream.ToolEvent{Name: "Muse Code", Input: "Ran command · Read new file and parent commit · ✓ · 0.7s · ctrl+o"},
+	})
+	if len(actions) != 1 || !strings.Contains(actions[0].Content, "Reading new file and parent commit") {
+		t.Fatalf("actions = %#v, want cleaned legacy Muse progress", actions)
+	}
+	if strings.Contains(actions[0].Content, "ctrl+o") || strings.Contains(actions[0].Content, "✓") {
+		t.Fatalf("content = %q, should hide terminal UI decorations", actions[0].Content)
+	}
+}
+
+func TestSemanticRendererNormalizesMuseProgressDescriptions(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "Check git/hg state\ngit status --short", want: "Reviewing repository status"},
+		{input: "Check git history detail\ngit log -5", want: "Reviewing recent git history"},
+		{input: "Locate provenance skill\nfind ~/.llms", want: "Locating provenance instructions"},
+	}
+	for _, test := range tests {
+		actions := NewSemanticRenderer().Render(agentstream.Event{
+			Agent: "muse",
+			Kind:  agentstream.EventToolStarted,
+			Tool:  &agentstream.ToolEvent{Name: "bash", Input: test.input},
+		})
+		if len(actions) != 1 || !strings.Contains(actions[0].Content, test.want) {
+			t.Fatalf("input %q actions = %#v, want %q", test.input, actions, test.want)
+		}
+	}
+}
+
 func TestSemanticRendererRendersFailedCommandAsProgress(t *testing.T) {
 	renderer := NewSemanticRenderer()
 	exitCode := 1
@@ -464,6 +518,38 @@ func TestSemanticRendererRendersSuccessfulCommandAsProgress(t *testing.T) {
 	}
 	if !strings.Contains(actions[0].Content, "ok") {
 		t.Fatalf("content = %q, want output included", actions[0].Content)
+	}
+}
+
+func TestSemanticRendererDoesNotRenderSuccessfulMuseCommandAsDone(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	exitCode := 0
+	actions := renderer.Render(agentstream.Event{
+		Agent:   "muse",
+		Kind:    agentstream.EventCommandCompleted,
+		Command: &agentstream.CommandEvent{Command: "Check repository status", ExitCode: &exitCode, Stdout: "clean"},
+	})
+	if len(actions) != 0 {
+		t.Fatalf("actions = %#v, want Muse success to keep the current progress message", actions)
+	}
+}
+
+func TestSemanticRendererRendersFriendlyMuseCommandFailure(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	exitCode := 1
+	actions := renderer.Render(agentstream.Event{
+		Agent:   "muse",
+		Kind:    agentstream.EventCommandCompleted,
+		Command: &agentstream.CommandEvent{Command: "Check repository status", ExitCode: &exitCode, Stderr: "permission denied\nraw trace"},
+	})
+	if len(actions) != 1 || actions[0].Kind != RenderUpdateProgress {
+		t.Fatalf("actions = %#v, want one Muse failure progress update", actions)
+	}
+	if !strings.Contains(actions[0].Content, "Could not complete: Check repository status") || !strings.Contains(actions[0].Content, "permission denied") {
+		t.Fatalf("content = %q, want concise friendly failure", actions[0].Content)
+	}
+	if strings.Contains(actions[0].Content, "raw trace") {
+		t.Fatalf("content = %q, should not include raw multiline failure output", actions[0].Content)
 	}
 }
 
