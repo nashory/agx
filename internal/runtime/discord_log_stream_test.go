@@ -238,6 +238,53 @@ func TestMuseSessionLogEventsSwitchesToRestartedSession(t *testing.T) {
 	}
 }
 
+func TestMuseSessionLogEventsKeepsStructuredStreamWhenDiscoveryLags(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	workspace := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(logPath, []byte(`{"sequence":1,"payload_type":"runtime.session.metadata","payload":{"kind":"metadata"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state := &museSessionLogState{path: logPath, offset: info.Size(), initialized: true, claimed: true}
+	task := db.Task{ID: "task-1", Agent: "muse", WorktreePath: &workspace}
+	events, ok := (&Service{}).museSessionLogEvents(task, db.Project{}, state, time.Now())
+	if !ok {
+		t.Fatal("museSessionLogEvents() fell back after structured stream was claimed")
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want no new structured events", events)
+	}
+	if state.path != logPath {
+		t.Fatalf("state.path = %q, want existing structured log %q", state.path, logPath)
+	}
+}
+
+func TestMuseSessionLogEventsDoesNotFallBackDuringLogRotation(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	workspace := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "removed-session.jsonl")
+	state := &museSessionLogState{path: logPath, initialized: true, claimed: true}
+	task := db.Task{ID: "task-1", Agent: "muse", WorktreePath: &workspace}
+
+	events, ok := (&Service{}).museSessionLogEvents(task, db.Project{}, state, time.Now())
+	if !ok {
+		t.Fatal("museSessionLogEvents() fell back while waiting for a rotated structured log")
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want no events while the next log is unavailable", events)
+	}
+	if state.path != "" {
+		t.Fatalf("state.path = %q, want missing log path cleared", state.path)
+	}
+}
+
 func TestReadMuseSessionLogEventsMapsStructuredMuseEvents(t *testing.T) {
 	logPath := filepath.Join(t.TempDir(), "session.jsonl")
 	initial := `{"sequence":1,"recorded_at":1000000,"payload_type":"runtime.session.metadata","payload":{"kind":"metadata"}}` + "\n"

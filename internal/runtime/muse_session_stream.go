@@ -27,6 +27,7 @@ type museSessionLogState struct {
 	pending     string
 	turnID      string
 	initialized bool
+	claimed     bool
 }
 
 type museSessionRecord struct {
@@ -103,15 +104,9 @@ func (s *Service) museSessionLogEvents(task db.Task, project db.Project, state *
 		state = &museSessionLogState{}
 	}
 	path, err := findMuseSessionLogPath(taskWorkingDir(task, project))
-	if err != nil {
-		return nil, false
-	}
-	if path == "" {
-		return nil, false
-	}
-	if strings.TrimSpace(state.path) == "" {
+	if err == nil && path != "" && strings.TrimSpace(state.path) == "" {
 		state.path = path
-	} else if canonicalPath(path) != canonicalPath(state.path) {
+	} else if err == nil && path != "" && canonicalPath(path) != canonicalPath(state.path) {
 		// A restarted Muse process writes to a new session directory while the
 		// previous JSONL remains on disk. Switch immediately and read the new
 		// file from its beginning so a fast first response cannot be skipped.
@@ -121,6 +116,12 @@ func (s *Service) museSessionLogEvents(task db.Task, project db.Project, state *
 		state.turnID = ""
 		state.initialized = true
 	}
+	if strings.TrimSpace(state.path) == "" {
+		// Once this subscriber has consumed Muse's structured session log, never
+		// mix in the tmux UI stream while session discovery catches up after a
+		// restart or log rotation. A later poll can still discover the new JSONL.
+		return nil, state.claimed
+	}
 	events, err := readMuseSessionLogEvents(task, state, now)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -128,10 +129,10 @@ func (s *Service) museSessionLogEvents(task db.Task, project db.Project, state *
 			state.offset = 0
 			state.pending = ""
 			state.initialized = false
-			return nil, false
 		}
-		return nil, false
+		return nil, state.claimed
 	}
+	state.claimed = true
 	return events, true
 }
 
