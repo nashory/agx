@@ -87,18 +87,24 @@ export function Select({
     const trigger = triggerRef.current;
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
-    const width = Math.min(Math.max(rect.width, menuMinWidth), window.innerWidth - viewportPadding * 2);
+    // clientWidth excludes classic Windows scrollbars, unlike innerWidth.
+    // Keeping portal geometry inside this boundary prevents a horizontal page
+    // scrollbar when the trigger sits close to the right edge.
+    const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+    const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+    const maxWidth = Math.max(0, viewportWidth - viewportPadding * 2);
+    const width = Math.min(Math.max(rect.width, menuMinWidth), maxWidth);
     const measuredHeight = menuRef.current?.getBoundingClientRect().height
       ?? Math.min(options.length * 38 + 12, 280);
-    const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+    const spaceBelow = viewportHeight - rect.bottom - viewportPadding;
     const spaceAbove = rect.top - viewportPadding;
     const openAbove = measuredHeight > spaceBelow && spaceAbove > spaceBelow;
     const top = openAbove
       ? Math.max(viewportPadding, rect.top - measuredHeight - menuGap)
-      : Math.min(window.innerHeight - measuredHeight - viewportPadding, rect.bottom + menuGap);
+      : Math.min(viewportHeight - measuredHeight - viewportPadding, rect.bottom + menuGap);
     const left = Math.min(
       Math.max(viewportPadding, rect.left),
-      Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
+      Math.max(viewportPadding, viewportWidth - width - viewportPadding),
     );
     setPosition({ top: Math.max(viewportPadding, top), left, width });
   };

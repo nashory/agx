@@ -148,7 +148,8 @@
 }
 
 .app-shell {
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-bottom: 42px;
 }
 
@@ -205,6 +206,12 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.topbar-actions {
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .icon-button {
@@ -418,6 +425,7 @@
 }
 
 .monitor-agent-cleanup {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -635,7 +643,11 @@
   color: var(--accent-strong);
 }
 
-.setting-row .ui-select,
+.setting-row .ui-select {
+  width: 100%;
+  min-width: 0;
+}
+
 .setting-row input[type='number'],
 .setting-row input[type='password'],
 .setting-row input[type='text'],
@@ -1537,11 +1549,15 @@
 
 .ui-select {
   position: relative;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
 }
 
 .ui-select-trigger {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   height: 36px;
   display: inline-flex;
   align-items: center;
@@ -1593,6 +1609,7 @@
 .ui-select-menu {
   position: fixed;
   z-index: 1000;
+  max-width: calc(100vw - 16px);
   max-height: min(280px, calc(100vh - 16px));
   display: grid;
   gap: 4px;
