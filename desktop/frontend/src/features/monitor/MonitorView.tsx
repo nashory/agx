@@ -8,6 +8,7 @@ import {
   taskPreviewDescription,
 } from '../../appLogic';
 import { AgentBadge, AllMightyBadge } from '../../components/badges';
+import { Select } from '../../components/Select';
 import type { Project } from '../../types';
 import { EmptyState, ErrorBar, Header, IconButton, type ThemeMode } from '../../ui';
 
@@ -69,9 +70,14 @@ export function MonitorView({
       <Header title="Monitor" subtitle="Agent task status across registered workspaces" theme={theme} onToggleTheme={onToggleTheme}>
         {selectedGroup && (
           <div className="monitor-agent-cleanup">
-            <select aria-label="Agent to clear" value={effectiveAgent} disabled={busy} onChange={(event) => setSelectedAgent(event.target.value)}>
-              {agentGroups.map((group) => <option key={group.key} value={group.key}>{group.label} ({group.tasks.length})</option>)}
-            </select>
+            <Select
+              ariaLabel="Agent to clear"
+              value={effectiveAgent}
+              disabled={busy}
+              menuMinWidth={180}
+              options={agentGroups.map((group) => ({ value: group.key, label: `${group.label} (${group.tasks.length})` }))}
+              onChange={setSelectedAgent}
+            />
             <button className="danger-button" disabled={busy} onClick={confirmAgentCleanup}>
               <Trash2 size={16} />
               Clear agent

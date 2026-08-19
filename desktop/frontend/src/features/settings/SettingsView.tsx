@@ -18,6 +18,7 @@ import {
 } from '../../appLogic';
 import type { Agent, RuntimeConfigInfo, RuntimeStatusInfo, VoiceSTTConfig } from '../../types';
 import { Header, type ThemeMode } from '../../ui';
+import { Select } from '../../components/Select';
 
 type RuntimeAction = () => Promise<RuntimeStatusInfo>;
 
@@ -242,10 +243,12 @@ export function SettingsView({
               <strong>Theme</strong>
               <span>Controls the desktop color scheme.</span>
             </div>
-            <select value={theme} onChange={(event) => onThemeChange(event.target.value === 'light' ? 'light' : 'dark')}>
-              <option value="dark">Dark</option>
-              <option value="light">Light</option>
-            </select>
+            <Select
+              ariaLabel="Theme"
+              value={theme}
+              options={[{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]}
+              onChange={(value) => onThemeChange(value === 'light' ? 'light' : 'dark')}
+            />
           </div>
           <label className="setting-row checkbox-row">
             <div>
@@ -266,23 +269,28 @@ export function SettingsView({
               <strong>Default agent</strong>
               <span>Used when a task or project does not choose a specific agent.</span>
             </div>
-            <select value={defaultAgentName} disabled={busy || savingDefaultAgent} onChange={(event) => void saveDefaultAgent(event.target.value)}>
-              {defaultAgentOptions.map((agent) => (
-                <option key={agent.name} value={agent.name}>
-                  {agentLabel(agent.name)}{agent.available ? '' : ' (not installed)'}
-                </option>
-              ))}
-            </select>
+            <Select
+              ariaLabel="Default agent"
+              value={defaultAgentName}
+              disabled={busy || savingDefaultAgent}
+              options={defaultAgentOptions.map((agent) => ({
+                value: agent.name,
+                label: `${agentLabel(agent.name)}${agent.available ? '' : ' (not installed)'}`,
+              }))}
+              onChange={(value) => void saveDefaultAgent(value)}
+            />
           </div>
           <div className="setting-row">
             <div>
               <strong>Default task view</strong>
               <span>Choose the task layout used for newly opened projects.</span>
             </div>
-            <select value={preferences.defaultTaskView} onChange={(event) => update('defaultTaskView', event.target.value === 'list' ? 'list' : 'grid')}>
-              <option value="grid">Grid</option>
-              <option value="list">List</option>
-            </select>
+            <Select
+              ariaLabel="Default task view"
+              value={preferences.defaultTaskView}
+              options={[{ value: 'grid', label: 'Grid' }, { value: 'list', label: 'List' }]}
+              onChange={(value) => update('defaultTaskView', value === 'list' ? 'list' : 'grid')}
+            />
           </div>
           <label className="setting-row checkbox-row">
             <div>
@@ -327,15 +335,17 @@ export function SettingsView({
               <SettingHeading label="Mode" help="Local Whisper is optional. Auto uses it when local ffmpeg, Whisper, and a model can be resolved automatically or from saved settings." />
               <span>{voiceSTTStatus(localVoiceSTT)}</span>
             </div>
-            <select
+            <Select
+              ariaLabel="Voice transcription mode"
               value={localVoiceSTT.mode}
               disabled={busy || savingVoiceSTT}
-              onChange={(event) => updateVoiceSTT('mode', voiceSTTMode(event.target.value))}
-            >
-              <option value="disabled">Disabled</option>
-              <option value="auto">Auto</option>
-              <option value="enabled">Enabled</option>
-            </select>
+              options={[
+                { value: 'disabled', label: 'Disabled' },
+                { value: 'auto', label: 'Auto' },
+                { value: 'enabled', label: 'Enabled' },
+              ]}
+              onChange={(value) => updateVoiceSTT('mode', voiceSTTMode(value))}
+            />
           </div>
           <div className="setting-row">
             <div>
@@ -381,13 +391,19 @@ export function SettingsView({
               <strong>Language</strong>
               <span>Use auto unless you want to bias transcription toward a language.</span>
             </div>
-            <select value={localVoiceSTT.language || 'auto'} disabled={busy || savingVoiceSTT} onChange={(event) => updateVoiceSTT('language', event.target.value)}>
-              <option value="auto">Auto</option>
-              <option value="ko">Korean</option>
-              <option value="en">English</option>
-              <option value="ja">Japanese</option>
-              <option value="zh">Chinese</option>
-            </select>
+            <Select
+              ariaLabel="Voice transcription language"
+              value={localVoiceSTT.language || 'auto'}
+              disabled={busy || savingVoiceSTT}
+              options={[
+                { value: 'auto', label: 'Auto' },
+                { value: 'ko', label: 'Korean' },
+                { value: 'en', label: 'English' },
+                { value: 'ja', label: 'Japanese' },
+                { value: 'zh', label: 'Chinese' },
+              ]}
+              onChange={(value) => updateVoiceSTT('language', value)}
+            />
           </div>
           <div className="setting-row">
             <div>

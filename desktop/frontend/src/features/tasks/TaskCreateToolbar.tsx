@@ -1,7 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React from 'react';
 import {
   CheckCircle2,
-  ChevronDown,
   Code2,
   FolderOpen,
   GitBranch,
@@ -14,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { Agent, Project, WorkspaceMode } from '../../types';
 import { agentLabel, quickTaskTemplates, type QuickTaskTemplate } from '../../appLogic';
+import { Select } from '../../components/Select';
 
 export function TaskCreateToolbar({
   project,
@@ -62,67 +62,27 @@ export function TaskCreateToolbar({
   onQuickTemplate: (template: QuickTaskTemplate) => void;
   onGrantAccess: () => void;
 }) {
-  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
-  const agentMenuRef = useRef<HTMLDivElement>(null);
   const selectedAgent = agents.find((item) => item.name === agent);
   const fallbackSelectedAgent = agent && !selectedAgent ? unavailableAgent(agent) : null;
   const agentOptions = fallbackSelectedAgent ? [fallbackSelectedAgent, ...agents] : agents;
   const selectedAgentLabel = selectedAgent ? agentOptionLabel(selectedAgent) : fallbackSelectedAgent ? agentOptionLabel(fallbackSelectedAgent) : 'Default agent';
-
-  useEffect(() => {
-    if (!agentMenuOpen) {
-      return;
-    }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!agentMenuRef.current?.contains(event.target as Node)) {
-        setAgentMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setAgentMenuOpen(false);
-      }
-    };
-
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [agentMenuOpen]);
-
-  const selectAgent = (value: string) => {
-    onAgentChange(value);
-    setAgentMenuOpen(false);
-  };
 
   return (
     <>
       <section className="task-toolbar">
         <input ref={titleInputRef} value={title} onChange={(event) => onTitleChange(event.target.value)} placeholder="Task title" />
         <input value={description} onChange={(event) => onDescriptionChange(event.target.value)} placeholder="Prompt or details" />
-        <div className="agent-picker" ref={agentMenuRef}>
-          <button type="button" className={`agent-picker-trigger ${agentMenuOpen ? 'open' : ''}`} onClick={() => setAgentMenuOpen((open) => !open)} aria-label={`Agent: ${selectedAgentLabel}`} aria-haspopup="listbox" aria-expanded={agentMenuOpen}>
-            <span>{selectedAgentLabel}</span>
-            <ChevronDown size={16} />
-          </button>
-          {agentMenuOpen && (
-            <div className="agent-picker-menu" role="listbox" aria-label="Agent">
-              <button type="button" role="option" aria-selected={agent === ''} className={agent === '' ? 'selected' : ''} onClick={() => selectAgent('')}>
-                <span>Default agent</span>
-                {agent === '' && <CheckCircle2 size={15} />}
-              </button>
-              {agentOptions.map((item) => (
-                <button key={item.name} type="button" role="option" aria-selected={agent === item.name} className={agent === item.name ? 'selected' : ''} onClick={() => selectAgent(item.name)}>
-                  <span>{agentOptionLabel(item)}</span>
-                  {agent === item.name && <CheckCircle2 size={15} />}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <Select
+          className="agent-picker"
+          ariaLabel={`Agent: ${selectedAgentLabel}`}
+          value={agent}
+          menuMinWidth={220}
+          options={[
+            { value: '', label: 'Default agent' },
+            ...agentOptions.map((item) => ({ value: item.name, label: agentOptionLabel(item) })),
+          ]}
+          onChange={onAgentChange}
+        />
         <label className={`all-mighty-toggle ${allMighty ? 'active' : ''}`} title="Run without approval prompts or sandbox restrictions where the agent supports it">
           <input type="checkbox" checked={allMighty} onChange={(event) => onAllMightyChange(event.target.checked)} />
           <ShieldCheck size={16} />

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -46,8 +47,8 @@ function renderMonitor(tasks: MonitorTask[] = [], overrides: Partial<ComponentPr
     busy: false,
     onRefresh: vi.fn(),
     onDeleteTask: vi.fn(),
-	onClearStaleTasks: vi.fn(),
-	onClearAgentTasks: vi.fn(),
+    onClearStaleTasks: vi.fn(),
+    onClearAgentTasks: vi.fn(),
     onOpenWorkspace: vi.fn(),
     theme: 'dark' as const,
     onToggleTheme: vi.fn(),
@@ -94,14 +95,16 @@ describe('MonitorView', () => {
     expect(onDeleteTask).toHaveBeenCalledWith(task);
   });
 
-  it('confirms and clears every live task for the selected agent', () => {
+  it('confirms and clears every live task for the selected agent', async () => {
+    const user = userEvent.setup();
     const claudeTask = { ...task, id: 'task-2', title: 'Claude task', agent: 'claude' };
     const onClearAgentTasks = vi.fn();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderMonitor([task, claudeTask], { onClearAgentTasks });
 
-    fireEvent.change(screen.getByLabelText('Agent to clear'), { target: { value: 'claude' } });
-    fireEvent.click(screen.getByText('Clear agent'));
+    await user.click(screen.getByRole('combobox', { name: 'Agent to clear' }));
+    await user.click(screen.getByRole('option', { name: 'claude (1)' }));
+    await user.click(screen.getByText('Clear agent'));
 
     expect(confirm).toHaveBeenCalled();
     expect(onClearAgentTasks).toHaveBeenCalledWith('claude', [claudeTask]);

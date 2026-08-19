@@ -63,8 +63,9 @@ describe('SettingsView', () => {
     const onDefaultAgentChange = vi.fn().mockResolvedValue(undefined);
     renderSettings({ onDefaultAgentChange });
 
-    const select = screen.getByDisplayValue('Codex') as HTMLSelectElement;
-    await user.selectOptions(select, 'gemini');
+    const select = screen.getByRole('combobox', { name: 'Default agent' });
+    await user.click(select);
+    await user.click(screen.getByRole('option', { name: 'Gemini CLI' }));
 
     await waitFor(() => expect(onDefaultAgentChange).toHaveBeenCalledWith('gemini'));
   });
@@ -77,8 +78,9 @@ describe('SettingsView', () => {
     }));
     renderSettings({ onDefaultAgentChange });
 
-    const select = screen.getByDisplayValue('Codex') as HTMLSelectElement;
-    await user.selectOptions(select, 'gemini');
+    const select = screen.getByRole('combobox', { name: 'Default agent' });
+    await user.click(select);
+    await user.click(screen.getByRole('option', { name: 'Gemini CLI' }));
 
     await waitFor(() => expect(select).toBeDisabled());
     resolveSave?.();
@@ -88,7 +90,7 @@ describe('SettingsView', () => {
   it('shows an unavailable configured default agent instead of silently replacing it', () => {
     renderSettings({ runtimeConfig: { defaultAgent: 'local-agent', voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' } } });
 
-    expect(screen.getByDisplayValue('local-agent (not installed)')).not.toBeNull();
+    expect(screen.getByRole('combobox', { name: 'Default agent' })).toHaveTextContent('local-agent (not installed)');
   });
 
   it('shows the runtime transport instead of assuming a Unix socket', () => {
@@ -104,12 +106,13 @@ describe('SettingsView', () => {
     const onVoiceSTTChange = vi.fn().mockResolvedValue(undefined);
     renderSettings({ onVoiceSTTChange });
 
-    const selects = screen.getAllByDisplayValue('Auto') as HTMLSelectElement[];
-    await user.selectOptions(selects[0], 'enabled');
+    await user.click(screen.getByRole('combobox', { name: 'Voice transcription mode' }));
+    await user.click(screen.getByRole('option', { name: 'Enabled' }));
     await user.type(screen.getByPlaceholderText('ffmpeg'), 'ffmpeg');
     await user.type(screen.getByPlaceholderText('whisper-cli'), 'whisper-cli');
     await user.type(screen.getByPlaceholderText('Auto'), '/models/base.bin');
-    await user.selectOptions(selects[1], 'ko');
+    await user.click(screen.getByRole('combobox', { name: 'Voice transcription language' }));
+    await user.click(screen.getByRole('option', { name: 'Korean' }));
     await user.clear(screen.getByPlaceholderText('60s'));
     await user.type(screen.getByPlaceholderText('60s'), '90s');
     await user.click(screen.getByRole('button', { name: /save/i }));

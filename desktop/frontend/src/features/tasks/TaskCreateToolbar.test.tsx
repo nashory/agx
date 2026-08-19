@@ -62,7 +62,7 @@ describe('TaskCreateToolbar', () => {
 
     await user.type(screen.getByPlaceholderText('Task title'), ' now');
     await user.click(screen.getByRole('button', { name: 'Project' }));
-    await user.click(screen.getByRole('button', { name: 'Agent: Default agent' }));
+    await user.click(screen.getByRole('combobox', { name: 'Agent: Default agent' }));
     await user.click(screen.getByRole('option', { name: 'Codex' }));
     await user.click(screen.getByText('All-mighty'));
 
@@ -76,7 +76,7 @@ describe('TaskCreateToolbar', () => {
     const user = userEvent.setup();
     renderToolbar();
 
-    await user.click(screen.getByRole('button', { name: 'Agent: Default agent' }));
+    await user.click(screen.getByRole('combobox', { name: 'Agent: Default agent' }));
 
     expect(screen.getByRole('option', { name: 'Codex' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Claude Code (missing)' })).toBeInTheDocument();
@@ -86,7 +86,7 @@ describe('TaskCreateToolbar', () => {
     const user = userEvent.setup();
     renderToolbar({ agent: 'local-agent' });
 
-    await user.click(screen.getByRole('button', { name: 'Agent: local-agent (missing)' }));
+    await user.click(screen.getByRole('combobox', { name: 'Agent: local-agent (missing)' }));
 
     expect(screen.getByRole('option', { name: 'local-agent (missing)' })).toHaveAttribute('aria-selected', 'true');
   });
