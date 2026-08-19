@@ -5,6 +5,18 @@ export type MonitorTask = Task & {
   projectPath: string;
 };
 
+export type AgentCleanupResult = {
+  agent: string;
+  matched: number;
+  deleted: number;
+  deletedTaskIds?: string[];
+  failed: number;
+  warnings?: string[];
+  failures?: Array<{ taskId: string; title: string; error: string }>;
+  discordReconciled: boolean;
+  discordReconcileError?: string;
+};
+
 export type WailsApp = {
   ListProjects(): Promise<Project[]>;
   SelectProjectDirectory(defaultDirectory: string): Promise<string>;
@@ -38,6 +50,7 @@ export type WailsApp = {
   ListTasks(projectID: string): Promise<Task[]>;
   ListTaskTranscript(taskID: string, limit: number): Promise<TaskTranscriptMessage[]>;
   ListMonitorTasks(): Promise<MonitorTask[]>;
+  CleanupAgentTasks(agentName: string): Promise<AgentCleanupResult>;
   CreateTask(projectID: string, title: string, description: string, agent: string, allMighty: boolean, workspaceMode: WorkspaceMode): Promise<Task>;
   CreateTaskNoPrompt(projectID: string, title: string, agent: string, allMighty: boolean, workspaceMode: WorkspaceMode): Promise<Task>;
   CreateDiscordTask(projectID: string, title: string, description: string, agent: string, allMighty: boolean, workspaceMode: WorkspaceMode): Promise<Task>;
@@ -289,7 +302,12 @@ export const api: WailsApp = {
     return app()?.ListTaskTranscript(taskID, limit) ?? [];
   },
   async ListMonitorTasks() {
-    return app()?.ListMonitorTasks() ?? [];
+	return app()?.ListMonitorTasks() ?? [];
+  },
+  async CleanupAgentTasks(agentName) {
+    const result = await app()?.CleanupAgentTasks(agentName);
+    if (!result) throw new Error('Wails runtime is not connected');
+    return result;
   },
   async CreateTask(projectID, title, description, agent, allMighty, workspaceMode) {
     const task = await app()?.CreateTask(projectID, title, description, agent, allMighty, workspaceMode);

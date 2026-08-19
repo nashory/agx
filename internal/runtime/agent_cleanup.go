@@ -66,6 +66,7 @@ func (s *Service) cleanupLiveTasksByAgent(ctx context.Context, agentName string)
 		}
 		if deleted {
 			result.Deleted++
+			result.DeletedTaskIDs = append(result.DeletedTaskIDs, task.ID)
 		}
 	}
 	if hadDiscordTask && s.discord != nil && s.discord.Status().Connected {

@@ -417,6 +417,16 @@
   gap: 6px;
 }
 
+.monitor-agent-cleanup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.monitor-agent-cleanup select {
+  min-width: 140px;
+}
+
 .settings-grid,
 .shortcuts-grid {
   display: grid;

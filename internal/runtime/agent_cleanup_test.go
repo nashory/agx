@@ -31,6 +31,9 @@ func TestCleanupAgentTasksDeletesOnlyMatchingLiveTasks(t *testing.T) {
 	if result.Matched != 1 || result.Deleted != 1 || result.Failed != 0 {
 		t.Fatalf("result = %#v", result)
 	}
+	if len(result.DeletedTaskIDs) != 1 || result.DeletedTaskIDs[0] != codex.ID {
+		t.Fatalf("deleted task ids = %#v", result.DeletedTaskIDs)
+	}
 	if _, err := service.store.GetTask(codex.ID); err == nil {
 		t.Fatal("matching live Codex task was not deleted")
 	}

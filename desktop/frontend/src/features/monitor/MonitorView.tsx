@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import { RefreshCw, Trash2 } from 'lucide-react';
 
 import type { MonitorTask } from '../../api';
@@ -19,6 +20,7 @@ type MonitorViewProps = {
   onRefresh: () => void;
   onDeleteTask: (task: MonitorTask) => void;
   onClearStaleTasks: (tasks: MonitorTask[]) => void;
+  onClearAgentTasks: (agent: string, tasks: MonitorTask[]) => void;
   onOpenWorkspace: (projectID: string, taskID: string) => void;
   theme: ThemeMode;
   onToggleTheme: () => void;
@@ -36,6 +38,7 @@ export function MonitorView({
   onRefresh,
   onDeleteTask,
   onClearStaleTasks,
+  onClearAgentTasks,
   onOpenWorkspace,
   theme,
   onToggleTheme,
@@ -47,10 +50,34 @@ export function MonitorView({
   const offlineCount = tasks.filter((task) => task.status === 'offline').length;
   const staleTasks = tasks.filter((task) => isStaleTask(task, nowMs));
   const projectCount = new Set(tasks.map((task) => task.projectId)).size;
+  const agentGroups = useMemo(() => groupTasksByAgent(tasks), [tasks]);
+  const [selectedAgent, setSelectedAgent] = useState('');
+  const effectiveAgent = agentGroups.some((group) => group.key === selectedAgent) ? selectedAgent : (agentGroups[0]?.key ?? '');
+  const selectedGroup = agentGroups.find((group) => group.key === effectiveAgent);
+
+  function confirmAgentCleanup() {
+    if (!selectedGroup) return;
+    const confirmed = window.confirm(
+      `Delete all ${selectedGroup.tasks.length} live ${selectedGroup.label} tasks?\n\n` +
+      'Running sessions and generated worktrees will be removed. Discord-controlled tasks are kept if their channel cannot be deleted, preventing zombie channels.',
+    );
+    if (confirmed) onClearAgentTasks(selectedGroup.label, selectedGroup.tasks);
+  }
 
   return (
     <main className="app-shell monitor-view">
       <Header title="Monitor" subtitle="Agent task status across registered workspaces" theme={theme} onToggleTheme={onToggleTheme}>
+        {selectedGroup && (
+          <div className="monitor-agent-cleanup">
+            <select aria-label="Agent to clear" value={effectiveAgent} disabled={busy} onChange={(event) => setSelectedAgent(event.target.value)}>
+              {agentGroups.map((group) => <option key={group.key} value={group.key}>{group.label} ({group.tasks.length})</option>)}
+            </select>
+            <button className="danger-button" disabled={busy} onClick={confirmAgentCleanup}>
+              <Trash2 size={16} />
+              Clear agent
+            </button>
+          </div>
+        )}
         {staleTasks.length > 0 && (
           <button className="danger-button monitor-clear-stale" disabled={busy} onClick={() => onClearStaleTasks(staleTasks)}>
             <Trash2 size={16} />
@@ -122,6 +149,18 @@ export function MonitorView({
       )}
     </main>
   );
+}
+
+function groupTasksByAgent(tasks: MonitorTask[]) {
+  const groups = new Map<string, { key: string; label: string; tasks: MonitorTask[] }>();
+  for (const task of tasks) {
+    const label = task.agent.trim() || 'unknown';
+    const key = label.toLowerCase();
+    const group = groups.get(key) ?? { key, label, tasks: [] };
+    group.tasks.push(task);
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((left, right) => left.label.localeCompare(right.label));
 }
 
 function MetricCard({ label, value, detail }: { label: string; value: number; detail: string }) {

@@ -67,6 +67,7 @@ type AgentCleanupResult struct {
 	Agent               string                `json:"agent"`
 	Matched             int                   `json:"matched"`
 	Deleted             int                   `json:"deleted"`
+	DeletedTaskIDs      []string              `json:"deletedTaskIds,omitempty"`
 	Failed              int                   `json:"failed"`
 	Warnings            []string              `json:"warnings,omitempty"`
 	Failures            []AgentCleanupFailure `json:"failures,omitempty"`

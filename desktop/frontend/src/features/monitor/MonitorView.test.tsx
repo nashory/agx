@@ -46,7 +46,8 @@ function renderMonitor(tasks: MonitorTask[] = [], overrides: Partial<ComponentPr
     busy: false,
     onRefresh: vi.fn(),
     onDeleteTask: vi.fn(),
-    onClearStaleTasks: vi.fn(),
+	onClearStaleTasks: vi.fn(),
+	onClearAgentTasks: vi.fn(),
     onOpenWorkspace: vi.fn(),
     theme: 'dark' as const,
     onToggleTheme: vi.fn(),
@@ -91,5 +92,19 @@ describe('MonitorView', () => {
 
     fireEvent.click(screen.getByText('Delete'));
     expect(onDeleteTask).toHaveBeenCalledWith(task);
+  });
+
+  it('confirms and clears every live task for the selected agent', () => {
+    const claudeTask = { ...task, id: 'task-2', title: 'Claude task', agent: 'claude' };
+    const onClearAgentTasks = vi.fn();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderMonitor([task, claudeTask], { onClearAgentTasks });
+
+    fireEvent.change(screen.getByLabelText('Agent to clear'), { target: { value: 'claude' } });
+    fireEvent.click(screen.getByText('Clear agent'));
+
+    expect(confirm).toHaveBeenCalled();
+    expect(onClearAgentTasks).toHaveBeenCalledWith('claude', [claudeTask]);
+    confirm.mockRestore();
   });
 });

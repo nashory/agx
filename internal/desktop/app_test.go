@@ -1355,6 +1355,10 @@ func (f *fakeRuntimeClient) MonitorTasks(context.Context) ([]agxruntime.MonitorT
 	return nil, nil
 }
 
+func (f *fakeRuntimeClient) CleanupAgentTasks(context.Context, string) (agxruntime.AgentCleanupResult, error) {
+	return agxruntime.AgentCleanupResult{}, nil
+}
+
 func (f *fakeRuntimeClient) RunNewTaskWithInitialPromptWorkspace(ctx context.Context, projectID, title string, description *string, agentName string, allMighty bool, initialPrompt *string, workspaceMode db.WorkspaceMode) (agxruntime.Task, error) {
 	if f.runNewTaskWithInitialPromptWorkspaceFunc != nil {
 		return f.runNewTaskWithInitialPromptWorkspaceFunc(ctx, projectID, title, description, agentName, allMighty, initialPrompt, workspaceMode)

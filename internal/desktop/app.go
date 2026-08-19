@@ -273,6 +273,7 @@ const maxProjectCandidates = 24
 const discordConnectTimeout = 30 * time.Second
 const discordTaskSyncTimeout = 2 * time.Minute
 const discordHardSyncTimeout = 10 * time.Minute
+const agentCleanupTimeout = 10 * time.Minute
 const runtimeClientTimeout = 30 * time.Second
 
 var streamFileMu sync.Mutex
@@ -293,6 +294,7 @@ type runtimeClient interface {
 	DeleteProject(context.Context, string) error
 	ListTasks(context.Context, string) ([]agxruntime.Task, error)
 	MonitorTasks(context.Context) ([]agxruntime.MonitorTask, error)
+	CleanupAgentTasks(context.Context, string) (agxruntime.AgentCleanupResult, error)
 	RunNewTaskWithInitialPromptWorkspace(context.Context, string, string, *string, string, bool, *string, db.WorkspaceMode) (agxruntime.Task, error)
 	RunNewDiscordTaskWithWorkspace(context.Context, string, string, *string, string, bool, db.WorkspaceMode) (agxruntime.Task, error)
 	GetTask(context.Context, string) (agxruntime.Task, error)
@@ -1343,6 +1345,58 @@ func (a *App) ListMonitorTasks() ([]MonitorTask, error) {
 		})
 	}
 	return out, nil
+}
+
+func (a *App) CleanupAgentTasks(agentName string) (agxruntime.AgentCleanupResult, error) {
+	agentName = strings.TrimSpace(agentName)
+	if agentName == "" {
+		return agxruntime.AgentCleanupResult{}, fmt.Errorf("agent is required")
+	}
+	if a.directMode {
+		return a.directCleanupAgentTasks(agentName)
+	}
+	ctx, cancel := a.runtimeRequestContext(agentCleanupTimeout)
+	defer cancel()
+	result, err := a.runtimeClient().CleanupAgentTasks(ctx, agentName)
+	if err != nil {
+		return agxruntime.AgentCleanupResult{}, err
+	}
+	for _, taskID := range result.DeletedTaskIDs {
+		a.StopLogStream(taskID)
+		_ = a.removeStream(taskID)
+	}
+	return result, nil
+}
+
+func (a *App) directCleanupAgentTasks(agentName string) (agxruntime.AgentCleanupResult, error) {
+	result := agxruntime.AgentCleanupResult{Agent: agentName}
+	tasks, err := a.directListMonitorTasks()
+	if err != nil {
+		return result, err
+	}
+	for _, task := range tasks {
+		if !strings.EqualFold(strings.TrimSpace(task.Agent), agentName) {
+			continue
+		}
+		result.Matched++
+		if task.Interface == string(db.TaskInterfaceDiscord) {
+			result.Failed++
+			result.Failures = append(result.Failures, agxruntime.AgentCleanupFailure{
+				TaskID: task.ID,
+				Title:  task.Title,
+				Error:  "agent cleanup for Discord tasks requires the AGX runtime",
+			})
+			continue
+		}
+		if err := a.directDeleteTask(task.ID); err != nil {
+			result.Failed++
+			result.Failures = append(result.Failures, agxruntime.AgentCleanupFailure{TaskID: task.ID, Title: task.Title, Error: err.Error()})
+			continue
+		}
+		result.Deleted++
+		result.DeletedTaskIDs = append(result.DeletedTaskIDs, task.ID)
+	}
+	return result, nil
 }
 
 func (a *App) directListMonitorTasks() ([]MonitorTask, error) {

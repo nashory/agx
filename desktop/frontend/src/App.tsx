@@ -656,6 +656,20 @@ export default function App() {
             }
           }, `clear ${staleTasks.length} stale tasks`);
         }}
+        onClearAgentTasks={(agentName, agentTasks) => {
+          void runAction(async () => {
+            const result = await api.CleanupAgentTasks(agentName);
+            appendLog(`[cleanup] ${agentName}: deleted ${result.deleted}/${result.matched}, failed ${result.failed}`);
+            for (const warning of result.warnings ?? []) appendLog(`[warn] ${warning}`);
+            await loadMonitorTasks();
+            const failures = result.failures ?? [];
+            const problems = failures.map((failure) => `${failure.title}: ${failure.error}`);
+            if (result.discordReconcileError) problems.push(`Discord reconciliation: ${result.discordReconcileError}`);
+            if (problems.length > 0) {
+              throw new Error(`Agent cleanup deleted ${result.deleted} of ${agentTasks.length} tasks:\n${problems.join('\n')}`);
+            }
+          }, `clear ${agentName} agent tasks`);
+        }}
         onOpenWorkspace={(projectID, taskID) => {
           const nextProject = projects.find((item) => item.id === projectID);
           if (!nextProject) return;
