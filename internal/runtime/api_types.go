@@ -62,6 +62,24 @@ type MonitorTask struct {
 	ProjectPath string `json:"projectPath"`
 }
 
+// AgentCleanupResult summarizes a Monitor bulk cleanup scoped to one agent.
+type AgentCleanupResult struct {
+	Agent               string                `json:"agent"`
+	Matched             int                   `json:"matched"`
+	Deleted             int                   `json:"deleted"`
+	Failed              int                   `json:"failed"`
+	Warnings            []string              `json:"warnings,omitempty"`
+	Failures            []AgentCleanupFailure `json:"failures,omitempty"`
+	DiscordReconciled   bool                  `json:"discordReconciled"`
+	DiscordReconcileErr string                `json:"discordReconcileError,omitempty"`
+}
+
+type AgentCleanupFailure struct {
+	TaskID string `json:"taskId"`
+	Title  string `json:"title"`
+	Error  string `json:"error"`
+}
+
 // TaskTranscriptMessage is a JSON transcript entry for structured tasks.
 type TaskTranscriptMessage struct {
 	ID        int64     `json:"id"`

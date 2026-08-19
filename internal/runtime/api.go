@@ -21,6 +21,7 @@ func (s *Service) routes() http.Handler {
 	mux.HandleFunc("DELETE /v1/projects/{id}", s.handleDeleteProject)
 	mux.HandleFunc("GET /v1/tasks", s.handleListTasks)
 	mux.HandleFunc("GET /v1/tasks/monitor", s.handleMonitorTasks)
+	mux.HandleFunc("POST /v1/tasks/cleanup-agent", s.handleCleanupAgentTasks)
 	mux.HandleFunc("POST /v1/tasks", s.handleCreateTask)
 	mux.HandleFunc("GET /v1/tasks/{id}", s.handleGetTask)
 	mux.HandleFunc("PATCH /v1/tasks/{id}", s.handlePatchTask)

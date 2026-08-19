@@ -359,6 +359,14 @@ func (c *Client) DeleteTask(ctx context.Context, taskID string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/tasks/"+taskID, nil, nil)
 }
 
+func (c *Client) CleanupAgentTasks(ctx context.Context, agent string) (AgentCleanupResult, error) {
+	var result AgentCleanupResult
+	if err := c.do(ctx, http.MethodPost, "/v1/tasks/cleanup-agent", cleanupAgentTasksRequest{Agent: agent}, &result); err != nil {
+		return AgentCleanupResult{}, err
+	}
+	return result, nil
+}
+
 func (c *Client) SendTaskMessage(ctx context.Context, taskID, message string) (Task, error) {
 	var task Task
 	if err := c.do(ctx, http.MethodPost, "/v1/tasks/"+taskID+"/message", taskMessageRequest{Message: message}, &task); err != nil {
