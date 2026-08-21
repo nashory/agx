@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -71,6 +72,80 @@ func TestMapMuseJSONLineMapsLiveEvents(t *testing.T) {
 	terminal := mapMuseJSONLine(task, "turn-1", []byte(`{"sequence":13,"payload_type":"run.terminal.completed","payload":{"terminal":"completed","text":"hello world","reason":null}}`))
 	if len(terminal) != 2 || terminal[0].Kind != agentstream.EventAssistantMessage || terminal[0].Text != "hello world" || terminal[1].Kind != agentstream.EventTurnCompleted {
 		t.Fatalf("terminal events = %#v", terminal)
+	}
+}
+
+func TestMapMuseTurnSessionProgressMapsCommentaryAndToolDescriptions(t *testing.T) {
+	task := db.Task{ID: "task-1", Agent: "muse"}
+	commentary := museSessionRecord{
+		Sequence:    10,
+		RecordedAt:  2_000_000,
+		PayloadType: "runtime.session",
+		Payload: musePayload{
+			Kind:  "run",
+			Event: json.RawMessage(`{"kind":"assistant_message_committed","message_id":"message-1","phase":"commentary","text":"원인 확인 중이야."}`),
+		},
+	}
+	events := mapMuseTurnSessionProgress(task, "turn-1", commentary)
+	if len(events) != 1 || events[0].Kind != agentstream.EventAssistantMessage || events[0].Text != "원인 확인 중이야." {
+		t.Fatalf("commentary events = %#v", events)
+	}
+
+	tool := museSessionRecord{
+		Sequence:    11,
+		RecordedAt:  3_000_000,
+		PayloadType: "runtime.session",
+		Payload: musePayload{
+			Kind:  "run",
+			Event: json.RawMessage(`{"kind":"assistant_tool_calls_committed","tool_calls":[{"call_id":"call-1","name":"bash","args":"{\"command\":\"git status --short\",\"description\":\"Check repository status\"}"}]}`),
+		},
+	}
+	events = mapMuseTurnSessionProgress(task, "turn-1", tool)
+	if len(events) != 1 || events[0].Kind != agentstream.EventToolStarted || events[0].Tool == nil || !strings.Contains(events[0].Tool.Input, "Check repository status") {
+		t.Fatalf("tool events = %#v", events)
+	}
+
+	finalCandidate := commentary
+	finalCandidate.Sequence = 12
+	finalCandidate.Payload.Event = json.RawMessage(`{"kind":"assistant_message_committed","message_id":"message-2","text":"final candidate"}`)
+	if events := mapMuseTurnSessionProgress(task, "turn-1", finalCandidate); len(events) != 0 {
+		t.Fatalf("final candidate events = %#v, want deferred until final-candidate handling", events)
+	}
+}
+
+func TestMuseTurnSessionObserverReadsOnlyNewProgress(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	workspace := t.TempDir()
+	sessionID := "session-1"
+	logPath := writeMuseSessionLog(t, dataHome, "2026", "08", "21", sessionID, workspace)
+	threadID := sessionID
+	task := db.Task{ID: "task-1", Agent: "muse", AgentThreadID: &threadID, WorktreePath: &workspace}
+	observer := newMuseTurnSessionObserver(task, "turn-1", workspace, time.UnixMicro(10_000_000))
+
+	file, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Join([]string{
+		`{"sequence":3,"recorded_at":9000000,"payload_type":"runtime.session","payload":{"kind":"run","event":{"kind":"assistant_message_committed","message_id":"old","phase":"commentary","text":"old"}}}`,
+		`{"sequence":4,"recorded_at":11000000,"payload_type":"runtime.session","payload":{"kind":"run","event":{"kind":"assistant_message_committed","message_id":"new","phase":"commentary","text":"new progress"}}}`,
+		"",
+	}, "\n")
+	if _, err := file.WriteString(lines); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	events := observer.readEvents()
+	if len(events) != 1 || events[0].Text != "new progress" {
+		t.Fatalf("observer events = %#v, want only new progress", events)
+	}
+	if again := observer.readEvents(); len(again) != 0 {
+		t.Fatalf("second observer read = %#v, want no duplicates", again)
 	}
 }
 

@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nashory/agx/internal/agent"
@@ -27,6 +30,18 @@ type museJSONEnvelope struct {
 const museSessionBusyRetryAttempts = 61
 
 var museSessionBusyRetryDelay = 2 * time.Second
+var museSessionObserveInterval = 250 * time.Millisecond
+
+type museTurnSessionObserver struct {
+	task      db.Task
+	turnID    string
+	startedAt time.Time
+	workspace string
+	path      string
+	offset    int64
+	pending   string
+	mu        sync.Mutex
+}
 
 func (s *agentEventService) startMuseTurn(ctx context.Context, task db.Task, project db.Project, message string) error {
 	if err := s.ensureMuseStreamTask(task); err != nil {
@@ -181,9 +196,18 @@ func (s *agentEventService) execMuseStreamOnce(ctx context.Context, task db.Task
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	observer := newMuseTurnSessionObserver(task, turnID, workingDir, time.Now())
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	observerCtx, stopObserver := context.WithCancel(ctx)
+	observerDone := make(chan struct{})
+	go func() {
+		defer close(observerDone)
+		observer.observe(observerCtx, func(event agentstream.Event) {
+			s.publish(task.ID, event)
+		})
+	}()
 
 	terminalSeen := false
 	failurePublished := false
@@ -205,6 +229,8 @@ func (s *agentEventService) execMuseStreamOnce(ctx context.Context, task db.Task
 		return nil
 	})
 	waitErr := cmd.Wait()
+	stopObserver()
+	<-observerDone
 	if readErr != nil {
 		return readErr
 	}
@@ -222,6 +248,170 @@ func (s *agentEventService) execMuseStreamOnce(ctx context.Context, task db.Task
 		return fmt.Errorf("Muse stream ended without a terminal result")
 	}
 	return nil
+}
+
+func newMuseTurnSessionObserver(task db.Task, turnID, workingDir string, startedAt time.Time) *museTurnSessionObserver {
+	observer := &museTurnSessionObserver{task: task, turnID: turnID, startedAt: startedAt, workspace: workingDir}
+	observer.path = findMuseSessionLogForID(museTaskSessionID(task), workingDir)
+	if observer.path != "" {
+		if info, err := os.Stat(observer.path); err == nil && !info.IsDir() {
+			observer.offset = info.Size()
+		}
+	}
+	return observer
+}
+
+func (o *museTurnSessionObserver) observe(ctx context.Context, publish func(agentstream.Event)) {
+	if o == nil || publish == nil {
+		return
+	}
+	ticker := time.NewTicker(museSessionObserveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			for _, event := range o.readEvents() {
+				publish(event)
+			}
+			return
+		case <-ticker.C:
+			for _, event := range o.readEvents() {
+				publish(event)
+			}
+		}
+	}
+}
+
+func (o *museTurnSessionObserver) readEvents() []agentstream.Event {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if strings.TrimSpace(o.path) == "" {
+		o.path = findMuseSessionLogForID(museTaskSessionID(o.task), o.workspace)
+		if o.path == "" {
+			return nil
+		}
+	}
+	file, err := os.Open(o.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			o.path = ""
+			o.offset = 0
+			o.pending = ""
+		}
+		return nil
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil
+	}
+	if o.offset > info.Size() {
+		o.offset = 0
+		o.pending = ""
+	}
+	if _, err := file.Seek(o.offset, 0); err != nil {
+		return nil
+	}
+	data, err := io.ReadAll(file)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	o.offset += int64(len(data))
+	text := o.pending + string(data)
+	lines := strings.Split(text, "\n")
+	if strings.HasSuffix(text, "\n") {
+		o.pending = ""
+	} else {
+		o.pending = lines[len(lines)-1]
+		lines = lines[:len(lines)-1]
+	}
+	var events []agentstream.Event
+	for _, line := range lines {
+		var record museSessionRecord
+		if json.Unmarshal([]byte(line), &record) != nil || record.RecordedAt < o.startedAt.UnixMicro() {
+			continue
+		}
+		events = append(events, mapMuseTurnSessionProgress(o.task, o.turnID, record)...)
+	}
+	return events
+}
+
+func mapMuseTurnSessionProgress(task db.Task, turnID string, record museSessionRecord) []agentstream.Event {
+	if record.PayloadType != "runtime.session" || record.Payload.Kind != "run" || len(record.Payload.Event) == 0 {
+		return nil
+	}
+	var envelope museEventEnvelope
+	if json.Unmarshal(record.Payload.Event, &envelope) != nil {
+		return nil
+	}
+	createdAt := museRecordTime(record.RecordedAt, time.Now())
+	cursor := fmt.Sprintf("%s:%s:session:%d", museStreamKind, turnID, record.Sequence)
+	switch envelope.Kind {
+	case "assistant_message_committed":
+		var message museAssistantMessageEvent
+		if json.Unmarshal(record.Payload.Event, &message) != nil || message.Phase != "commentary" || strings.TrimSpace(message.Text) == "" {
+			return nil
+		}
+		return []agentstream.Event{{
+			ID:     agentstream.StableEventID(task.ID, agentstream.EventAssistantMessage, turnID, message.MessageID, message.Text),
+			TaskID: task.ID, TurnID: turnID, ItemID: message.MessageID, Kind: agentstream.EventAssistantMessage,
+			Agent: task.Agent, CreatedAt: createdAt, Cursor: cursor, Text: message.Text,
+		}}
+	case "assistant_tool_calls_committed":
+		var calls museToolCallsEvent
+		if json.Unmarshal(record.Payload.Event, &calls) != nil {
+			return nil
+		}
+		events := make([]agentstream.Event, 0, len(calls.ToolCalls))
+		for _, call := range calls.ToolCalls {
+			input := museToolInput(call.Args)
+			if strings.TrimSpace(input) == "" {
+				continue
+			}
+			name := firstNonEmpty(call.Name, "Muse Code")
+			id := callID(call)
+			events = append(events, agentstream.Event{
+				ID:     agentstream.StableEventID(task.ID, agentstream.EventToolStarted, turnID, id, name),
+				TaskID: task.ID, TurnID: turnID, ItemID: id, Kind: agentstream.EventToolStarted,
+				Agent: task.Agent, CreatedAt: createdAt, Cursor: cursor, Tool: &agentstream.ToolEvent{ID: id, Name: name, Input: input},
+			})
+		}
+		return events
+	default:
+		return nil
+	}
+}
+
+func museTaskSessionID(task db.Task) string {
+	if task.AgentThreadID != nil && strings.TrimSpace(*task.AgentThreadID) != "" {
+		return strings.TrimSpace(*task.AgentThreadID)
+	}
+	return strings.TrimSpace(task.ID)
+}
+
+func findMuseSessionLogForID(sessionID, workspaceRoot string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ""
+	}
+	paths, _ := filepath.Glob(filepath.Join(museDataDir(), "sessions", "*", "*", "*", sessionID, "session.jsonl"))
+	sort.SliceStable(paths, func(i, j int) bool {
+		left, leftErr := os.Stat(paths[i])
+		right, rightErr := os.Stat(paths[j])
+		if leftErr != nil {
+			return false
+		}
+		if rightErr != nil {
+			return true
+		}
+		return left.ModTime().After(right.ModTime())
+	})
+	for _, path := range paths {
+		if matches, err := museSessionLogMatchesWorkspace(path, canonicalPath(workspaceRoot)); err == nil && matches {
+			return path
+		}
+	}
+	return ""
 }
 
 func museSessionAlreadyInUse(err error) bool {
