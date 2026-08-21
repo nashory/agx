@@ -31,16 +31,22 @@ const museSessionBusyRetryAttempts = 61
 
 var museSessionBusyRetryDelay = 2 * time.Second
 var museSessionObserveInterval = 250 * time.Millisecond
+var museFinalCandidateDelay = time.Second
 
 type museTurnSessionObserver struct {
-	task      db.Task
-	turnID    string
-	startedAt time.Time
-	workspace string
-	path      string
-	offset    int64
-	pending   string
-	mu        sync.Mutex
+	task              db.Task
+	turnID            string
+	startedAt         time.Time
+	workspace         string
+	path              string
+	offset            int64
+	pending           string
+	candidate         *agentstream.Event
+	candidateDue      time.Time
+	candidateSent     bool
+	sentCandidateText string
+	terminalSeen      bool
+	mu                sync.Mutex
 }
 
 func (s *agentEventService) startMuseTurn(ctx context.Context, task db.Task, project db.Project, message string) error {
@@ -212,7 +218,7 @@ func (s *agentEventService) execMuseStreamOnce(ctx context.Context, task db.Task
 	terminalSeen := false
 	failurePublished := false
 	readErr := agentstream.ReadJSONLines(stdout, func(line []byte) error {
-		for _, event := range mapMuseJSONLine(task, turnID, line) {
+		for _, event := range observer.filterStreamEvents(mapMuseJSONLine(task, turnID, line)) {
 			s.publish(task.ID, event)
 			if event.Kind == agentstream.EventTurnCompleted {
 				terminalSeen = true
@@ -273,10 +279,16 @@ func (o *museTurnSessionObserver) observe(ctx context.Context, publish func(agen
 			for _, event := range o.readEvents() {
 				publish(event)
 			}
+			if event := o.flushFinalCandidate(time.Now(), true); event != nil {
+				publish(*event)
+			}
 			return
 		case <-ticker.C:
 			for _, event := range o.readEvents() {
 				publish(event)
+			}
+			if event := o.flushFinalCandidate(time.Now(), false); event != nil {
+				publish(*event)
 			}
 		}
 	}
@@ -331,9 +343,69 @@ func (o *museTurnSessionObserver) readEvents() []agentstream.Event {
 		if json.Unmarshal([]byte(line), &record) != nil || record.RecordedAt < o.startedAt.UnixMicro() {
 			continue
 		}
+		if candidate := mapMuseTurnFinalCandidate(o.task, o.turnID, record); candidate != nil {
+			o.queueFinalCandidate(*candidate, time.Now())
+			continue
+		}
 		events = append(events, mapMuseTurnSessionProgress(o.task, o.turnID, record)...)
 	}
 	return events
+}
+
+func (o *museTurnSessionObserver) queueFinalCandidate(event agentstream.Event, now time.Time) {
+	if o.candidateSent || o.terminalSeen {
+		return
+	}
+	candidate := event
+	o.candidate = &candidate
+	if o.candidateDue.IsZero() {
+		o.candidateDue = now.Add(museFinalCandidateDelay)
+	}
+}
+
+func (o *museTurnSessionObserver) flushFinalCandidate(now time.Time, force bool) *agentstream.Event {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.candidate == nil || o.candidateSent || (!force && now.Before(o.candidateDue)) {
+		return nil
+	}
+	event := *o.candidate
+	o.candidate = nil
+	o.candidateDue = time.Time{}
+	o.candidateSent = true
+	o.sentCandidateText = normalizeMuseMessage(event.Text)
+	return &event
+}
+
+func (o *museTurnSessionObserver) filterStreamEvents(events []agentstream.Event) []agentstream.Event {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	filtered := make([]agentstream.Event, 0, len(events))
+	for _, event := range events {
+		if event.Kind == agentstream.EventAssistantMessage {
+			o.terminalSeen = true
+			terminalText := normalizeMuseMessage(event.Text)
+			if o.candidate != nil {
+				// A normal Muse run emits its terminal result shortly after the
+				// committed answer. Prefer that authoritative terminal payload.
+				o.candidate = nil
+				o.candidateDue = time.Time{}
+			}
+			if o.candidateSent && terminalText != "" && terminalText == o.sentCandidateText {
+				continue
+			}
+		} else if event.Kind == agentstream.EventTurnCompleted {
+			o.terminalSeen = true
+			o.candidate = nil
+			o.candidateDue = time.Time{}
+		}
+		filtered = append(filtered, event)
+	}
+	return filtered
+}
+
+func normalizeMuseMessage(text string) string {
+	return strings.Join(strings.Fields(text), " ")
 }
 
 func mapMuseTurnSessionProgress(task db.Task, turnID string, record museSessionRecord) []agentstream.Event {
@@ -380,6 +452,28 @@ func mapMuseTurnSessionProgress(task db.Task, turnID string, record museSessionR
 	default:
 		return nil
 	}
+}
+
+func mapMuseTurnFinalCandidate(task db.Task, turnID string, record museSessionRecord) *agentstream.Event {
+	if record.PayloadType != "runtime.session" || record.Payload.Kind != "run" || len(record.Payload.Event) == 0 {
+		return nil
+	}
+	var envelope museEventEnvelope
+	if json.Unmarshal(record.Payload.Event, &envelope) != nil || envelope.Kind != "assistant_message_committed" {
+		return nil
+	}
+	var message museAssistantMessageEvent
+	if json.Unmarshal(record.Payload.Event, &message) != nil || strings.TrimSpace(message.Phase) != "" || strings.TrimSpace(message.Text) == "" {
+		return nil
+	}
+	createdAt := museRecordTime(record.RecordedAt, time.Now())
+	event := agentstream.Event{
+		ID:     agentstream.StableEventID(task.ID, agentstream.EventAssistantMessage, turnID, message.MessageID, message.Text),
+		TaskID: task.ID, TurnID: turnID, ItemID: message.MessageID, Kind: agentstream.EventAssistantMessage,
+		Agent: task.Agent, CreatedAt: createdAt,
+		Cursor: fmt.Sprintf("%s:%s:session:%d", museStreamKind, turnID, record.Sequence), Text: message.Text,
+	}
+	return &event
 }
 
 func museTaskSessionID(task db.Task) string {

@@ -111,6 +111,10 @@ func TestMapMuseTurnSessionProgressMapsCommentaryAndToolDescriptions(t *testing.
 	if events := mapMuseTurnSessionProgress(task, "turn-1", finalCandidate); len(events) != 0 {
 		t.Fatalf("final candidate events = %#v, want deferred until final-candidate handling", events)
 	}
+	candidate := mapMuseTurnFinalCandidate(task, "turn-1", finalCandidate)
+	if candidate == nil || candidate.Text != "final candidate" {
+		t.Fatalf("final candidate = %#v", candidate)
+	}
 }
 
 func TestMuseTurnSessionObserverReadsOnlyNewProgress(t *testing.T) {
@@ -146,6 +150,64 @@ func TestMuseTurnSessionObserverReadsOnlyNewProgress(t *testing.T) {
 	}
 	if again := observer.readEvents(); len(again) != 0 {
 		t.Fatalf("second observer read = %#v, want no duplicates", again)
+	}
+}
+
+func TestMuseTurnSessionObserverPublishesOneEarlyFinalCandidate(t *testing.T) {
+	observer := &museTurnSessionObserver{}
+	now := time.Unix(10, 0)
+	first := agentstream.Event{Kind: agentstream.EventAssistantMessage, Text: "first complete answer"}
+	second := agentstream.Event{Kind: agentstream.EventAssistantMessage, Text: "later repeated summary"}
+	observer.queueFinalCandidate(first, now)
+	observer.queueFinalCandidate(second, now.Add(100*time.Millisecond))
+
+	if event := observer.flushFinalCandidate(now.Add(museFinalCandidateDelay-time.Millisecond), false); event != nil {
+		t.Fatalf("early flush = %#v, want candidate grace period", event)
+	}
+	event := observer.flushFinalCandidate(now.Add(museFinalCandidateDelay), false)
+	if event == nil || event.Text != second.Text {
+		t.Fatalf("flushed candidate = %#v, want latest candidate before deadline", event)
+	}
+
+	observer.queueFinalCandidate(agentstream.Event{Kind: agentstream.EventAssistantMessage, Text: "third summary"}, now.Add(time.Minute))
+	if event := observer.flushFinalCandidate(now.Add(2*time.Minute), false); event != nil {
+		t.Fatalf("second candidate flush = %#v, want one early final candidate per turn", event)
+	}
+}
+
+func TestMuseTurnSessionObserverDeduplicatesMatchingTerminalAnswer(t *testing.T) {
+	observer := &museTurnSessionObserver{}
+	now := time.Unix(10, 0)
+	observer.queueFinalCandidate(agentstream.Event{Kind: agentstream.EventAssistantMessage, Text: "done\nnow"}, now)
+	if event := observer.flushFinalCandidate(now.Add(museFinalCandidateDelay), false); event == nil {
+		t.Fatal("candidate was not flushed")
+	}
+
+	terminal := []agentstream.Event{
+		{Kind: agentstream.EventAssistantMessage, Text: " done  now "},
+		{Kind: agentstream.EventTurnCompleted},
+	}
+	filtered := observer.filterStreamEvents(terminal)
+	if len(filtered) != 1 || filtered[0].Kind != agentstream.EventTurnCompleted {
+		t.Fatalf("filtered terminal = %#v, want duplicate message removed and completion preserved", filtered)
+	}
+}
+
+func TestMuseTurnSessionObserverPreservesChangedTerminalAnswer(t *testing.T) {
+	observer := &museTurnSessionObserver{}
+	now := time.Unix(10, 0)
+	observer.queueFinalCandidate(agentstream.Event{Kind: agentstream.EventAssistantMessage, Text: "early result"}, now)
+	if event := observer.flushFinalCandidate(now.Add(museFinalCandidateDelay), false); event == nil {
+		t.Fatal("candidate was not flushed")
+	}
+
+	terminal := []agentstream.Event{
+		{Kind: agentstream.EventAssistantMessage, Text: "updated final result"},
+		{Kind: agentstream.EventTurnCompleted},
+	}
+	filtered := observer.filterStreamEvents(terminal)
+	if len(filtered) != 2 || filtered[0].Text != "updated final result" || filtered[1].Kind != agentstream.EventTurnCompleted {
+		t.Fatalf("filtered terminal = %#v, want changed final answer preserved", filtered)
 	}
 }
 
