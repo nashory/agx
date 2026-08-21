@@ -648,6 +648,9 @@ func TestSemanticForwarderAssistantProgressUsesRecentPreview(t *testing.T) {
 }
 
 func TestSemanticForwarderIgnoresProgressUpdateErrors(t *testing.T) {
+	previousDelay := semanticProgressRetryDelay
+	semanticProgressRetryDelay = time.Millisecond
+	t.Cleanup(func() { semanticProgressRetryDelay = previousDelay })
 	sender := &failingProgressSender{progressErr: context.DeadlineExceeded}
 	forwarder := NewSemanticEventForwarder(sender)
 	events := make(chan agentstream.Event, 4)
@@ -662,6 +665,9 @@ func TestSemanticForwarderIgnoresProgressUpdateErrors(t *testing.T) {
 	}
 	if len(sender.messages) != 1 || sender.messages[0] != "final" {
 		t.Fatalf("messages = %#v, want final message despite progress failure", sender.messages)
+	}
+	if len(sender.progress) < 2 {
+		t.Fatalf("progress attempts = %d, want transient progress updates retried", len(sender.progress))
 	}
 }
 

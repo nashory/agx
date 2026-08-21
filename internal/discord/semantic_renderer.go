@@ -23,6 +23,7 @@ const (
 )
 
 var semanticSendRetryDelay = time.Second
+var semanticProgressRetryDelay = 250 * time.Millisecond
 
 type RenderActionKind string
 
@@ -154,15 +155,39 @@ func (f *SemanticEventForwarder) forwardActions(ctx context.Context, taskID, cha
 				continue
 			}
 			if progress, ok := f.sender.(ProgressMessageSender); ok {
-				_ = progress.UpdateProgressMessage(ctx, channelID, action.Content)
+				_ = retryProgressDelivery(ctx, func() error {
+					return progress.UpdateProgressMessage(ctx, channelID, action.Content)
+				})
 			}
 		case RenderClearProgress:
 			if progress, ok := f.sender.(ProgressMessageSender); ok {
-				_ = progress.ClearProgressMessage(ctx, channelID)
+				_ = retryProgressDelivery(ctx, func() error {
+					return progress.ClearProgressMessage(ctx, channelID)
+				})
 			}
 		}
 	}
 	return nil
+}
+
+func retryProgressDelivery(ctx context.Context, deliver func() error) error {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		if err = deliver(); err == nil {
+			return nil
+		}
+		if attempt == 1 {
+			break
+		}
+		timer := time.NewTimer(semanticProgressRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
 }
 
 func retrySemanticSend(ctx context.Context, send func() error) error {

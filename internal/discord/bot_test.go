@@ -3,11 +3,43 @@ package discord
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/bwmarrin/discordgo"
 )
+
+type recordingProgressSession struct {
+	mu         sync.Mutex
+	nextID     int
+	sends      []string
+	edits      []string
+	editErrors []error
+}
+
+func (s *recordingProgressSession) ChannelMessageSend(_ string, content string, _ ...discordgo.RequestOption) (*discordgo.Message, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextID++
+	s.sends = append(s.sends, content)
+	return &discordgo.Message{ID: fmt.Sprintf("message-%d", s.nextID)}, nil
+}
+
+func (s *recordingProgressSession) ChannelMessageEdit(_, _ string, content string, _ ...discordgo.RequestOption) (*discordgo.Message, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.edits = append(s.edits, content)
+	if len(s.editErrors) > 0 {
+		err := s.editErrors[0]
+		s.editErrors = s.editErrors[1:]
+		return nil, err
+	}
+	return &discordgo.Message{ID: "edited"}, nil
+}
 
 func TestDeleteDiscordChannelsConcurrentlyHonorsLimitAndDeduplicates(t *testing.T) {
 	var active int32
@@ -77,5 +109,66 @@ func TestProgressUpdateDelayCoalescesRecentEdits(t *testing.T) {
 	delay := progressUpdateDelay(now.Add(-500*time.Millisecond), now)
 	if delay <= 0 || delay > progressEditMinInterval {
 		t.Fatalf("delay after recent edit = %s, want within debounce interval", delay)
+	}
+}
+
+func TestProgressMessageRecreatesDeletedDiscordMessage(t *testing.T) {
+	unknownMessage := &discordgo.RESTError{
+		Response: &http.Response{Status: "404 Not Found"},
+		Message:  &discordgo.APIErrorMessage{Code: discordgo.ErrCodeUnknownMessage, Message: "Unknown Message"},
+	}
+	session := &recordingProgressSession{editErrors: []error{unknownMessage}}
+	bot := &Bot{progressSession: session, progress: map[string]*processingIndicator{}}
+	if err := bot.UpdateProgressMessage(context.Background(), "channel-1", "Thinking"); err != nil {
+		t.Fatal(err)
+	}
+	bot.progressMu.Lock()
+	bot.progress["channel-1"].lastEdit = time.Time{}
+	bot.progressMu.Unlock()
+
+	if err := bot.UpdateProgressMessage(context.Background(), "channel-1", "Reading files"); err != nil {
+		t.Fatal(err)
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if len(session.sends) != 2 || session.sends[1] != "Reading files" {
+		t.Fatalf("sends = %#v, want deleted progress message recreated", session.sends)
+	}
+	if len(session.edits) != 1 {
+		t.Fatalf("edits = %#v, want one failed edit before recreation", session.edits)
+	}
+}
+
+func TestProgressMessageDoesNotDuplicateOnTransientEditFailure(t *testing.T) {
+	session := &recordingProgressSession{editErrors: []error{errors.New("temporary network error")}}
+	bot := &Bot{progressSession: session, progress: map[string]*processingIndicator{}}
+	if err := bot.UpdateProgressMessage(context.Background(), "channel-1", "Thinking"); err != nil {
+		t.Fatal(err)
+	}
+	bot.progressMu.Lock()
+	bot.progress["channel-1"].lastEdit = time.Time{}
+	bot.progressMu.Unlock()
+
+	err := bot.UpdateProgressMessage(context.Background(), "channel-1", "Reading files")
+	if err == nil {
+		t.Fatal("UpdateProgressMessage() error = nil, want transient edit error")
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if len(session.sends) != 1 {
+		t.Fatalf("sends = %#v, transient edit failure must not create a duplicate message", session.sends)
+	}
+}
+
+func TestUnknownDiscordMessageDetection(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", &discordgo.RESTError{
+		Response: &http.Response{Status: "404 Not Found"},
+		Message:  &discordgo.APIErrorMessage{Code: discordgo.ErrCodeUnknownMessage},
+	})
+	if !isUnknownDiscordMessage(err) {
+		t.Fatal("isUnknownDiscordMessage() = false, want true")
+	}
+	if isUnknownDiscordMessage(errors.New("network error")) {
+		t.Fatal("isUnknownDiscordMessage() = true for transient error")
 	}
 }

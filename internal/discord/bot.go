@@ -14,14 +14,20 @@ import (
 )
 
 type Bot struct {
-	session    *discordgo.Session
-	progressMu sync.Mutex
-	progress   map[string]*processingIndicator
-	messageMu  sync.Mutex
-	messages   map[string]time.Time
-	commandsMu sync.Mutex
-	appID      string
-	commandIDs map[string]string
+	session         *discordgo.Session
+	progressSession progressMessageSession
+	progressMu      sync.Mutex
+	progress        map[string]*processingIndicator
+	messageMu       sync.Mutex
+	messages        map[string]time.Time
+	commandsMu      sync.Mutex
+	appID           string
+	commandIDs      map[string]string
+}
+
+type progressMessageSession interface {
+	ChannelMessageSend(channelID, content string, options ...discordgo.RequestOption) (*discordgo.Message, error)
+	ChannelMessageEdit(channelID, messageID, content string, options ...discordgo.RequestOption) (*discordgo.Message, error)
 }
 
 const discordDeleteConcurrency = 3
@@ -561,7 +567,8 @@ func truncateComponentLabel(label string) string {
 }
 
 func (b *Bot) UpdateProgressMessage(ctx context.Context, channelID, content string) error {
-	if b == nil || b.session == nil || strings.TrimSpace(channelID) == "" || strings.TrimSpace(content) == "" {
+	session := b.progressMessageSession()
+	if b == nil || session == nil || strings.TrimSpace(channelID) == "" || strings.TrimSpace(content) == "" {
 		return nil
 	}
 	content = strings.TrimSpace(content)
@@ -595,18 +602,23 @@ func (b *Bot) UpdateProgressMessage(ctx context.Context, channelID, content stri
 			indicator.pendingTimer = nil
 		}
 		indicator.pendingContent = ""
-		indicator.lastContent = content
-		indicator.lastEdit = time.Now()
 		b.progressMu.Unlock()
-		_, err := b.session.ChannelMessageEdit(channelID, messageID, content)
-		return err
+		_, err := session.ChannelMessageEdit(channelID, messageID, content)
+		if err != nil {
+			if isUnknownDiscordMessage(err) {
+				return b.replaceMissingProgressMessage(ctx, channelID, messageID, content)
+			}
+			return err
+		}
+		b.markProgressEdited(channelID, messageID, content)
+		return nil
 	}
 	b.progressMu.Unlock()
-	message, err := b.session.ChannelMessageSend(channelID, content)
+	message, err := session.ChannelMessageSend(channelID, content)
 	if err != nil {
 		return err
 	}
-	indicatorCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	indicatorCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	b.progressMu.Lock()
 	b.progress[channelID] = &processingIndicator{messageID: message.ID, cancel: cancel, lastContent: content, lastEdit: time.Now()}
 	b.progressMu.Unlock()
@@ -622,6 +634,10 @@ func (b *Bot) UpdateProgressMessage(ctx context.Context, channelID, content stri
 }
 
 func (b *Bot) flushPendingProgressUpdate(channelID, messageID string) {
+	session := b.progressMessageSession()
+	if session == nil {
+		return
+	}
 	b.progressMu.Lock()
 	indicator := b.progress[channelID]
 	if indicator == nil || indicator.messageID != messageID || indicator.pendingContent == "" {
@@ -631,10 +647,96 @@ func (b *Bot) flushPendingProgressUpdate(channelID, messageID string) {
 	content := indicator.pendingContent
 	indicator.pendingContent = ""
 	indicator.pendingTimer = nil
-	indicator.lastContent = content
-	indicator.lastEdit = time.Now()
 	b.progressMu.Unlock()
-	_, _ = b.session.ChannelMessageEdit(channelID, messageID, content)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	err := retryProgressDelivery(ctx, func() error {
+		_, editErr := session.ChannelMessageEdit(channelID, messageID, content)
+		return editErr
+	})
+	if err == nil {
+		b.markProgressEdited(channelID, messageID, content)
+		return
+	}
+	if isUnknownDiscordMessage(err) {
+		_ = b.replaceMissingProgressMessage(ctx, channelID, messageID, content)
+		return
+	}
+	b.progressMu.Lock()
+	indicator = b.progress[channelID]
+	if indicator != nil && indicator.messageID == messageID {
+		if indicator.pendingContent == "" {
+			indicator.pendingContent = content
+		}
+		if indicator.pendingTimer == nil {
+			indicator.pendingTimer = time.AfterFunc(progressEditMinInterval, func() {
+				b.flushPendingProgressUpdate(channelID, messageID)
+			})
+		}
+	}
+	b.progressMu.Unlock()
+}
+
+func (b *Bot) progressMessageSession() progressMessageSession {
+	if b == nil {
+		return nil
+	}
+	if b.progressSession != nil {
+		return b.progressSession
+	}
+	return b.session
+}
+
+func (b *Bot) markProgressEdited(channelID, messageID, content string) {
+	b.progressMu.Lock()
+	defer b.progressMu.Unlock()
+	if indicator := b.progress[channelID]; indicator != nil && indicator.messageID == messageID {
+		indicator.lastContent = content
+		indicator.lastEdit = time.Now()
+	}
+}
+
+func (b *Bot) replaceMissingProgressMessage(_ context.Context, channelID, messageID, content string) error {
+	session := b.progressMessageSession()
+	if session == nil {
+		return nil
+	}
+	b.progressMu.Lock()
+	indicator := b.progress[channelID]
+	if indicator == nil || indicator.messageID != messageID {
+		b.progressMu.Unlock()
+		return nil
+	}
+	delete(b.progress, channelID)
+	if indicator.cancel != nil {
+		indicator.cancel()
+	}
+	if indicator.pendingTimer != nil {
+		indicator.pendingTimer.Stop()
+	}
+	b.progressMu.Unlock()
+	message, err := session.ChannelMessageSend(channelID, content)
+	if err != nil {
+		return err
+	}
+	indicatorCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	b.progressMu.Lock()
+	b.progress[channelID] = &processingIndicator{messageID: message.ID, cancel: cancel, lastContent: content, lastEdit: time.Now()}
+	b.progressMu.Unlock()
+	go func() {
+		<-indicatorCtx.Done()
+		b.progressMu.Lock()
+		if current := b.progress[channelID]; current != nil && current.messageID == message.ID {
+			delete(b.progress, channelID)
+		}
+		b.progressMu.Unlock()
+	}()
+	return nil
+}
+
+func isUnknownDiscordMessage(err error) bool {
+	var restErr *discordgo.RESTError
+	return errors.As(err, &restErr) && restErr.Message != nil && restErr.Message.Code == discordgo.ErrCodeUnknownMessage
 }
 
 func progressUpdateDelay(lastEdit, now time.Time) time.Duration {
