@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowLeft, ArrowUp, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowUp, PanelLeftClose, PanelLeftOpen, RefreshCw } from 'lucide-react';
 import { api } from '../../api';
 import { CodePreview, isMarkdownPreviewPath, renderMarkdown } from '../../codePreview';
 import { DiscordBadge } from '../../components/badges';
 import { FilePanel } from '../../filePanel';
 import type { Project, Task, TaskTranscriptMessage } from '../../types';
 import { ErrorBar, Header, IconButton, type ThemeMode } from '../../ui';
+import { useFilePreview } from '../../useFilePreview';
 import { agentLabel, discordSyncLabel, discordSyncTime, statusLabel } from '../../appLogic';
 import { DiscordTaskSyncAction } from './DiscordTaskSyncAction';
 
@@ -35,10 +36,17 @@ export function DiscordTaskDetail({
   const [showFilePanel, setShowFilePanel] = useState(true);
   const [filePanelWidth, setFilePanelWidth] = useState(280);
   const [activePane, setActivePane] = useState<'transcript' | 'preview'>('transcript');
-  const [previewPath, setPreviewPath] = useState('');
-  const [previewContent, setPreviewContent] = useState('');
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [renderPreviewMarkdown, setRenderPreviewMarkdown] = useState(false);
+  const {
+    path: previewPath,
+    content: previewContent,
+    loading: previewLoading,
+    refreshing: previewRefreshing,
+    error: previewError,
+    openFile: openPreviewFile,
+    refreshFile: refreshPreviewFile,
+    closeFile: closePreviewFile,
+  } = useFilePreview(task.id, activePane === 'preview');
   const scrollRef = useRef<HTMLElement>(null);
   const autoFollowRef = useRef(true);
   const initializedScrollRef = useRef(false);
@@ -187,19 +195,10 @@ export function DiscordTaskDetail({
             rootPath={task.worktreePath ?? project.path}
             onInsertPaths={() => undefined}
             onContextPaths={() => undefined}
-            onPreview={async (path) => {
-              setPreviewPath(path);
-              setPreviewContent('');
+            onPreview={(path) => {
               setRenderPreviewMarkdown(isMarkdownPreviewPath(path));
-              setPreviewLoading(true);
               setActivePane('preview');
-              try {
-                setPreviewContent(await api.ReadTaskFile(task.id, path));
-              } catch (err) {
-                setPreviewContent(String(err));
-              } finally {
-                setPreviewLoading(false);
-              }
+              openPreviewFile(path);
             }}
           />
         )}
@@ -271,18 +270,32 @@ export function DiscordTaskDetail({
                         {renderPreviewMarkdown ? 'Show Source' : 'Render Markdown'}
                       </button>
                     )}
-                    <button onClick={() => { setPreviewPath(''); setRenderPreviewMarkdown(false); setActivePane('transcript'); }}>Close</button>
+                    <button
+                      className={previewRefreshing ? 'preview-refresh-button is-refreshing' : 'preview-refresh-button'}
+                      disabled={previewLoading || previewRefreshing}
+                      aria-label={previewRefreshing ? 'Refreshing preview' : 'Refresh preview'}
+                      onClick={() => void refreshPreviewFile()}
+                    >
+                      <RefreshCw size={14} />
+                      Refresh
+                    </button>
+                    <button onClick={() => { closePreviewFile(); setRenderPreviewMarkdown(false); setActivePane('transcript'); }}>Close</button>
                   </div>
                 </header>
-                {previewLoading ? (
-                  <div className="preview-empty">Loading preview...</div>
-                ) : (
-                  <CodePreview
-                    path={previewPath}
-                    content={previewContent}
-                    renderMarkdown={renderPreviewMarkdown}
-                  />
-                )}
+                <div className="preview-panel-content">
+                  {previewError && <div className="preview-refresh-error" role="status">Could not refresh preview: {previewError}</div>}
+                  {previewLoading ? (
+                    <div className="preview-empty">Loading preview...</div>
+                  ) : previewError && !previewContent ? (
+                    <div className="preview-empty">Preview unavailable</div>
+                  ) : (
+                    <CodePreview
+                      path={previewPath}
+                      content={previewContent}
+                      renderMarkdown={renderPreviewMarkdown}
+                    />
+                  )}
+                </div>
               </>
             ) : (
               <div className="preview-empty">No file selected</div>

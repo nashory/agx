@@ -42,6 +42,7 @@ import { TaskInterfaceTabs } from './features/tasks/TaskInterfaceTabs';
 import { addUniquePaths, appendPromptPaths, pathsFromDrop } from './pathDrag';
 import type { Agent, DiscordStatusInfo, Project, RuntimeConfigInfo, RuntimeStatusInfo, Task, TaskStatus, ViewMode, VoiceSTTConfig, WorkspaceMode } from './types';
 import { EmptyState, ErrorBar, Header, IconButton, Segmented, type ThemeMode } from './ui';
+import { useFilePreview } from './useFilePreview';
 import {
   agentLabel,
   clampZoomLevel,
@@ -1493,14 +1494,21 @@ function SessionView({
   const [prompt, setPrompt] = useState('');
   const [contextPaths, setContextPaths] = useState<string[]>([]);
   const [includeFileContents, setIncludeFileContents] = useState(false);
-  const [previewPath, setPreviewPath] = useState('');
-  const [previewContent, setPreviewContent] = useState('');
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [renderPreviewMarkdown, setRenderPreviewMarkdown] = useState(false);
   const [showFilePanel, setShowFilePanel] = useState(true);
   const [filePanelWidth, setFilePanelWidth] = useState(280);
   const [promptHeightPercent, setPromptHeightPercent] = useState(15);
   const [activePane, setActivePane] = useState<'session' | 'preview'>('session');
+  const {
+    path: previewPath,
+    content: previewContent,
+    loading: previewLoading,
+    refreshing: previewRefreshing,
+    error: previewError,
+    openFile: openPreviewFile,
+    refreshFile: refreshPreviewFile,
+    closeFile: closePreviewFile,
+  } = useFilePreview(task.id, activePane === 'preview');
   const discordOwned = isDiscordTask(task);
   const hasSession = hasTmuxSession(task);
   const hasStructured = hasStructuredSession(task);
@@ -1761,19 +1769,10 @@ function SessionView({
             rootPath={task.worktreePath ?? project.path}
             onInsertPaths={(paths) => setPrompt((value) => appendPromptPaths(value, paths))}
             onContextPaths={(paths) => setContextPaths((value) => addUniquePaths(value, paths))}
-            onPreview={async (path) => {
-              setPreviewPath(path);
-              setPreviewContent('');
+            onPreview={(path) => {
               setRenderPreviewMarkdown(isMarkdownPreviewPath(path));
-              setPreviewLoading(true);
               setActivePane('preview');
-              try {
-                setPreviewContent(await api.ReadTaskFile(task.id, path));
-              } catch (err) {
-                setPreviewContent(String(err));
-              } finally {
-                setPreviewLoading(false);
-              }
+              openPreviewFile(path);
             }}
           />
         )}
@@ -1861,19 +1860,33 @@ function SessionView({
                         {renderPreviewMarkdown ? 'Show Source' : 'Render Markdown'}
                       </button>
                     )}
-                    <button onClick={() => { setPreviewPath(''); setRenderPreviewMarkdown(false); setActivePane('session'); }}>Close</button>
+                    <button
+                      className={previewRefreshing ? 'preview-refresh-button is-refreshing' : 'preview-refresh-button'}
+                      disabled={previewLoading || previewRefreshing}
+                      aria-label={previewRefreshing ? 'Refreshing preview' : 'Refresh preview'}
+                      onClick={() => void refreshPreviewFile()}
+                    >
+                      <RefreshCw size={14} />
+                      Refresh
+                    </button>
+                    <button onClick={() => { closePreviewFile(); setRenderPreviewMarkdown(false); setActivePane('session'); }}>Close</button>
                   </div>
                 </header>
-                {previewLoading ? (
-                  <div className="preview-empty">Loading preview...</div>
-                ) : (
-                  <CodePreview
-                    path={previewPath}
-                    content={previewContent}
-                    renderMarkdown={renderPreviewMarkdown}
-                    onAddContext={(reference) => setContextPaths((value) => addUniquePaths(value, [reference]))}
-                  />
-                )}
+                <div className="preview-panel-content">
+                  {previewError && <div className="preview-refresh-error" role="status">Could not refresh preview: {previewError}</div>}
+                  {previewLoading ? (
+                    <div className="preview-empty">Loading preview...</div>
+                  ) : previewError && !previewContent ? (
+                    <div className="preview-empty">Preview unavailable</div>
+                  ) : (
+                    <CodePreview
+                      path={previewPath}
+                      content={previewContent}
+                      renderMarkdown={renderPreviewMarkdown}
+                      onAddContext={(reference) => setContextPaths((value) => addUniquePaths(value, [reference]))}
+                    />
+                  )}
+                </div>
               </>
             ) : (
               <div className="preview-empty">No file selected</div>
