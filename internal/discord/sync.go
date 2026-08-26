@@ -7,6 +7,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -15,6 +16,7 @@ import (
 )
 
 const controlChannelName = "agx-control"
+const discordChannelSyncConcurrency = 4
 
 // SyncClient is the minimal Discord channel API required by Syncer. Bot
 // implementations may satisfy additional optional interfaces to enable rebuilds,
@@ -75,6 +77,12 @@ type Syncer struct {
 type guildChannelSnapshot struct {
 	channels map[string]GuildChannel
 	order    []string
+}
+
+type taskChannelSyncRequest struct {
+	project    db.Project
+	task       db.Task
+	categoryID string
 }
 
 func newGuildChannelSnapshot(channels []GuildChannel) *guildChannelSnapshot {
@@ -297,7 +305,7 @@ func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) e
 	if err != nil {
 		return err
 	}
-	taskChannelIDs := []string{}
+	taskRequests := []taskChannelSyncRequest{}
 	for _, project := range projects {
 		tasks, err := s.store.ListTasks(project.ID, nil)
 		if err != nil {
@@ -318,13 +326,15 @@ func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) e
 		}
 		expectedChannelIDs[categoryID] = true
 		for _, task := range mirroredTasks {
-			channelID, err := s.ensureTaskChannelFromSnapshot(ctx, project, task, categoryID, snapshot)
-			if err != nil {
-				return err
-			}
-			taskChannelIDs = append(taskChannelIDs, channelID)
-			expectedChannelIDs[channelID] = true
+			taskRequests = append(taskRequests, taskChannelSyncRequest{project: project, task: task, categoryID: categoryID})
 		}
+	}
+	taskChannelIDs, err := s.syncTaskChannelsConcurrently(ctx, snapshot, taskRequests)
+	if err != nil {
+		return err
+	}
+	for _, channelID := range taskChannelIDs {
+		expectedChannelIDs[channelID] = true
 	}
 	if cleanup {
 		if err := s.cleanupManagedGuildChannels(ctx, snapshot, initialMappings, expectedChannelIDs); err != nil {
@@ -335,6 +345,62 @@ func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) e
 		_ = permissions.ConfigureCommandPermissions(ctx, s.guild, controlChannelID, taskChannelIDs)
 	}
 	return nil
+}
+
+func (s *Syncer) syncTaskChannelsConcurrently(ctx context.Context, snapshot *guildChannelSnapshot, requests []taskChannelSyncRequest) ([]string, error) {
+	if len(requests) == 0 {
+		return nil, nil
+	}
+	concurrency := discordChannelSyncConcurrency
+	if concurrency > len(requests) {
+		concurrency = len(requests)
+	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	channelIDs := make([]string, len(requests))
+	jobs := make(chan int)
+	errCh := make(chan error, 1)
+	var wg sync.WaitGroup
+	for worker := 0; worker < concurrency; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				request := requests[index]
+				channelID, err := s.ensureTaskChannelFromSnapshot(workerCtx, request.project, request.task, request.categoryID, snapshot)
+				if err != nil {
+					select {
+					case errCh <- fmt.Errorf("sync task channel %s: %w", display.ShortID(request.task.ID), err):
+						cancel()
+					default:
+					}
+					return
+				}
+				channelIDs[index] = channelID
+			}
+		}()
+	}
+
+sendLoop:
+	for index := range requests {
+		select {
+		case <-workerCtx.Done():
+			break sendLoop
+		case jobs <- index:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return channelIDs, nil
 }
 
 func (s *Syncer) cleanupManagedGuildChannels(ctx context.Context, snapshot *guildChannelSnapshot, initialMappings []db.DiscordMapping, expectedChannelIDs map[string]bool) error {
@@ -521,7 +587,6 @@ func (s *Syncer) ensureTaskChannelFromSnapshot(ctx context.Context, project db.P
 	if err != nil {
 		return "", err
 	}
-	snapshot.add(GuildChannel{ID: channelID, Name: snapshotName, ParentID: categoryID, Topic: topic, Type: GuildChannelText})
 	if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXTask, task.ID, db.DiscordTypeChannel, channelID); err != nil {
 		return "", err
 	}

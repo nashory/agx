@@ -3,14 +3,18 @@ package discord
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nashory/agx/internal/db"
 	"github.com/nashory/agx/internal/display"
 )
 
 type fakeSyncClient struct {
+	mu                  sync.Mutex
 	control             string
 	category            map[string]string
 	text                map[string]string
@@ -28,6 +32,8 @@ type fakeSyncClient struct {
 	ensureTextErr       error
 	invalidCategoryIDs  map[string]error
 	deleteErrs          map[string]error
+	updateStarted       chan struct{}
+	updateRelease       chan struct{}
 }
 
 func newFakeSyncClient() *fakeSyncClient {
@@ -40,16 +46,22 @@ func newFakeSyncClient() *fakeSyncClient {
 }
 
 func (f *fakeSyncClient) EnsureControlChannel(ctx context.Context, guildID, name string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.control = name
 	return "control-1", nil
 }
 
 func (f *fakeSyncClient) CreateControlChannel(ctx context.Context, guildID, name string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.control = name
 	return "control-1", nil
 }
 
 func (f *fakeSyncClient) EnsureCategory(ctx context.Context, guildID, name string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.ensureCategoryCalls++
 	if id := f.category[name]; id != "" {
 		return id, nil
@@ -60,6 +72,8 @@ func (f *fakeSyncClient) EnsureCategory(ctx context.Context, guildID, name strin
 }
 
 func (f *fakeSyncClient) EnsureTextChannel(ctx context.Context, guildID, categoryID, name, topic string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.ensureTextCalls++
 	if f.ensureTextErr != nil {
 		return "", f.ensureTextErr
@@ -68,6 +82,8 @@ func (f *fakeSyncClient) EnsureTextChannel(ctx context.Context, guildID, categor
 }
 
 func (f *fakeSyncClient) CreateCategory(ctx context.Context, guildID, name string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.createCategoryCalls++
 	id := "direct-category-" + name
 	f.category[name] = id
@@ -75,6 +91,8 @@ func (f *fakeSyncClient) CreateCategory(ctx context.Context, guildID, name strin
 }
 
 func (f *fakeSyncClient) CreateTextChannel(ctx context.Context, guildID, categoryID, name, topic string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.createTextCalls++
 	return f.createTextChannel(categoryID, name, topic, "direct-channel-")
 }
@@ -98,11 +116,33 @@ func (f *fakeSyncClient) createTextChannel(categoryID, name, topic, prefix strin
 }
 
 func (f *fakeSyncClient) UpdateChannelTopic(ctx context.Context, channelID, topic string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.topics[channelID] = topic
 	return nil
 }
 
 func (f *fakeSyncClient) UpdateTextChannel(ctx context.Context, channelID, name, topic string) error {
+	f.mu.Lock()
+	started := f.updateStarted
+	release := f.updateRelease
+	f.mu.Unlock()
+	if started != nil {
+		select {
+		case started <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if _, ok := f.names[channelID]; !ok {
 		return errors.New("missing channel")
 	}
@@ -112,6 +152,8 @@ func (f *fakeSyncClient) UpdateTextChannel(ctx context.Context, channelID, name,
 }
 
 func (f *fakeSyncClient) DeleteChannel(ctx context.Context, channelID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.deleteErrs != nil {
 		if err := f.deleteErrs[channelID]; err != nil {
 			return err
@@ -141,6 +183,8 @@ func (f *fakeSyncClient) DeleteChannel(ctx context.Context, channelID string) er
 }
 
 func (f *fakeSyncClient) ListGuildChannels(ctx context.Context, guildID string) ([]GuildChannel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.listGuildCalls++
 	out := make([]GuildChannel, 0, len(f.category)+len(f.text)+len(f.extraChannels))
 	for name, id := range f.category {
@@ -160,6 +204,8 @@ func (f *fakeSyncClient) ListGuildChannels(ctx context.Context, guildID string) 
 }
 
 func (f *fakeSyncClient) ConfigureCommandPermissions(ctx context.Context, guildID, controlChannelID string, taskChannelIDs []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.permissionControl = controlChannelID
 	f.permissionTasks = append([]string(nil), taskChannelIDs...)
 	return nil
@@ -257,6 +303,55 @@ func TestSyncActiveTasksConfiguresCommandPermissions(t *testing.T) {
 		if !containsString(client.permissionTasks, mapping.DiscordID) {
 			t.Fatalf("permission task channels = %#v, missing %s", client.permissionTasks, mapping.DiscordID)
 		}
+	}
+}
+
+func TestSyncActiveTasksUpdatesTaskChannelsConcurrently(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < discordChannelSyncConcurrency; index++ {
+		if _, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, fmt.Sprintf("task %d", index), nil, "claude", false, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client := newFakeSyncClient()
+	syncer := NewSyncer(store, client, "guild-1")
+	if err := syncer.SyncActiveTasks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	client.updateStarted = make(chan struct{}, discordChannelSyncConcurrency)
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	client.updateRelease = release
+
+	done := make(chan error, 1)
+	go func() { done <- syncer.SyncActiveTasks(context.Background()) }()
+	for index := 0; index < discordChannelSyncConcurrency; index++ {
+		select {
+		case <-client.updateStarted:
+		case <-time.After(time.Second):
+			t.Fatalf("only %d task channel updates started concurrently", index)
+		}
+	}
+	close(release)
+	released = true
+	client.updateRelease = nil
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
