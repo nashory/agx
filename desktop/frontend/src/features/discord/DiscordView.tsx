@@ -39,6 +39,8 @@ export function DiscordView({
   const hasStoredToken = Boolean(status.maskedBotToken);
   const shouldShowDisconnect = status.connected || discordRunningElsewhere;
   const hardSyncRunning = status.sync?.running && status.sync.kind === 'hard';
+  const softSyncRunning = status.sync?.running && status.sync.kind === 'soft';
+  const syncRunning = status.sync?.running ?? false;
   const statusLabel = checkingConnection ? 'checking' : status.connected ? 'connected' : discordRunningElsewhere ? 'already running' : status.enabled ? 'disconnected' : 'disabled';
   const statusTone = status.connected ? 'active' : checkingConnection || status.enabled || discordRunningElsewhere ? 'waiting' : 'offline';
   const statusDetail = checkingConnection
@@ -48,7 +50,7 @@ export function DiscordView({
   const missingRequiredToken = token.trim() === '' && !canReuseStoredToken;
   const tokenLocked = hasStoredToken && (checkingConnection || shouldShowDisconnect) && token.trim() === '';
   const connectionLocked = busy || checkingConnection;
-  const syncLocked = connectionLocked || hardSyncRunning;
+  const syncLocked = connectionLocked || syncRunning;
 
   useEffect(() => {
     setGuildID(status.guildId ?? '');
@@ -124,8 +126,8 @@ export function DiscordView({
     try {
       const next = await api.DiscordSoftSync();
       onStatus(next);
-      setEvents((value) => [`${timestamp()} Soft sync completed`, ...value].slice(0, 20));
-      onLog('[ok] discord soft sync');
+      setEvents((value) => [`${timestamp()} Soft sync started`, ...value].slice(0, 20));
+      onLog('[ok] discord soft sync started');
     } catch (err) {
       const message = errorMessage(err);
       onError(message);
@@ -253,10 +255,10 @@ export function DiscordView({
             <h2>Sync Status</h2>
             <div className="panel-actions">
               <button className="text-button" disabled={syncLocked || !status.connected} onClick={syncNow}>
-                {busyAction === 'sync' && <span className="button-spinner" aria-hidden="true" />}
-                {busyAction === 'sync' ? 'Soft syncing...' : 'Soft Sync'}
+                {(busyAction === 'sync' || softSyncRunning) && <span className="button-spinner" aria-hidden="true" />}
+                {busyAction === 'sync' ? 'Starting...' : softSyncRunning ? 'Soft syncing...' : 'Soft Sync'}
               </button>
-              <button className="danger-button" disabled={connectionLocked || hardSyncRunning || !status.connected} onClick={requestDiscordReset}>
+              <button className="danger-button" disabled={connectionLocked || syncRunning || !status.connected} onClick={requestDiscordReset}>
                 {(busyAction === 'reset' || hardSyncRunning) && <span className="button-spinner" aria-hidden="true" />}
                 {busyAction === 'reset' ? 'Starting...' : hardSyncRunning ? 'Hard syncing...' : 'Hard Sync'}
               </button>
@@ -265,7 +267,7 @@ export function DiscordView({
           <div className="discord-sync-list">
             {status.sync?.stage && (
               <div>
-                <strong>Hard Sync</strong>
+                <strong>{status.sync.kind === 'soft' ? 'Soft Sync' : 'Hard Sync'}</strong>
                 <span>{status.sync.stage}{status.sync.error ? `: ${status.sync.error}` : ''}</span>
               </div>
             )}

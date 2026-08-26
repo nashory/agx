@@ -44,7 +44,7 @@ type Service struct {
 	discordSyncMu      sync.Mutex
 	discordSyncRunning bool
 	discordSyncPending bool
-	discordHardSyncJob agxdiscord.SyncStatusSummary
+	discordSyncJob     agxdiscord.SyncStatusSummary
 
 	lock   *Lock
 	server *http.Server
@@ -110,6 +110,7 @@ type runtimeTaskState struct {
 const (
 	discordTaskSyncTimeout       = 8 * time.Second
 	discordTaskManualSyncTimeout = 2 * time.Minute
+	discordSoftSyncTimeout       = 5 * time.Minute
 	// discordConnectTimeout bounds a Discord connect performed on the service
 	// background context so a disconnected CLI client cannot leave it running
 	// forever, while still allowing enough time for the gateway handshake,
@@ -428,18 +429,79 @@ func (s *Service) emitMetadataEvent(projectID string) {
 
 func (s *Service) discordStatus() agxdiscord.Status {
 	status := s.discord.Status()
-	hardSync := s.discordSyncStatus()
+	syncJob := s.discordSyncStatus()
 	if status.Sync.Running {
 		return status
 	}
-	status.Sync = hardSync
+	status.Sync = syncJob
 	return status
 }
 
 func (s *Service) discordSyncStatus() agxdiscord.SyncStatusSummary {
 	s.discordSyncMu.Lock()
 	defer s.discordSyncMu.Unlock()
-	return s.discordHardSyncJob
+	return s.discordSyncJob
+}
+
+func (s *Service) startDiscordSoftSync() error {
+	if err := s.ensureDiscordStarted(false); err != nil {
+		return err
+	}
+	if s.discord.Status().Sync.Running {
+		return agxdiscord.ErrSyncInProgress
+	}
+	now := time.Now()
+	s.discordSyncMu.Lock()
+	if s.discordSyncJob.Running || s.discordSyncRunning {
+		s.discordSyncMu.Unlock()
+		return agxdiscord.ErrSyncInProgress
+	}
+	s.discordSyncJob = agxdiscord.SyncStatusSummary{
+		Running:   true,
+		Kind:      "soft",
+		Stage:     "Starting soft sync",
+		StartedAt: &now,
+	}
+	s.discordSyncMu.Unlock()
+	s.bus.Publish("discord.status", s.discordStatus())
+
+	go func() {
+		ctx, cancel := s.backgroundTimeout(discordSoftSyncTimeout)
+		defer cancel()
+		stopProgress := make(chan struct{})
+		go s.publishDiscordSyncProgress(stopProgress)
+		err := s.discord.SoftSync(ctx)
+		close(stopProgress)
+		completed := time.Now()
+		s.discordSyncMu.Lock()
+		s.discordSyncJob.Running = false
+		s.discordSyncJob.CompletedAt = &completed
+		if err != nil {
+			s.discordSyncJob.Stage = "Soft sync failed"
+			s.discordSyncJob.Error = err.Error()
+		} else {
+			s.discordSyncJob.Stage = "Soft sync completed"
+			s.discordSyncJob.Error = ""
+		}
+		s.discordSyncMu.Unlock()
+		s.bus.Publish("discord.status", s.discordStatus())
+	}()
+	return nil
+}
+
+func (s *Service) publishDiscordSyncProgress(done <-chan struct{}) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-s.backgroundContext().Done():
+			return
+		case <-ticker.C:
+			s.bus.Publish("discord.status", s.discordStatus())
+		}
+	}
 }
 
 func (s *Service) startDiscordHardSync(preserveControlChannelID string) error {
@@ -455,11 +517,11 @@ func (s *Service) startDiscordHardSync(preserveControlChannelID string) error {
 	}
 	now := time.Now()
 	s.discordSyncMu.Lock()
-	if s.discordHardSyncJob.Running {
+	if s.discordSyncJob.Running {
 		s.discordSyncMu.Unlock()
 		return nil
 	}
-	s.discordHardSyncJob = agxdiscord.SyncStatusSummary{
+	s.discordSyncJob = agxdiscord.SyncStatusSummary{
 		Running:   true,
 		Kind:      "hard",
 		Stage:     "Starting hard sync",
@@ -474,14 +536,14 @@ func (s *Service) startDiscordHardSync(preserveControlChannelID string) error {
 		err := s.discord.HardSyncPreserving(ctx, preserveControlChannelID)
 		completed := time.Now()
 		s.discordSyncMu.Lock()
-		s.discordHardSyncJob.Running = false
-		s.discordHardSyncJob.CompletedAt = &completed
+		s.discordSyncJob.Running = false
+		s.discordSyncJob.CompletedAt = &completed
 		if err != nil {
-			s.discordHardSyncJob.Stage = "Hard sync failed"
-			s.discordHardSyncJob.Error = err.Error()
+			s.discordSyncJob.Stage = "Hard sync failed"
+			s.discordSyncJob.Error = err.Error()
 		} else {
-			s.discordHardSyncJob.Stage = "Hard sync completed"
-			s.discordHardSyncJob.Error = ""
+			s.discordSyncJob.Stage = "Hard sync completed"
+			s.discordSyncJob.Error = ""
 		}
 		s.discordSyncMu.Unlock()
 		s.bus.Publish("discord.status", s.discordStatus())
@@ -506,7 +568,7 @@ func (s *Service) syncDiscordAsync() {
 	s.discordSyncMu.Unlock()
 	go func() {
 		for {
-			ctx, cancel := s.backgroundTimeout(15 * time.Second)
+			ctx, cancel := s.backgroundTimeout(discordSoftSyncTimeout)
 			if err := s.discord.SoftSync(ctx); err != nil {
 				logRuntimeOperation("discord_soft_sync_background", "error", err)
 				s.discord.RefreshTaskStreams(s.backgroundContext())

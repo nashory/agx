@@ -101,11 +101,7 @@ func (s *Service) handleDiscordDisconnect(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Service) handleDiscordSoftSync(w http.ResponseWriter, r *http.Request) {
-	if err := s.ensureDiscordStarted(false); err != nil {
-		writeError(w, err)
-		return
-	}
-	if err := s.discord.SoftSync(r.Context()); err != nil {
+	if err := s.startDiscordSoftSync(); err != nil {
 		if errors.Is(err, agxdiscord.ErrSyncInProgress) {
 			writeErrorStatus(w, http.StatusConflict, err)
 			return
@@ -113,7 +109,7 @@ func (s *Service) handleDiscordSoftSync(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	status := s.discord.Status()
+	status := s.discordStatus()
 	s.bus.Publish("discord.status", status)
 	logRuntimeOperation("discord_soft_sync",
 		"connected", status.Connected,

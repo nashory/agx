@@ -265,6 +265,41 @@ func TestSyncActiveTasksCreatesMappings(t *testing.T) {
 	}
 }
 
+func TestSoftSyncReportsUserFriendlyProgress(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "active task", nil, "claude", false, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var progress []string
+	if err := NewSyncer(store, newFakeSyncClient(), "guild-1").syncActiveTasksWithCleanup(context.Background(), true, func(step string) {
+		progress = append(progress, step)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"Reading Discord channels",
+		"Preparing AGX projects",
+		"Removing stale task channels",
+		"Syncing project categories",
+		"Syncing 1 task channels",
+		"Removing stale AGX channels",
+		"Refreshing Discord command permissions",
+		"Soft sync completed",
+	}
+	if strings.Join(progress, "|") != strings.Join(want, "|") {
+		t.Fatalf("progress = %#v, want %#v", progress, want)
+	}
+}
+
 func TestSyncActiveTasksConfiguresCommandPermissions(t *testing.T) {
 	store, err := db.OpenMemory()
 	if err != nil {

@@ -85,6 +85,11 @@ type taskChannelSyncRequest struct {
 	categoryID string
 }
 
+type projectTaskSyncGroup struct {
+	project db.Project
+	tasks   []db.Task
+}
+
 func newGuildChannelSnapshot(channels []GuildChannel) *guildChannelSnapshot {
 	snapshot := &guildChannelSnapshot{
 		channels: make(map[string]GuildChannel, len(channels)),
@@ -122,6 +127,12 @@ func (s *guildChannelSnapshot) add(channel GuildChannel) {
 			s.order = append(s.order, channel.ID)
 		}
 		s.channels[channel.ID] = channel
+	}
+}
+
+func (s *guildChannelSnapshot) remove(channelID string) {
+	if s != nil {
+		delete(s.channels, channelID)
 	}
 }
 
@@ -276,6 +287,10 @@ func (s *Syncer) SyncActiveTasks(ctx context.Context) error {
 // no longer mirrored, plus unexpected AGX-managed guild channels reported by the
 // Discord client.
 func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) error {
+	return s.syncActiveTasksWithCleanup(ctx, cleanup, nil)
+}
+
+func (s *Syncer) syncActiveTasksWithCleanup(ctx context.Context, cleanup bool, report func(string)) error {
 	if s.store == nil {
 		return fmt.Errorf("discord sync store is not configured")
 	}
@@ -289,23 +304,18 @@ func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) e
 	if err != nil {
 		return err
 	}
+	reportSyncProgress(report, "Reading Discord channels")
 	snapshot, err := s.loadGuildChannelSnapshot(ctx)
 	if err != nil {
 		return err
 	}
-	controlChannelID, err := s.ensureControlChannelFromSnapshot(ctx, snapshot)
-	if err != nil {
-		return err
-	}
-	if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXControl, db.DiscordControlAGXID, db.DiscordTypeChannel, controlChannelID); err != nil {
-		return err
-	}
-	expectedChannelIDs := map[string]bool{controlChannelID: true}
+	reportSyncProgress(report, "Preparing AGX projects")
 	projects, err := s.store.ListProjects()
 	if err != nil {
 		return err
 	}
-	taskRequests := []taskChannelSyncRequest{}
+	groups := make([]projectTaskSyncGroup, 0, len(projects))
+	liveTaskIDs := map[string]bool{}
 	for _, project := range projects {
 		tasks, err := s.store.ListTasks(project.ID, nil)
 		if err != nil {
@@ -315,20 +325,40 @@ func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) e
 		for _, task := range tasks {
 			if shouldMirrorTask(task) {
 				mirroredTasks = append(mirroredTasks, task)
+				liveTaskIDs[task.ID] = true
 			}
 		}
-		if len(mirroredTasks) == 0 {
-			continue
+		if len(mirroredTasks) > 0 {
+			groups = append(groups, projectTaskSyncGroup{project: project, tasks: mirroredTasks})
 		}
-		categoryID, err := s.ensureProjectCategoryFromSnapshot(ctx, project, snapshot)
+	}
+	if cleanup {
+		reportSyncProgress(report, "Removing stale task channels")
+		if err := s.cleanupStaleTaskChannels(ctx, snapshot, initialMappings, liveTaskIDs); err != nil {
+			return err
+		}
+	}
+	controlChannelID, err := s.ensureControlChannelFromSnapshot(ctx, snapshot)
+	if err != nil {
+		return err
+	}
+	if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXControl, db.DiscordControlAGXID, db.DiscordTypeChannel, controlChannelID); err != nil {
+		return err
+	}
+	expectedChannelIDs := map[string]bool{controlChannelID: true}
+	taskRequests := []taskChannelSyncRequest{}
+	reportSyncProgress(report, "Syncing project categories")
+	for _, group := range groups {
+		categoryID, err := s.ensureProjectCategoryFromSnapshot(ctx, group.project, snapshot)
 		if err != nil {
 			return err
 		}
 		expectedChannelIDs[categoryID] = true
-		for _, task := range mirroredTasks {
-			taskRequests = append(taskRequests, taskChannelSyncRequest{project: project, task: task, categoryID: categoryID})
+		for _, task := range group.tasks {
+			taskRequests = append(taskRequests, taskChannelSyncRequest{project: group.project, task: task, categoryID: categoryID})
 		}
 	}
+	reportSyncProgress(report, fmt.Sprintf("Syncing %d task channels", len(taskRequests)))
 	taskChannelIDs, err := s.syncTaskChannelsConcurrently(ctx, snapshot, taskRequests)
 	if err != nil {
 		return err
@@ -337,14 +367,61 @@ func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) e
 		expectedChannelIDs[channelID] = true
 	}
 	if cleanup {
+		reportSyncProgress(report, "Removing stale AGX channels")
 		if err := s.cleanupManagedGuildChannels(ctx, snapshot, initialMappings, expectedChannelIDs); err != nil {
 			return err
 		}
 	}
 	if permissions, ok := s.client.(CommandPermissionClient); ok {
+		reportSyncProgress(report, "Refreshing Discord command permissions")
 		_ = permissions.ConfigureCommandPermissions(ctx, s.guild, controlChannelID, taskChannelIDs)
 	}
+	reportSyncProgress(report, "Soft sync completed")
 	return nil
+}
+
+func (s *Syncer) cleanupStaleTaskChannels(ctx context.Context, snapshot *guildChannelSnapshot, mappings []db.DiscordMapping, liveTaskIDs map[string]bool) error {
+	channelIDs := []string{}
+	staleMappings := []db.DiscordMapping{}
+	for _, mapping := range mappings {
+		if mapping.AGXType != db.DiscordAGXTask || liveTaskIDs[mapping.AGXID] {
+			continue
+		}
+		staleMappings = append(staleMappings, mapping)
+		if snapshot == nil {
+			channelIDs = append(channelIDs, mapping.DiscordID)
+			continue
+		}
+		if _, exists := snapshot.channel(mapping.DiscordID); exists {
+			channelIDs = append(channelIDs, mapping.DiscordID)
+		}
+	}
+	if err := deleteDiscordChannelsConcurrently(ctx, channelIDs, discordDeleteConcurrency, s.client.DeleteChannel); err != nil {
+		return err
+	}
+	for _, mapping := range staleMappings {
+		current, err := s.store.GetDiscordMapping(mapping.AGXType, mapping.AGXID)
+		if errors.Is(err, db.ErrDiscordMappingNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if current.DiscordID != mapping.DiscordID {
+			continue
+		}
+		if err := s.store.DeleteDiscordMapping(mapping.AGXType, mapping.AGXID); err != nil && !errors.Is(err, db.ErrDiscordMappingNotFound) {
+			return err
+		}
+		snapshot.remove(mapping.DiscordID)
+	}
+	return nil
+}
+
+func reportSyncProgress(report func(string), step string) {
+	if report != nil {
+		report(step)
+	}
 }
 
 func (s *Syncer) syncTaskChannelsConcurrently(ctx context.Context, snapshot *guildChannelSnapshot, requests []taskChannelSyncRequest) ([]string, error) {

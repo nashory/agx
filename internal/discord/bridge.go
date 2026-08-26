@@ -393,12 +393,25 @@ func (b *Bridge) activeSyncStatus() SyncStatusSummary {
 	return SyncStatusSummary{
 		Running:     true,
 		Kind:        owner.Kind,
+		Stage:       owner.CurrentStep,
 		SyncID:      owner.SyncID,
 		Priority:    owner.Priority,
 		TaskID:      owner.TaskID,
 		CurrentStep: owner.CurrentStep,
 		StartedAt:   &startedAt,
 		ElapsedMs:   time.Since(owner.StartedAt).Milliseconds(),
+	}
+}
+
+func (b *Bridge) updateActiveSyncStep(kind, step string) {
+	b.syncState.Lock()
+	defer b.syncState.Unlock()
+	for syncID, owner := range b.active {
+		if owner.Kind != kind {
+			continue
+		}
+		owner.CurrentStep = strings.TrimSpace(step)
+		b.active[syncID] = owner
 	}
 }
 
@@ -610,7 +623,9 @@ func (b *Bridge) SoftSync(ctx context.Context) error {
 	if store == nil {
 		return fmt.Errorf("discord sync store is not configured")
 	}
-	if err := NewSyncer(store, bot, cfg.GuildID).SyncActiveTasksWithCleanup(ctx, true); err != nil {
+	if err := NewSyncer(store, bot, cfg.GuildID).syncActiveTasksWithCleanup(ctx, true, func(step string) {
+		b.updateActiveSyncStep("soft", step)
+	}); err != nil {
 		b.setError(err)
 		return err
 	}

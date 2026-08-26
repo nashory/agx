@@ -99,8 +99,19 @@ describe('DiscordView', () => {
     await user.click(screen.getByRole('button', { name: 'Soft Sync' }));
 
     await waitFor(() => expect(api.DiscordSoftSync).toHaveBeenCalled());
-    expect(onLog).toHaveBeenCalledWith('[ok] discord soft sync');
+    expect(onLog).toHaveBeenCalledWith('[ok] discord soft sync started');
     expect(screen.getByText('synced')).not.toBeNull();
+  });
+
+  it('keeps sync controls locked while a background soft sync is running', () => {
+    renderDiscord({
+      ...connectedStatus,
+      sync: { running: true, kind: 'soft', stage: 'Syncing 24 task channels' },
+    });
+
+    expect(screen.getByRole('button', { name: 'Soft syncing...' })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Hard Sync' })[0]).toBeDisabled();
+    expect(screen.getByText('Syncing 24 task channels')).not.toBeNull();
   });
 
   it('shows connected status errors as sync warnings instead of connection failures', () => {

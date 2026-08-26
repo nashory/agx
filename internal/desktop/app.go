@@ -218,7 +218,7 @@ type DiscordStatusInfo struct {
 	Sync           DiscordSyncJob `json:"sync"`
 }
 
-// DiscordSyncJob tracks a background hard sync initiated from the desktop UI.
+// DiscordSyncJob tracks a background soft or hard sync shown in the desktop UI.
 type DiscordSyncJob struct {
 	Running     bool       `json:"running"`
 	Kind        string     `json:"kind,omitempty"`

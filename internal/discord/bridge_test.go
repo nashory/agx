@@ -92,6 +92,17 @@ func TestBridgeStatusMasksBotToken(t *testing.T) {
 	}
 }
 
+func TestBridgeStatusIncludesCurrentSyncStep(t *testing.T) {
+	bridge := NewBridge(config.DiscordConfig{})
+	bridge.setActiveSync(activeSync{SyncID: "sync-1", Kind: "soft", StartedAt: time.Now()})
+	bridge.updateActiveSyncStep("soft", "Syncing 12 task channels")
+
+	status := bridge.Status()
+	if !status.Sync.Running || status.Sync.Stage != "Syncing 12 task channels" || status.Sync.CurrentStep != status.Sync.Stage {
+		t.Fatalf("sync status = %#v, want current soft-sync step", status.Sync)
+	}
+}
+
 func TestBridgeConfigureSettersStopAndStatusCopy(t *testing.T) {
 	store, err := db.OpenMemory()
 	if err != nil {
