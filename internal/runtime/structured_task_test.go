@@ -454,6 +454,43 @@ func TestPendingStructuredDiscordTaskRejectsMessagesUntilStartup(t *testing.T) {
 	}
 }
 
+func TestDiscordDeliveryFailureDoesNotFailStructuredTaskStartup(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "queued", nil, "codex", true, db.TaskInterfaceDiscord, db.StatusWaiting, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+
+	service.prepareStructuredDiscordDelivery(task, func(string) error {
+		return context.DeadlineExceeded
+	})
+
+	updated, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != db.StatusWaiting {
+		t.Fatalf("task status = %q, want waiting after deferred Discord delivery", updated.Status)
+	}
+	messages, err := store.ListTaskTranscriptMessages(task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Role != "status" || !strings.Contains(messages[0].Body, "agent startup is continuing") {
+		t.Fatalf("transcript messages = %#v, want delayed Discord delivery notice", messages)
+	}
+}
+
 func TestCreateStructuredDiscordTaskReportsRollbackCleanupFailure(t *testing.T) {
 	t.Setenv("AGX_CONFIG_DIR", t.TempDir())
 	addExecutableToPath(t, "codex")

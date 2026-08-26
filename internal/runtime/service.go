@@ -620,9 +620,17 @@ func (s *Service) syncDiscordTaskAsync(taskID string) {
 		return
 	}
 	go func() {
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
+		select {
+		case <-s.backgroundContext().Done():
+			return
+		case <-timer.C:
+		}
 		if err := s.syncDiscordTaskNow(taskID); err != nil {
 			logRuntimeOperation("discord_task_sync_background", "task", display.ShortID(taskID), "error", err)
 			s.discord.RefreshTaskStreams(s.backgroundContext())
+			s.syncDiscordAsync()
 		}
 	}()
 }

@@ -134,11 +134,11 @@ func (s *Service) startStructuredDiscordTaskQueued(project db.Project, taskID st
 	s.publishStructuredTaskUpdate(task)
 	// The first structured turn can finish before an asynchronous Discord sync
 	// subscribes to agent events. Reconcile the channel and install the stream
-	// subscriber synchronously before launching Codex, Claude, or Muse.
-	if err := s.syncDiscordTaskNow(task.ID); err != nil {
-		s.markStructuredDiscordTaskStartupFailed(task, fmt.Errorf("prepare Discord task stream: %w", err))
-		return
-	}
+	// subscriber before launching Codex, Claude, or Muse when Discord is healthy.
+	// A transient Discord failure must not prevent the agent itself from running:
+	// transcript persistence and catch-up delivery recover messages after the
+	// channel sync succeeds in the background.
+	s.prepareStructuredDiscordDelivery(task, s.syncDiscordTaskNow)
 	ctx, cancel := s.backgroundTimeout(2 * time.Minute)
 	defer cancel()
 	if err := s.startStructuredDiscordTask(ctx, project, task, prompt); err != nil {
@@ -151,6 +151,23 @@ func (s *Service) startStructuredDiscordTaskQueued(project db.Project, taskID st
 		"task", shortDiagnosticID(task.ID),
 		"project", shortDiagnosticID(project.ID),
 	)
+}
+
+func (s *Service) prepareStructuredDiscordDelivery(task db.Task, syncTask func(string) error) {
+	if syncTask == nil {
+		return
+	}
+	if err := syncTask(task.ID); err != nil {
+		message := "Discord channel setup is delayed; agent startup is continuing and AGX will retry automatically. " + err.Error()
+		_ = s.store.AppendTaskTranscriptMessage(task.ID, "status", message, nil, nil)
+		s.publishStructuredTaskUpdate(task)
+		s.syncDiscordTaskAsync(task.ID)
+		logRuntimeOperation("structured_discord_delivery",
+			"status", "deferred",
+			"task", shortDiagnosticID(task.ID),
+			"error", err,
+		)
+	}
 }
 
 func (s *Service) startStructuredDiscordTask(ctx context.Context, project db.Project, task db.Task, prompt string) error {
