@@ -36,8 +36,8 @@ const (
 	GuildChannelOther    GuildChannelType = "other"
 )
 
-// GuildChannel is a lightweight guild channel snapshot used during hard cleanup
-// to remove channels AGX no longer expects.
+// GuildChannel is a lightweight guild channel snapshot used to reconcile and
+// clean up channels without repeatedly listing the entire guild.
 type GuildChannel struct {
 	ID       string
 	Name     string
@@ -55,6 +55,10 @@ type DirectCreateClient interface {
 	CreateTextChannel(ctx context.Context, guildID, categoryID, name, topic string) (string, error)
 }
 
+type ControlChannelCreator interface {
+	CreateControlChannel(ctx context.Context, guildID, name string) (string, error)
+}
+
 type CommandPermissionClient interface {
 	ConfigureCommandPermissions(ctx context.Context, guildID, controlChannelID string, taskChannelIDs []string) error
 }
@@ -66,6 +70,51 @@ type Syncer struct {
 	client  SyncClient
 	guild   string
 	rebuild bool
+}
+
+type guildChannelSnapshot struct {
+	channels map[string]GuildChannel
+	order    []string
+}
+
+func newGuildChannelSnapshot(channels []GuildChannel) *guildChannelSnapshot {
+	snapshot := &guildChannelSnapshot{
+		channels: make(map[string]GuildChannel, len(channels)),
+		order:    make([]string, 0, len(channels)),
+	}
+	for _, channel := range channels {
+		snapshot.add(channel)
+	}
+	return snapshot
+}
+
+func (s *guildChannelSnapshot) channel(channelID string) (GuildChannel, bool) {
+	if s == nil {
+		return GuildChannel{}, false
+	}
+	channel, ok := s.channels[channelID]
+	return channel, ok
+}
+
+func (s *guildChannelSnapshot) find(channelType GuildChannelType, parentID, name string) (GuildChannel, bool) {
+	if s == nil {
+		return GuildChannel{}, false
+	}
+	for _, channel := range s.channels {
+		if channel.Type == channelType && channel.ParentID == parentID && channel.Name == name {
+			return channel, true
+		}
+	}
+	return GuildChannel{}, false
+}
+
+func (s *guildChannelSnapshot) add(channel GuildChannel) {
+	if s != nil && strings.TrimSpace(channel.ID) != "" {
+		if _, exists := s.channels[channel.ID]; !exists {
+			s.order = append(s.order, channel.ID)
+		}
+		s.channels[channel.ID] = channel
+	}
 }
 
 // NewSyncer creates an idempotent soft-syncer. It prefers updating existing
@@ -228,7 +277,15 @@ func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) e
 	if strings.TrimSpace(s.guild) == "" {
 		return fmt.Errorf("discord guild id is required")
 	}
-	controlChannelID, err := s.client.EnsureControlChannel(ctx, s.guild, controlChannelName)
+	initialMappings, err := s.store.ListDiscordMappings()
+	if err != nil {
+		return err
+	}
+	snapshot, err := s.loadGuildChannelSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	controlChannelID, err := s.ensureControlChannelFromSnapshot(ctx, snapshot)
 	if err != nil {
 		return err
 	}
@@ -240,7 +297,6 @@ func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) e
 	if err != nil {
 		return err
 	}
-	mirroredTaskIDs := map[string]bool{}
 	taskChannelIDs := []string{}
 	for _, project := range projects {
 		tasks, err := s.store.ListTasks(project.ID, nil)
@@ -256,26 +312,22 @@ func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) e
 		if len(mirroredTasks) == 0 {
 			continue
 		}
-		categoryID, err := s.ensureProjectCategory(ctx, project)
+		categoryID, err := s.ensureProjectCategoryFromSnapshot(ctx, project, snapshot)
 		if err != nil {
 			return err
 		}
 		expectedChannelIDs[categoryID] = true
 		for _, task := range mirroredTasks {
-			channelID, err := s.ensureTaskChannel(ctx, project, task, categoryID)
+			channelID, err := s.ensureTaskChannelFromSnapshot(ctx, project, task, categoryID, snapshot)
 			if err != nil {
 				return err
 			}
-			mirroredTaskIDs[task.ID] = true
 			taskChannelIDs = append(taskChannelIDs, channelID)
 			expectedChannelIDs[channelID] = true
 		}
 	}
 	if cleanup {
-		if err := s.cleanupUnmirroredTaskChannels(ctx, mirroredTaskIDs); err != nil {
-			return err
-		}
-		if err := s.cleanupUnexpectedGuildChannels(ctx, expectedChannelIDs); err != nil {
+		if err := s.cleanupManagedGuildChannels(ctx, snapshot, initialMappings, expectedChannelIDs); err != nil {
 			return err
 		}
 	}
@@ -283,6 +335,197 @@ func (s *Syncer) SyncActiveTasksWithCleanup(ctx context.Context, cleanup bool) e
 		_ = permissions.ConfigureCommandPermissions(ctx, s.guild, controlChannelID, taskChannelIDs)
 	}
 	return nil
+}
+
+func (s *Syncer) cleanupManagedGuildChannels(ctx context.Context, snapshot *guildChannelSnapshot, initialMappings []db.DiscordMapping, expectedChannelIDs map[string]bool) error {
+	currentMappings, err := s.store.ListDiscordMappings()
+	if err != nil {
+		return err
+	}
+	allMappings := append(append([]db.DiscordMapping(nil), initialMappings...), currentMappings...)
+	mappedChannelIDs := map[string]bool{}
+	mappedCategoryIDs := map[string]bool{}
+	mappingsByChannelID := map[string][]db.DiscordMapping{}
+	for _, mapping := range allMappings {
+		channelID := strings.TrimSpace(mapping.DiscordID)
+		if channelID == "" {
+			continue
+		}
+		mappedChannelIDs[channelID] = true
+		mappingsByChannelID[channelID] = append(mappingsByChannelID[channelID], mapping)
+		if mapping.DiscordType == db.DiscordTypeCategory {
+			mappedCategoryIDs[channelID] = true
+		}
+	}
+
+	nonCategories := []string{}
+	categories := []string{}
+	if snapshot == nil {
+		for channelID := range mappedChannelIDs {
+			if expectedChannelIDs[channelID] {
+				continue
+			}
+			if mappedCategoryIDs[channelID] {
+				categories = append(categories, channelID)
+			} else {
+				nonCategories = append(nonCategories, channelID)
+			}
+		}
+	} else {
+		for _, channelID := range snapshot.order {
+			channel := snapshot.channels[channelID]
+			if expectedChannelIDs[channel.ID] {
+				continue
+			}
+			managed := mappedChannelIDs[channel.ID] || mappedCategoryIDs[channel.ParentID]
+			if !managed {
+				continue
+			}
+			if channel.Type == GuildChannelCategory {
+				categories = append(categories, channel.ID)
+			} else {
+				nonCategories = append(nonCategories, channel.ID)
+			}
+		}
+	}
+
+	if err := deleteDiscordChannelsConcurrently(ctx, nonCategories, discordDeleteConcurrency, s.client.DeleteChannel); err != nil {
+		return err
+	}
+	if err := deleteDiscordChannelsConcurrently(ctx, categories, discordDeleteConcurrency, s.client.DeleteChannel); err != nil {
+		return err
+	}
+	deleted := map[string]bool{}
+	for _, channelID := range append(nonCategories, categories...) {
+		deleted[channelID] = true
+	}
+	if snapshot != nil {
+		for channelID := range mappedChannelIDs {
+			if expectedChannelIDs[channelID] {
+				continue
+			}
+			if _, exists := snapshot.channel(channelID); !exists {
+				deleted[channelID] = true
+			}
+		}
+	}
+	for channelID := range deleted {
+		for _, mapping := range mappingsByChannelID[channelID] {
+			current, err := s.store.GetDiscordMapping(mapping.AGXType, mapping.AGXID)
+			if errors.Is(err, db.ErrDiscordMappingNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if current.DiscordID != channelID {
+				continue
+			}
+			if err := s.store.DeleteDiscordMapping(mapping.AGXType, mapping.AGXID); err != nil && !errors.Is(err, db.ErrDiscordMappingNotFound) {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Syncer) loadGuildChannelSnapshot(ctx context.Context) (*guildChannelSnapshot, error) {
+	lister, ok := s.client.(GuildChannelLister)
+	if !ok {
+		return nil, nil
+	}
+	channels, err := lister.ListGuildChannels(ctx, s.guild)
+	if err != nil {
+		return nil, err
+	}
+	return newGuildChannelSnapshot(channels), nil
+}
+
+func (s *Syncer) ensureControlChannelFromSnapshot(ctx context.Context, snapshot *guildChannelSnapshot) (string, error) {
+	if snapshot == nil {
+		return s.client.EnsureControlChannel(ctx, s.guild, controlChannelName)
+	}
+	if channel, ok := snapshot.find(GuildChannelText, "", SanitizeTextChannelName(controlChannelName)); ok {
+		if err := s.client.UpdateChannelTopic(ctx, channel.ID, ""); err == nil {
+			return channel.ID, nil
+		}
+	}
+	if creator, ok := s.client.(ControlChannelCreator); ok {
+		channelID, err := creator.CreateControlChannel(ctx, s.guild, controlChannelName)
+		if err != nil {
+			return "", err
+		}
+		snapshot.add(GuildChannel{ID: channelID, Name: SanitizeTextChannelName(controlChannelName), Type: GuildChannelText})
+		return channelID, nil
+	}
+	return s.client.EnsureControlChannel(ctx, s.guild, controlChannelName)
+}
+
+func (s *Syncer) ensureProjectCategoryFromSnapshot(ctx context.Context, project db.Project, snapshot *guildChannelSnapshot) (string, error) {
+	if snapshot == nil {
+		return s.ensureProjectCategory(ctx, project)
+	}
+	name := FormatCategoryName(project.Name)
+	if !s.rebuild {
+		if channel, ok := snapshot.find(GuildChannelCategory, "", name); ok {
+			if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXProject, project.ID, db.DiscordTypeCategory, channel.ID); err != nil {
+				return "", err
+			}
+			return channel.ID, nil
+		}
+	}
+	creator, ok := s.client.(DirectCreateClient)
+	if !ok {
+		return s.ensureProjectCategory(ctx, project)
+	}
+	categoryID, err := creator.CreateCategory(ctx, s.guild, name)
+	if err != nil {
+		return "", err
+	}
+	snapshot.add(GuildChannel{ID: categoryID, Name: name, Type: GuildChannelCategory})
+	if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXProject, project.ID, db.DiscordTypeCategory, categoryID); err != nil {
+		return "", err
+	}
+	return categoryID, nil
+}
+
+func (s *Syncer) ensureTaskChannelFromSnapshot(ctx context.Context, project db.Project, task db.Task, categoryID string, snapshot *guildChannelSnapshot) (string, error) {
+	if snapshot == nil {
+		return s.ensureTaskChannel(ctx, project, task, categoryID)
+	}
+	name := TaskChannelName(task)
+	snapshotName := SanitizeTextChannelName(name)
+	topic := TaskTopic(project, task)
+	if !s.rebuild {
+		if mapping, err := s.store.GetDiscordMapping(db.DiscordAGXTask, task.ID); err == nil {
+			if channel, ok := snapshot.channel(mapping.DiscordID); ok && channel.Type == GuildChannelText {
+				if err := s.client.UpdateTextChannel(ctx, channel.ID, name, topic); err == nil {
+					return channel.ID, nil
+				}
+			}
+		}
+		if channel, ok := snapshot.find(GuildChannelText, categoryID, snapshotName); ok {
+			if err := s.client.UpdateTextChannel(ctx, channel.ID, name, topic); err == nil {
+				if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXTask, task.ID, db.DiscordTypeChannel, channel.ID); err != nil {
+					return "", err
+				}
+				return channel.ID, nil
+			}
+		}
+	}
+	creator, ok := s.client.(DirectCreateClient)
+	if !ok {
+		return s.ensureTaskChannel(ctx, project, task, categoryID)
+	}
+	channelID, err := creator.CreateTextChannel(ctx, s.guild, categoryID, name, topic)
+	if err != nil {
+		return "", err
+	}
+	snapshot.add(GuildChannel{ID: channelID, Name: snapshotName, ParentID: categoryID, Topic: topic, Type: GuildChannelText})
+	if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXTask, task.ID, db.DiscordTypeChannel, channelID); err != nil {
+		return "", err
+	}
+	return channelID, nil
 }
 
 // RefreshCommandPermissions updates slash-command visibility for the current
@@ -414,84 +657,6 @@ func (s *Syncer) DeleteTaskChannelWithFallback(ctx context.Context, taskID, fall
 		return err
 	}
 	return s.store.DeleteDiscordMapping(db.DiscordAGXTask, taskID)
-}
-
-// cleanupUnmirroredTaskChannels removes task mappings that no longer correspond
-// to live Discord-controlled tasks. This is the soft-sync orphan cleanup path.
-func (s *Syncer) cleanupUnmirroredTaskChannels(ctx context.Context, mirroredTaskIDs map[string]bool) error {
-	mappings, err := s.store.ListDiscordMappings()
-	if err != nil {
-		return err
-	}
-	for _, mapping := range mappings {
-		if mapping.AGXType != db.DiscordAGXTask || mirroredTaskIDs[mapping.AGXID] {
-			continue
-		}
-		task, err := s.store.GetTask(mapping.AGXID)
-		if err == nil && shouldMirrorTask(task) {
-			continue
-		}
-		if err != nil && !errors.Is(err, db.ErrTaskNotFound) {
-			return err
-		}
-		if err := s.client.DeleteChannel(ctx, mapping.DiscordID); err != nil {
-			return err
-		}
-		if err := s.store.DeleteDiscordMapping(db.DiscordAGXTask, mapping.AGXID); err != nil && !errors.Is(err, db.ErrDiscordMappingNotFound) {
-			return err
-		}
-	}
-	return nil
-}
-
-// cleanupUnexpectedGuildChannels removes AGX playground channels that are not in
-// the expected set. Non-categories are deleted before categories so Discord does
-// not reject deletion of non-empty parents.
-func (s *Syncer) cleanupUnexpectedGuildChannels(ctx context.Context, expectedChannelIDs map[string]bool) error {
-	lister, ok := s.client.(GuildChannelLister)
-	if !ok {
-		return nil
-	}
-	channels, err := lister.ListGuildChannels(ctx, s.guild)
-	if err != nil {
-		return err
-	}
-	nonCategories := []string{}
-	categories := []string{}
-	deleted := map[string]bool{}
-	for _, channel := range channels {
-		if expectedChannelIDs[channel.ID] {
-			continue
-		}
-		if channel.Type == GuildChannelCategory {
-			categories = append(categories, channel.ID)
-		} else {
-			nonCategories = append(nonCategories, channel.ID)
-		}
-		deleted[channel.ID] = true
-	}
-	if err := deleteDiscordChannelsConcurrently(ctx, nonCategories, discordDeleteConcurrency, s.client.DeleteChannel); err != nil {
-		return err
-	}
-	if err := deleteDiscordChannelsConcurrently(ctx, categories, discordDeleteConcurrency, s.client.DeleteChannel); err != nil {
-		return err
-	}
-	if len(deleted) == 0 {
-		return nil
-	}
-	mappings, err := s.store.ListDiscordMappings()
-	if err != nil {
-		return err
-	}
-	for _, mapping := range mappings {
-		if !deleted[mapping.DiscordID] {
-			continue
-		}
-		if err := s.store.DeleteDiscordMapping(mapping.AGXType, mapping.AGXID); err != nil && !errors.Is(err, db.ErrDiscordMappingNotFound) {
-			return err
-		}
-	}
-	return nil
 }
 
 func shouldMirrorTask(task db.Task) bool {

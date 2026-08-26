@@ -22,6 +22,7 @@ type fakeSyncClient struct {
 	ensureTextCalls     int
 	createCategoryCalls int
 	createTextCalls     int
+	listGuildCalls      int
 	permissionControl   string
 	permissionTasks     []string
 	ensureTextErr       error
@@ -39,6 +40,11 @@ func newFakeSyncClient() *fakeSyncClient {
 }
 
 func (f *fakeSyncClient) EnsureControlChannel(ctx context.Context, guildID, name string) (string, error) {
+	f.control = name
+	return "control-1", nil
+}
+
+func (f *fakeSyncClient) CreateControlChannel(ctx context.Context, guildID, name string) (string, error) {
 	f.control = name
 	return "control-1", nil
 }
@@ -135,6 +141,7 @@ func (f *fakeSyncClient) DeleteChannel(ctx context.Context, channelID string) er
 }
 
 func (f *fakeSyncClient) ListGuildChannels(ctx context.Context, guildID string) ([]GuildChannel, error) {
+	f.listGuildCalls++
 	out := make([]GuildChannel, 0, len(f.category)+len(f.text)+len(f.extraChannels))
 	for name, id := range f.category {
 		out = append(out, GuildChannel{ID: id, Name: name, Type: GuildChannelCategory})
@@ -183,6 +190,9 @@ func TestSyncActiveTasksCreatesMappings(t *testing.T) {
 	}
 	if client.control != controlChannelName {
 		t.Fatalf("control = %q, want %q", client.control, controlChannelName)
+	}
+	if client.listGuildCalls != 1 {
+		t.Fatalf("guild channel list calls = %d, want one snapshot", client.listGuildCalls)
 	}
 	mappings, err := store.ListDiscordMappings()
 	if err != nil {
@@ -709,6 +719,7 @@ func TestSyncActiveTasksWithCleanupDeletesUnmirroredTaskChannels(t *testing.T) {
 	}
 
 	client := newFakeSyncClient()
+	client.extraChannels = []GuildChannel{{ID: "channel-stale", Name: "complete-task", Type: GuildChannelText}}
 	if err := NewSyncer(store, client, "guild-1").SyncActiveTasksWithCleanup(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
@@ -740,6 +751,7 @@ func TestSyncActiveTasksWithCleanupPreservesMappingWhenDeleteFails(t *testing.T)
 	}
 	deleteErr := errors.New("discord permission denied")
 	client := newFakeSyncClient()
+	client.extraChannels = []GuildChannel{{ID: "channel-stale", Name: "complete-task", Type: GuildChannelText}}
 	client.deleteErrs = map[string]error{"channel-stale": deleteErr}
 
 	err = NewSyncer(store, client, "guild-1").SyncActiveTasksWithCleanup(context.Background(), true)
@@ -836,6 +848,29 @@ func TestSyncActiveTasksWithCleanupDeletesUnmappedGuildChannels(t *testing.T) {
 	}
 	if _, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID); err != nil {
 		t.Fatalf("live task mapping error = %v", err)
+	}
+}
+
+func TestSyncActiveTasksWithCleanupPreservesUnmanagedGuildChannels(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	client := newFakeSyncClient()
+	client.extraChannels = []GuildChannel{
+		{ID: "personal-text", Name: "general", Type: GuildChannelText},
+		{ID: "personal-category", Name: "Community", Type: GuildChannelCategory},
+	}
+	if err := NewSyncer(store, client, "guild-1").SyncActiveTasksWithCleanup(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.deleted) != 0 {
+		t.Fatalf("deleted = %#v, want unmanaged channels preserved", client.deleted)
+	}
+	if client.listGuildCalls != 1 {
+		t.Fatalf("guild channel list calls = %d, want one snapshot", client.listGuildCalls)
 	}
 }
 

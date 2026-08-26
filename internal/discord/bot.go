@@ -245,6 +245,10 @@ func (b *Bot) EnsureControlChannel(ctx context.Context, guildID, name string) (s
 	return b.ensureTextChannel(ctx, guildID, "", name, "")
 }
 
+func (b *Bot) CreateControlChannel(ctx context.Context, guildID, name string) (string, error) {
+	return b.CreateTextChannel(ctx, guildID, "", name, "")
+}
+
 func (b *Bot) EnsureCategory(ctx context.Context, guildID, name string) (string, error) {
 	channel, err := b.findGuildChannel(ctx, guildID, name, discordgo.ChannelTypeGuildCategory, "")
 	if err != nil {
@@ -309,7 +313,7 @@ func (b *Bot) UpdateTextChannel(ctx context.Context, channelID, name, topic stri
 	_, err := b.session.ChannelEdit(channelID, &discordgo.ChannelEdit{
 		Name:  SanitizeTextChannelName(name),
 		Topic: topic,
-	})
+	}, connectRequestOptions(ctx)...)
 	return err
 }
 
@@ -317,7 +321,7 @@ func (b *Bot) DeleteChannel(ctx context.Context, channelID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	_, err := b.session.ChannelDelete(channelID)
+	_, err := b.session.ChannelDelete(channelID, connectRequestOptions(ctx)...)
 	return err
 }
 
