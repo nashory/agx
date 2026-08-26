@@ -30,6 +30,8 @@ type fakeSyncClient struct {
 	permissionControl   string
 	permissionTasks     []string
 	ensureTextErr       error
+	createTextErr       error
+	createTextOnError   bool
 	invalidCategoryIDs  map[string]error
 	deleteErrs          map[string]error
 	updateStarted       chan struct{}
@@ -94,7 +96,20 @@ func (f *fakeSyncClient) CreateTextChannel(ctx context.Context, guildID, categor
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createTextCalls++
-	return f.createTextChannel(categoryID, name, topic, "direct-channel-")
+	channelID, err := f.createTextChannel(categoryID, name, topic, "direct-channel-")
+	if f.createTextErr != nil {
+		if !f.createTextOnError {
+			for key, id := range f.text {
+				if id == channelID {
+					delete(f.text, key)
+				}
+			}
+			delete(f.topics, channelID)
+			delete(f.names, channelID)
+		}
+		return "", f.createTextErr
+	}
+	return channelID, err
 }
 
 func (f *fakeSyncClient) createTextChannel(categoryID, name, topic, prefix string) (string, error) {
@@ -565,11 +580,58 @@ func TestSyncTaskChannelFastSkipsControlAndPermissions(t *testing.T) {
 	if client.permissionControl != "" || len(client.permissionTasks) != 0 {
 		t.Fatalf("permissions = %q %#v, want deferred permission refresh", client.permissionControl, client.permissionTasks)
 	}
-	if client.ensureTextCalls != 1 {
-		t.Fatalf("ensure text calls = %d, want one task channel", client.ensureTextCalls)
+	if client.ensureTextCalls != 0 || client.listGuildCalls != 0 {
+		t.Fatalf("ensure/list calls = %d/%d, want direct task channel creation", client.ensureTextCalls, client.listGuildCalls)
+	}
+	if client.createTextCalls != 1 {
+		t.Fatalf("create text calls = %d, want one direct task channel creation", client.createTextCalls)
+	}
+	if client.createCategoryCalls != 1 {
+		t.Fatalf("create category calls = %d, want one direct project category creation", client.createCategoryCalls)
 	}
 	if _, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID); err != nil {
 		t.Fatalf("requested task mapping error = %v", err)
+	}
+}
+
+func TestSyncTaskChannelFastRetryFindsAmbiguousFirstCreate(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "active task", nil, "claude", false, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := newFakeSyncClient()
+	client.createTextErr = context.DeadlineExceeded
+	client.createTextOnError = true
+	syncer := NewSyncer(store, client, "guild-1")
+	if err := syncer.SyncTaskChannelFast(context.Background(), task.ID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first sync error = %v, want deadline exceeded", err)
+	}
+	client.createTextErr = nil
+	if err := syncer.SyncTaskChannelFast(context.Background(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if client.createTextCalls != 1 || client.ensureTextCalls != 1 {
+		t.Fatalf("create/ensure calls = %d/%d, want direct create then lookup retry", client.createTextCalls, client.ensureTextCalls)
+	}
+	if len(client.names) != 1 {
+		t.Fatalf("created channels = %#v, want one recovered channel", client.names)
+	}
+	state, err := store.GetDiscordTaskSyncState(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != db.DiscordTaskSyncSynced || state.Attempts != 2 {
+		t.Fatalf("sync state = %#v, want recovered second attempt", state)
 	}
 }
 

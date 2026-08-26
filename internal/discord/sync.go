@@ -187,7 +187,8 @@ func (s *Syncer) syncTaskChannel(ctx context.Context, taskID string, refreshPerm
 		return s.DeleteTaskChannel(ctx, taskID)
 	}
 	step = time.Now()
-	if _, err := s.store.UpsertDiscordTaskSyncPending(task.ID); err != nil {
+	syncState, err := s.store.UpsertDiscordTaskSyncPending(task.ID)
+	if err != nil {
 		return err
 	}
 	logDiscordSyncStep("discord_task_sync_step", taskID, "mark_pending", step, nil)
@@ -213,13 +214,18 @@ func (s *Syncer) syncTaskChannel(ctx context.Context, taskID string, refreshPerm
 		logDiscordSyncStep("discord_task_sync_step", taskID, "store_control_mapping", step, nil)
 	}
 	step = time.Now()
-	categoryID, trustedCategory, err := s.ensureProjectCategoryForTaskSync(ctx, project, refreshPermissions)
+	categoryID, trustedCategory, err := s.ensureProjectCategoryForTaskSync(ctx, project, refreshPermissions, syncState.Attempts == 1)
 	logDiscordSyncStep("discord_task_sync_step", taskID, "ensure_category", step, err)
 	if err != nil {
 		return s.recordTaskSyncFailure(task.ID, err)
 	}
 	step = time.Now()
-	channelID, err := s.ensureTaskChannel(ctx, project, task, categoryID)
+	channelID := ""
+	if refreshPermissions {
+		channelID, err = s.ensureTaskChannel(ctx, project, task, categoryID)
+	} else {
+		channelID, err = s.ensureTaskChannelFast(ctx, project, task, categoryID, syncState.Attempts == 1)
+	}
 	logDiscordSyncStep("discord_task_sync_step", taskID, "ensure_channel", step, err)
 	if err != nil && !trustedCategory {
 		step = time.Now()
@@ -227,7 +233,11 @@ func (s *Syncer) syncTaskChannel(ctx context.Context, taskID string, refreshPerm
 		logDiscordSyncStep("discord_task_sync_step", taskID, "repair_category", step, err)
 		if err == nil {
 			step = time.Now()
-			channelID, err = s.ensureTaskChannel(ctx, project, task, categoryID)
+			if refreshPermissions {
+				channelID, err = s.ensureTaskChannel(ctx, project, task, categoryID)
+			} else {
+				channelID, err = s.ensureTaskChannelFast(ctx, project, task, categoryID, syncState.Attempts == 1)
+			}
 			logDiscordSyncStep("discord_task_sync_step", taskID, "ensure_channel_after_category_repair", step, err)
 		}
 	}
@@ -251,10 +261,23 @@ func (s *Syncer) syncTaskChannel(ctx context.Context, taskID string, refreshPerm
 	return nil
 }
 
-func (s *Syncer) ensureProjectCategoryForTaskSync(ctx context.Context, project db.Project, refreshPermissions bool) (string, bool, error) {
+func (s *Syncer) ensureProjectCategoryForTaskSync(ctx context.Context, project db.Project, refreshPermissions, firstAttempt bool) (string, bool, error) {
 	if !refreshPermissions {
 		if mapping, err := s.store.GetDiscordMapping(db.DiscordAGXProject, project.ID); err == nil && strings.TrimSpace(mapping.DiscordID) != "" {
 			return mapping.DiscordID, false, nil
+		}
+		if firstAttempt {
+			if creator, ok := s.client.(DirectCreateClient); ok {
+				name := FormatCategoryName(project.Name)
+				categoryID, err := creator.CreateCategory(ctx, s.guild, name)
+				if err != nil {
+					return "", true, err
+				}
+				if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXProject, project.ID, db.DiscordTypeCategory, categoryID); err != nil {
+					return "", true, err
+				}
+				return categoryID, true, nil
+			}
 		}
 	}
 	categoryID, err := s.ensureProjectCategory(ctx, project)
@@ -726,6 +749,37 @@ func (s *Syncer) ensureTaskChannel(ctx context.Context, project db.Project, task
 		return "", err
 	}
 	return channelID, nil
+}
+
+// ensureTaskChannelFast avoids a guild-wide channel listing on the first sync
+// for a newly-created task. Task channel names contain the task's stable short
+// ID, so direct creation is collision-resistant. A later retry falls back to
+// the idempotent lookup path in case Discord created the channel but the first
+// response was lost or timed out before AGX stored its mapping.
+func (s *Syncer) ensureTaskChannelFast(ctx context.Context, project db.Project, task db.Task, categoryID string, firstAttempt bool) (string, error) {
+	name := TaskChannelName(task)
+	topic := TaskTopic(project, task)
+	if mapping, err := s.store.GetDiscordMapping(db.DiscordAGXTask, task.ID); err == nil {
+		if err := s.client.UpdateTextChannel(ctx, mapping.DiscordID, name, topic); err == nil {
+			return mapping.DiscordID, nil
+		}
+		return s.ensureTaskChannel(ctx, project, task, categoryID)
+	} else if !errors.Is(err, db.ErrDiscordMappingNotFound) {
+		return "", err
+	}
+	if firstAttempt {
+		if creator, ok := s.client.(DirectCreateClient); ok {
+			channelID, err := creator.CreateTextChannel(ctx, s.guild, categoryID, name, topic)
+			if err != nil {
+				return "", err
+			}
+			if _, err := s.store.UpsertDiscordMapping(db.DiscordAGXTask, task.ID, db.DiscordTypeChannel, channelID); err != nil {
+				return "", err
+			}
+			return channelID, nil
+		}
+	}
+	return s.ensureTaskChannel(ctx, project, task, categoryID)
 }
 
 func (s *Syncer) mappedTaskChannelIDs() []string {
