@@ -27,6 +27,7 @@ type fakeCodexRuntime struct {
 	nextTurnID   string
 	threadErr    error
 	resumeErr    error
+	resumeResult codexapp.ThreadStartResponse
 	dirtyThread  bool
 	approvals    chan codexapp.ReviewDecision
 }
@@ -58,7 +59,7 @@ func (f *fakeCodexRuntime) ThreadStart(_ context.Context, cwd string, allMighty 
 }
 
 func (f *fakeCodexRuntime) ThreadResume(context.Context, string) (codexapp.ThreadStartResponse, error) {
-	return codexapp.ThreadStartResponse{}, f.resumeErr
+	return f.resumeResult, f.resumeErr
 }
 
 func (f *fakeCodexRuntime) TurnStart(_ context.Context, threadID, text, cwd string, allMighty bool) (codexapp.TurnStartResponse, error) {
@@ -125,6 +126,124 @@ func TestEnsureCodexThreadPreservesContextOnTransientResumeFailure(t *testing.T)
 	}
 	if updated.AgentThreadID == nil || *updated.AgentThreadID != threadID {
 		t.Fatalf("AgentThreadID = %#v, want preserved thread", updated.AgentThreadID)
+	}
+}
+
+func TestEnsureCodexThreadRestoresInProgressTurn(t *testing.T) {
+	app, project := newTestApp(t)
+	threadID := "existing-thread"
+	streamKind := codexapp.StreamKind
+	task, err := app.store.CreateTask(project.ID, "structured", nil, "codex", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	task, err = app.store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeCodexRuntime()
+	fake.resumeResult = codexapp.ThreadStartResponse{Thread: codexapp.Thread{
+		ID:    threadID,
+		Turns: []codexapp.Turn{{ID: "turn-live", Status: codexapp.TurnStatusInProgress}},
+	}}
+	app.agentEvents.codex = fake
+
+	if err := app.agentEvents.SendTaskMessage(context.Background(), task, project, "follow up"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.steeredText != "follow up" {
+		t.Fatalf("steered text = %q, want follow up", fake.steeredText)
+	}
+	if fake.startedText != "" {
+		t.Fatalf("TurnStart text = %q, want no new turn", fake.startedText)
+	}
+}
+
+func TestEnsureCodexThreadMarksInterruptedTurnWithoutRetry(t *testing.T) {
+	app, project := newTestApp(t)
+	threadID := "existing-thread"
+	streamKind := codexapp.StreamKind
+	task, err := app.store.CreateTask(project.ID, "structured", nil, "codex", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	task, err = app.store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.agentEvents.activeTurns[task.ID] = "stale-turn"
+	fake := newFakeCodexRuntime()
+	fake.resumeResult = codexapp.ThreadStartResponse{Thread: codexapp.Thread{
+		ID:    threadID,
+		Turns: []codexapp.Turn{{ID: "turn-interrupted", Status: codexapp.TurnStatusInterrupted}},
+	}}
+
+	if _, err := app.agentEvents.ensureCodexThread(context.Background(), fake, task, project); err != nil {
+		t.Fatal(err)
+	}
+	if active := app.agentEvents.activeTurns[task.ID]; active != "" {
+		t.Fatalf("active turn = %q, want cleared", active)
+	}
+	updated, err := app.store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != db.StatusWaiting {
+		t.Fatalf("task status = %q, want waiting", updated.Status)
+	}
+	messages, err := app.store.ListTaskTranscriptMessages(task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Role != "status" || !strings.Contains(messages[0].Body, "not retried automatically") {
+		t.Fatalf("transcript messages = %#v, want interruption notice", messages)
+	}
+}
+
+func TestDelayedCodexCompletionDoesNotClearNewerTurn(t *testing.T) {
+	app, project := newTestApp(t)
+	task, err := app.store.CreateTask(project.ID, "structured", nil, "codex", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := "thread-1"
+	streamKind := codexapp.StreamKind
+	if err := app.store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeCodexRuntime()
+	app.agentEvents.threadToTask[threadID] = task.ID
+	app.agentEvents.activeTurns[task.ID] = "turn-new"
+	done := make(chan struct{})
+	go func() {
+		app.agentEvents.forwardCodexEvents(fake)
+		close(done)
+	}()
+	fake.events <- codexapp.Notification{
+		Method: codexapp.NotifyTurnCompleted,
+		Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-old","status":"completed"}}`),
+	}
+	close(fake.events)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Codex event forwarder did not stop")
+	}
+	if active := app.agentEvents.activeTurns[task.ID]; active != "turn-new" {
+		t.Fatalf("active turn = %q, want turn-new", active)
+	}
+	updated, err := app.store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != db.StatusActive {
+		t.Fatalf("task status = %q, want active", updated.Status)
 	}
 }
 

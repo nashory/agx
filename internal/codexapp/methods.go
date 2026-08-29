@@ -33,13 +33,45 @@ type TurnSteerResponse struct {
 }
 
 type Thread struct {
-	ID  string `json:"id"`
-	Cwd string `json:"cwd"`
+	ID    string `json:"id"`
+	Cwd   string `json:"cwd"`
+	Turns []Turn `json:"turns"`
 }
 
 type Turn struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
+}
+
+const (
+	TurnStatusCompleted   = "completed"
+	TurnStatusInterrupted = "interrupted"
+	TurnStatusFailed      = "failed"
+	TurnStatusInProgress  = "inProgress"
+)
+
+// LatestTurn returns the most recent turn included in a thread/resume response.
+// Codex only populates Thread.Turns for APIs that load persisted history.
+func (t Thread) LatestTurn() (Turn, bool) {
+	if len(t.Turns) == 0 {
+		return Turn{}, false
+	}
+	return t.Turns[len(t.Turns)-1], true
+}
+
+// IsInProgress reports whether Codex considers a turn live. "running" is kept
+// for compatibility with older app-server responses and existing test fakes.
+func (t Turn) IsInProgress() bool {
+	status := strings.ToLower(strings.TrimSpace(t.Status))
+	return status == strings.ToLower(TurnStatusInProgress) || status == "running"
+}
+
+func (t Turn) IsInterrupted() bool {
+	return strings.EqualFold(strings.TrimSpace(t.Status), TurnStatusInterrupted)
+}
+
+func (t Turn) IsFailed() bool {
+	return strings.EqualFold(strings.TrimSpace(t.Status), TurnStatusFailed)
 }
 
 // Initialize performs the app-server handshake and returns server metadata.

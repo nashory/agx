@@ -384,7 +384,7 @@ func (s *agentEventService) ensureCodex(ctx context.Context) (codexRuntime, erro
 func (s *agentEventService) ensureCodexThread(ctx context.Context, client codexRuntime, task db.Task, project db.Project) (string, error) {
 	if task.AgentThreadID != nil && strings.TrimSpace(*task.AgentThreadID) != "" {
 		threadID := strings.TrimSpace(*task.AgentThreadID)
-		if _, err := client.ThreadResume(ctx, threadID); err == nil {
+		if resumed, err := client.ThreadResume(ctx, threadID); err == nil {
 			streamKind := codexapp.StreamKind
 			if task.AgentStreamKind == nil || strings.TrimSpace(*task.AgentStreamKind) == "" {
 				if err := s.runtime.store.UpdateTaskAgentStream(task.ID, &threadID, task.AgentEventCursor, &streamKind); err != nil {
@@ -392,6 +392,7 @@ func (s *agentEventService) ensureCodexThread(ctx context.Context, client codexR
 				}
 			}
 			s.rememberThread(task.ID, threadID)
+			s.reconcileResumedCodexTurn(task, resumed.Thread)
 			return threadID, nil
 		} else if !codexapp.IsThreadNotFound(err) {
 			return "", fmt.Errorf("resume Codex thread %s: %w", threadID, err)
@@ -408,6 +409,43 @@ func (s *agentEventService) ensureCodexThread(ctx context.Context, client codexR
 	}
 	s.rememberThread(task.ID, threadID)
 	return threadID, nil
+}
+
+func (s *agentEventService) reconcileResumedCodexTurn(task db.Task, thread codexapp.Thread) {
+	latest, ok := thread.LatestTurn()
+	if !ok || strings.TrimSpace(latest.ID) == "" {
+		return
+	}
+
+	s.mu.Lock()
+	if latest.IsInProgress() {
+		s.activeTurns[task.ID] = latest.ID
+	} else {
+		delete(s.activeTurns, task.ID)
+	}
+	s.mu.Unlock()
+
+	if task.Status != db.StatusActive || (!latest.IsInterrupted() && !latest.IsFailed()) {
+		return
+	}
+
+	message := "Previous Codex turn was interrupted while AGX was disconnected. It was not retried automatically."
+	if latest.IsFailed() {
+		message = "Previous Codex turn failed while AGX was disconnected. It was not retried automatically."
+	}
+	_ = s.runtime.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
+	s.publish(task.ID, agentstream.Event{
+		ID:        agentstream.StableEventID(task.ID, agentstream.EventInterrupted, latest.ID, "resume"),
+		TaskID:    task.ID,
+		TurnID:    latest.ID,
+		Kind:      agentstream.EventInterrupted,
+		Agent:     task.Agent,
+		CreatedAt: time.Now(),
+		Text:      message,
+		Error:     message,
+	})
+	s.runtime.emitMetadataEvent(task.ProjectID)
+	s.runtime.syncDiscordAsync()
 }
 
 func (s *agentEventService) StopTask(ctx context.Context, task db.Task) error {
@@ -746,12 +784,18 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 			s.mu.Unlock()
 		}
 		turnCompleted := event.Kind == agentstream.EventTurnCompleted
+		completedCurrentTurn := turnCompleted
 		if turnCompleted {
 			s.mu.Lock()
+			activeTurn := s.activeTurns[taskID]
 			if event.TurnID == "" {
-				event.TurnID = s.activeTurns[taskID]
+				event.TurnID = activeTurn
+			} else if activeTurn != "" && event.TurnID != activeTurn {
+				completedCurrentTurn = false
 			}
-			delete(s.activeTurns, taskID)
+			if completedCurrentTurn {
+				delete(s.activeTurns, taskID)
+			}
 			s.mu.Unlock()
 		}
 		if event.Cursor != "" {
@@ -759,7 +803,7 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 			_ = s.runtime.store.UpdateTaskAgentEventCursor(taskID, &cursor)
 		}
 		s.publish(taskID, event)
-		if turnCompleted {
+		if turnCompleted && completedCurrentTurn {
 			_ = s.runtime.store.UpdateTaskStatus(taskID, db.StatusWaiting)
 			s.runtime.emitMetadataEvent(task.ProjectID)
 			s.runtime.syncDiscordAsync()

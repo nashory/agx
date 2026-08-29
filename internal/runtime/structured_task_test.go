@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -21,11 +22,14 @@ type fakeCodexRuntime struct {
 	threadCwd    string
 	turnCwd      string
 	startedText  string
+	steeredText  string
+	steeredTurn  string
 	interrupted  string
 	nextThreadID string
 	nextTurnID   string
 	threadErr    error
 	resumeErr    error
+	resumeResult codexapp.ThreadStartResponse
 	dirtyThread  bool
 	stderr       string
 	inputCancels chan string
@@ -60,7 +64,7 @@ func (f *fakeCodexRuntime) ThreadStart(_ context.Context, cwd string, allMighty 
 }
 
 func (f *fakeCodexRuntime) ThreadResume(context.Context, string) (codexapp.ThreadStartResponse, error) {
-	return codexapp.ThreadStartResponse{}, f.resumeErr
+	return f.resumeResult, f.resumeErr
 }
 
 func (f *fakeCodexRuntime) TurnStart(_ context.Context, threadID, text, cwd string, allMighty bool) (codexapp.TurnStartResponse, error) {
@@ -69,8 +73,10 @@ func (f *fakeCodexRuntime) TurnStart(_ context.Context, threadID, text, cwd stri
 	return codexapp.TurnStartResponse{Turn: codexapp.Turn{ID: f.nextTurnID, Status: "running"}}, nil
 }
 
-func (f *fakeCodexRuntime) TurnSteer(context.Context, string, string, string) (codexapp.TurnSteerResponse, error) {
-	return codexapp.TurnSteerResponse{}, nil
+func (f *fakeCodexRuntime) TurnSteer(_ context.Context, _ string, turnID, text string) (codexapp.TurnSteerResponse, error) {
+	f.steeredTurn = turnID
+	f.steeredText = text
+	return codexapp.TurnSteerResponse{TurnID: turnID}, nil
 }
 
 func (f *fakeCodexRuntime) TurnInterrupt(ctx context.Context, threadID, turnID string) error {
@@ -142,6 +148,156 @@ func TestEnsureCodexThreadPreservesContextOnTransientResumeFailure(t *testing.T)
 	}
 	if updated.AgentThreadID == nil || *updated.AgentThreadID != threadID {
 		t.Fatalf("AgentThreadID = %#v, want preserved thread", updated.AgentThreadID)
+	}
+}
+
+func TestEnsureCodexThreadRestoresInProgressTurn(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "structured", nil, "codex", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := "existing-thread"
+	streamKind := codexapp.StreamKind
+	if err := store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	task, err = store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	t.Cleanup(func() { _ = service.agents.Close() })
+	fake := newFakeCodexRuntime()
+	fake.resumeResult = codexapp.ThreadStartResponse{Thread: codexapp.Thread{
+		ID:    threadID,
+		Turns: []codexapp.Turn{{ID: "turn-live", Status: codexapp.TurnStatusInProgress}},
+	}}
+	service.agents.codex = fake
+
+	if err := service.agents.SendTaskMessage(context.Background(), task, project, "follow up"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.steeredTurn != "turn-live" || fake.steeredText != "follow up" {
+		t.Fatalf("steered turn=%q text=%q, want recovered active turn", fake.steeredTurn, fake.steeredText)
+	}
+	if fake.startedText != "" {
+		t.Fatalf("TurnStart text = %q, want no new turn", fake.startedText)
+	}
+}
+
+func TestEnsureCodexThreadMarksInterruptedTurnWithoutRetry(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "structured", nil, "codex", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := "existing-thread"
+	streamKind := codexapp.StreamKind
+	if err := store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	task, err = store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	t.Cleanup(func() { _ = service.agents.Close() })
+	service.agents.activeTurns[task.ID] = "stale-turn"
+	fake := newFakeCodexRuntime()
+	fake.resumeResult = codexapp.ThreadStartResponse{Thread: codexapp.Thread{
+		ID:    threadID,
+		Turns: []codexapp.Turn{{ID: "turn-interrupted", Status: codexapp.TurnStatusInterrupted}},
+	}}
+
+	if _, err := service.agents.ensureCodexThread(context.Background(), fake, task, project); err != nil {
+		t.Fatal(err)
+	}
+	if active := service.agents.activeTurns[task.ID]; active != "" {
+		t.Fatalf("active turn = %q, want cleared", active)
+	}
+	updated, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != db.StatusWaiting {
+		t.Fatalf("task status = %q, want waiting", updated.Status)
+	}
+	messages, err := store.ListTaskTranscriptMessages(task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Role != "status" || !strings.Contains(messages[0].Body, "not retried automatically") {
+		t.Fatalf("transcript messages = %#v, want interruption notice", messages)
+	}
+}
+
+func TestDelayedCodexCompletionDoesNotClearNewerTurn(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "structured", nil, "codex", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := "thread-1"
+	streamKind := codexapp.StreamKind
+	if err := store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	fake := newFakeCodexRuntime()
+	service.agents.threadToTask[threadID] = task.ID
+	service.agents.activeTurns[task.ID] = "turn-new"
+	done := make(chan struct{})
+	go func() {
+		service.agents.forwardCodexEvents(fake)
+		close(done)
+	}()
+	fake.events <- codexapp.Notification{
+		Method: codexapp.NotifyTurnCompleted,
+		Params: json.RawMessage(`{"threadId":"thread-1","turn":{"id":"turn-old","status":"completed"}}`),
+	}
+	close(fake.events)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Codex event forwarder did not stop")
+	}
+	if active := service.agents.activeTurns[task.ID]; active != "turn-new" {
+		t.Fatalf("active turn = %q, want turn-new", active)
+	}
+	updated, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != db.StatusActive {
+		t.Fatalf("task status = %q, want active", updated.Status)
 	}
 }
 

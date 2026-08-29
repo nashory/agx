@@ -358,6 +358,29 @@ func TestThreadResumeTurnSteerAndInterruptMethods(t *testing.T) {
 	}
 }
 
+func TestThreadResumeResponsePreservesTurnStatus(t *testing.T) {
+	var response ThreadStartResponse
+	if err := json.Unmarshal([]byte(`{
+		"thread": {
+			"id": "thread-1",
+			"cwd": "/repo",
+			"turns": [
+				{"id": "turn-1", "status": "completed"},
+				{"id": "turn-2", "status": "inProgress"}
+			]
+		}
+	}`), &response); err != nil {
+		t.Fatal(err)
+	}
+	latest, ok := response.Thread.LatestTurn()
+	if !ok || latest.ID != "turn-2" || !latest.IsInProgress() {
+		t.Fatalf("latest turn = %#v, %v", latest, ok)
+	}
+	if (Turn{Status: TurnStatusInterrupted}).IsInProgress() {
+		t.Fatal("interrupted turn reported as in progress")
+	}
+}
+
 func TestClientHandlesErrorResponseAndInvalidIDs(t *testing.T) {
 	server, clientConn := net.Pipe()
 	defer server.Close()

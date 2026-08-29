@@ -66,6 +66,20 @@ func TestSemanticRendererRendersProgress(t *testing.T) {
 	}
 }
 
+func TestSemanticRendererSendsRecoveredInterruptionNotice(t *testing.T) {
+	renderer := NewSemanticRenderer()
+	actions := renderer.Render(agentstream.Event{
+		Kind: agentstream.EventInterrupted,
+		Text: "Previous Codex turn was interrupted while AGX was disconnected. It was not retried automatically.",
+	})
+	if len(actions) != 2 || actions[0].Kind != RenderClearProgress || actions[1].Kind != RenderSend {
+		t.Fatalf("actions = %#v, want clear then send", actions)
+	}
+	if !strings.Contains(actions[1].Content, "not retried automatically") || !actions[1].HighPriority {
+		t.Fatalf("notice action = %#v", actions[1])
+	}
+}
+
 func TestSemanticRendererRendersSummarizedError(t *testing.T) {
 	renderer := NewSemanticRenderer()
 	actions := renderer.Render(agentstream.Event{

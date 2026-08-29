@@ -418,6 +418,12 @@ func (r SemanticRenderer) Render(event agentstream.Event) []RenderAction {
 	case agentstream.EventTurnCompleted:
 		return []RenderAction{{Kind: RenderClearProgress}}
 	case agentstream.EventInterrupted:
+		if message := strings.TrimSpace(event.Text); message != "" {
+			return []RenderAction{
+				{Kind: RenderClearProgress},
+				{Kind: RenderSend, Content: "⚠️ " + message, HighPriority: true},
+			}
+		}
 		return []RenderAction{{Kind: RenderUpdateProgress, Content: "⏹️ Interrupted."}}
 	case agentstream.EventError:
 		if summary, ok := reconnectingAgentError(event.Error); ok {
