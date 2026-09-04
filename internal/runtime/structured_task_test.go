@@ -301,6 +301,174 @@ func TestDelayedCodexCompletionDoesNotClearNewerTurn(t *testing.T) {
 	}
 }
 
+// newCodexTurnTestService wires a task whose Codex thread is already mapped, so
+// a test can push app-server notifications straight through the forwarder.
+func newCodexTurnTestService(t *testing.T) (*Service, *fakeCodexRuntime, db.Task) {
+	t.Helper()
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "structured", nil, "codex", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := "thread-1"
+	streamKind := codexapp.StreamKind
+	if err := store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	task, err = store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	service.paths.ConfigDir = t.TempDir()
+	fake := newFakeCodexRuntime()
+	service.agents.codex = fake
+	service.agents.threadToTask[threadID] = task.ID
+	return service, fake, task
+}
+
+func runCodexNotifications(t *testing.T, service *Service, fake *fakeCodexRuntime, notifications ...codexapp.Notification) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		service.agents.forwardCodexEvents(fake)
+		close(done)
+	}()
+	for _, notification := range notifications {
+		fake.events <- notification
+	}
+	close(fake.events)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Codex event forwarder did not stop")
+	}
+}
+
+func codexTurnStarted(turnID string) codexapp.Notification {
+	return codexapp.Notification{
+		Method: codexapp.NotifyTurnStarted,
+		Params: json.RawMessage(fmt.Sprintf(`{"threadId":"thread-1","turn":{"id":%q,"status":"inProgress"}}`, turnID)),
+	}
+}
+
+func codexTurnCompleted(turnID string) codexapp.Notification {
+	return codexapp.Notification{
+		Method: codexapp.NotifyTurnCompleted,
+		Params: json.RawMessage(fmt.Sprintf(`{"threadId":"thread-1","turn":{"id":%q,"status":"completed"}}`, turnID)),
+	}
+}
+
+func codexStatusMessages(t *testing.T, service *Service, taskID string) []string {
+	t.Helper()
+	messages, err := service.store.ListTaskTranscriptMessages(taskID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bodies []string
+	for _, message := range messages {
+		if message.Role == "status" {
+			bodies = append(bodies, message.Body)
+		}
+	}
+	return bodies
+}
+
+func TestCodexTurnWithoutOutputIsReported(t *testing.T) {
+	service, fake, task := newCodexTurnTestService(t)
+	fake.stderr = "codex: dropped turn input"
+
+	runCodexNotifications(t, service, fake, codexTurnStarted("turn-1"), codexTurnCompleted("turn-1"))
+
+	bodies := codexStatusMessages(t, service, task.ID)
+	if len(bodies) != 1 {
+		t.Fatalf("status messages = %#v, want one empty-turn report", bodies)
+	}
+	if !strings.Contains(bodies[0], "without producing any output") {
+		t.Fatalf("status message = %q, want empty-turn report", bodies[0])
+	}
+	if !strings.Contains(bodies[0], "codex: dropped turn input") {
+		t.Fatalf("status message = %q, want recent codex stderr", bodies[0])
+	}
+	updated, err := service.store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != db.StatusWaiting {
+		t.Fatalf("task status = %q, want waiting", updated.Status)
+	}
+}
+
+func TestCodexTurnWithOutputIsNotReported(t *testing.T) {
+	service, fake, task := newCodexTurnTestService(t)
+
+	runCodexNotifications(t, service, fake,
+		codexTurnStarted("turn-1"),
+		codexapp.Notification{
+			Method: codexapp.NotifyItemCompleted,
+			Params: json.RawMessage(`{"threadId":"thread-1","turnId":"turn-1","item":{"type":"agentMessage","id":"item-1","text":"done"}}`),
+		},
+		codexTurnCompleted("turn-1"),
+	)
+
+	if bodies := codexStatusMessages(t, service, task.ID); len(bodies) != 0 {
+		t.Fatalf("status messages = %#v, want none for a turn that produced output", bodies)
+	}
+}
+
+func TestInterruptedCodexTurnIsNotReportedAsEmpty(t *testing.T) {
+	service, fake, task := newCodexTurnTestService(t)
+	done := make(chan struct{})
+	go func() {
+		service.agents.forwardCodexEvents(fake)
+		close(done)
+	}()
+
+	fake.events <- codexTurnStarted("turn-1")
+	// Interrupting is the expected way for a turn to end with no agent output.
+	waitForCodexTurn(t, service, task.ID)
+	if err := service.agents.InterruptTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	fake.events <- codexTurnCompleted("turn-1")
+	close(fake.events)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Codex event forwarder did not stop")
+	}
+
+	if fake.interrupted != "turn-1" {
+		t.Fatalf("interrupted turn = %q, want turn-1", fake.interrupted)
+	}
+	if bodies := codexStatusMessages(t, service, task.ID); len(bodies) != 0 {
+		t.Fatalf("status messages = %#v, want none for an interrupted turn", bodies)
+	}
+}
+
+func waitForCodexTurn(t *testing.T, service *Service, taskID string) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		service.agents.mu.Lock()
+		started := service.agents.codexTurns[taskID] != nil
+		service.agents.mu.Unlock()
+		if started {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("Codex turn was not registered")
+}
+
 func TestCodexInputRequestIsCancelledHeadlessly(t *testing.T) {
 	service := NewService("test")
 	fake := newFakeCodexRuntime()

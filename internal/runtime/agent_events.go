@@ -49,9 +49,27 @@ type agentEventService struct {
 	subscribers  map[string]map[*agentstream.EventQueue]struct{}
 	threadToTask map[string]string
 	activeTurns  map[string]string
+	codexTurns   map[string]*codexTurn
 	turnCancels  map[string]context.CancelFunc
 	claudeQueues map[string][]string
 	museQueues   map[string][]string
+}
+
+// codexTurn records what a live Codex turn has produced so far, keyed by task
+// id alongside activeTurns. A turn that ends having produced nothing at all is
+// reported instead of rendering silence, and the map also identifies which
+// activeTurns entries belong to Codex.
+type codexTurn struct {
+	sawOutput   bool
+	sawFailure  bool
+	interrupted bool
+}
+
+// isSilent reports whether a finished turn produced nothing the operator could
+// see. Interrupted turns and turns that already reported a failure are excluded:
+// both are expected to end without agent output.
+func (t *codexTurn) isSilent() bool {
+	return t != nil && !t.sawOutput && !t.sawFailure && !t.interrupted
 }
 
 func newAgentEventService(runtime *Service) *agentEventService {
@@ -63,6 +81,7 @@ func newAgentEventService(runtime *Service) *agentEventService {
 		subscribers:  map[string]map[*agentstream.EventQueue]struct{}{},
 		threadToTask: map[string]string{},
 		activeTurns:  map[string]string{},
+		codexTurns:   map[string]*codexTurn{},
 		turnCancels:  map[string]context.CancelFunc{},
 		claudeQueues: map[string][]string{},
 		museQueues:   map[string][]string{},
@@ -94,6 +113,7 @@ func (s *agentEventService) Close() error {
 	}
 	s.threadToTask = map[string]string{}
 	s.activeTurns = map[string]string{}
+	s.codexTurns = map[string]*codexTurn{}
 	s.claudeQueues = map[string][]string{}
 	s.museQueues = map[string][]string{}
 	for _, cancel := range s.turnCancels {
@@ -184,6 +204,7 @@ func (s *agentEventService) SendTaskMessage(ctx context.Context, task db.Task, p
 	}
 	s.mu.Lock()
 	s.activeTurns[task.ID] = turn.Turn.ID
+	s.codexTurns[task.ID] = &codexTurn{}
 	s.mu.Unlock()
 	if err := s.runtime.store.UpdateTaskStatus(task.ID, db.StatusActive); err == nil {
 		s.runtime.emitMetadataEvent(task.ProjectID)
@@ -214,6 +235,7 @@ func (s *agentEventService) clearTaskContext(ctx context.Context, task db.Task, 
 	s.mu.Lock()
 	activeTurn = s.activeTurns[task.ID]
 	delete(s.activeTurns, task.ID)
+	delete(s.codexTurns, task.ID)
 	for threadID, taskID := range s.threadToTask {
 		if taskID == task.ID {
 			delete(s.threadToTask, threadID)
@@ -339,6 +361,9 @@ func (s *agentEventService) InterruptTask(ctx context.Context, task db.Task) err
 	}
 	s.mu.Lock()
 	activeTurn := s.activeTurns[task.ID]
+	if turn := s.codexTurns[task.ID]; turn != nil {
+		turn.interrupted = true
+	}
 	s.mu.Unlock()
 	if activeTurn == "" {
 		return nil
@@ -420,8 +445,12 @@ func (s *agentEventService) reconcileResumedCodexTurn(task db.Task, thread codex
 	s.mu.Lock()
 	if latest.IsInProgress() {
 		s.activeTurns[task.ID] = latest.ID
+		if s.codexTurns[task.ID] == nil {
+			s.codexTurns[task.ID] = &codexTurn{}
+		}
 	} else {
 		delete(s.activeTurns, task.ID)
+		delete(s.codexTurns, task.ID)
 	}
 	s.mu.Unlock()
 
@@ -781,10 +810,12 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 		if event.Kind == agentstream.EventTurnStarted && event.TurnID != "" {
 			s.mu.Lock()
 			s.activeTurns[taskID] = event.TurnID
+			s.codexTurns[taskID] = &codexTurn{}
 			s.mu.Unlock()
 		}
 		turnCompleted := event.Kind == agentstream.EventTurnCompleted
 		completedCurrentTurn := turnCompleted
+		var finishedTurn *codexTurn
 		if turnCompleted {
 			s.mu.Lock()
 			activeTurn := s.activeTurns[taskID]
@@ -795,12 +826,19 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 			}
 			if completedCurrentTurn {
 				delete(s.activeTurns, taskID)
+				finishedTurn = s.codexTurns[taskID]
+				delete(s.codexTurns, taskID)
 			}
 			s.mu.Unlock()
+		} else {
+			s.recordCodexTurnEvent(taskID, event.Kind)
 		}
 		if event.Cursor != "" {
 			cursor := event.Cursor
 			_ = s.runtime.store.UpdateTaskAgentEventCursor(taskID, &cursor)
+		}
+		if finishedTurn.isSilent() {
+			s.publishCodexEmptyTurn(task, event.TurnID, client.RecentStderr())
 		}
 		s.publish(taskID, event)
 		if turnCompleted && completedCurrentTurn {
@@ -809,6 +847,49 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 			s.runtime.syncDiscordAsync()
 		}
 	}
+}
+
+// recordCodexTurnEvent notes what the live Codex turn has produced so a turn
+// that ends having produced nothing at all can be told apart from one that
+// merely finished quietly after doing work or reporting a failure.
+func (s *agentEventService) recordCodexTurnEvent(taskID string, kind agentstream.EventKind) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	turn := s.codexTurns[taskID]
+	if turn == nil {
+		return
+	}
+	switch kind {
+	case agentstream.EventTurnStarted:
+		// Opening the turn is not output.
+	case agentstream.EventError, agentstream.EventInterrupted:
+		turn.sawFailure = true
+	default:
+		turn.sawOutput = true
+	}
+}
+
+// codexEmptyTurnMessage explains a Codex turn that started and finished without
+// emitting anything. A stale app-server silently drops the turn input, which is
+// otherwise indistinguishable from the agent ignoring the operator: the turn
+// completes, no message is rendered, and the task returns to waiting.
+const codexEmptyTurnMessage = "Codex finished the turn without producing any output. The codex app-server may be stale; restart the AGX runtime if this repeats."
+
+func (s *agentEventService) publishCodexEmptyTurn(task db.Task, turnID, stderr string) {
+	message := enrichCodexError(codexEmptyTurnMessage, stderr)
+	s.publish(task.ID, agentstream.Event{
+		ID:        agentstream.StableEventID(task.ID, agentstream.EventError, turnID, "empty-turn"),
+		TaskID:    task.ID,
+		TurnID:    turnID,
+		Kind:      agentstream.EventError,
+		Agent:     task.Agent,
+		CreatedAt: time.Now(),
+		Error:     message,
+	})
+	logRuntimeOperation("codex_empty_turn",
+		"task", shortDiagnosticID(task.ID),
+		"turn", turnID,
+	)
 }
 
 // enrichCodexError appends recent app-server stderr to a codex error so the
@@ -844,6 +925,9 @@ func (s *agentEventService) answerCodexApproval(client codexRuntime, notificatio
 		if task, err := s.runtime.store.GetTask(taskID); err == nil && task.AllMighty {
 			decision = codexapp.DecisionAccept
 		}
+		// An approval round trip is real turn work even though it never reaches
+		// the event stream, so it must not count as an empty turn.
+		s.recordCodexTurnEvent(taskID, agentstream.EventApprovalRequested)
 	}
 	if err := client.ApproveRequest(notification, decision); err != nil {
 		logRuntimeOperation("codex_approval",
@@ -966,6 +1050,7 @@ func (s *agentEventService) forgetTask(taskID string) {
 		}
 	}
 	delete(s.activeTurns, taskID)
+	delete(s.codexTurns, taskID)
 	delete(s.claudeQueues, taskID)
 	delete(s.museQueues, taskID)
 	if cancel := s.turnCancels[taskID]; cancel != nil {
