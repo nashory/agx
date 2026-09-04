@@ -469,6 +469,84 @@ func waitForCodexTurn(t *testing.T, service *Service, taskID string) {
 	t.Fatal("Codex turn was not registered")
 }
 
+func TestIdleCodexAppServerIsReplaced(t *testing.T) {
+	service := NewService("test")
+	t.Cleanup(func() { _ = service.agents.Close() })
+	idle := newFakeCodexRuntime()
+	fresh := newFakeCodexRuntime()
+	service.agents.codex = idle
+	service.agents.codexLastTurn = time.Now().Add(-2 * codexAppServerIdleTTL)
+	service.agents.startCodex = func(context.Context) (codexRuntime, error) {
+		return fresh, nil
+	}
+
+	client, err := service.agents.ensureCodex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client != fresh {
+		t.Fatal("ensureCodex reused the idle app-server, want a fresh one")
+	}
+	select {
+	case _, open := <-idle.events:
+		if open {
+			t.Fatal("idle app-server event channel is still open, want it closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle app-server was not closed")
+	}
+}
+
+func TestCodexAppServerIsKeptWhileUsable(t *testing.T) {
+	service := NewService("test")
+	t.Cleanup(func() { _ = service.agents.Close() })
+	existing := newFakeCodexRuntime()
+	service.agents.codex = existing
+	service.agents.startCodex = func(context.Context) (codexRuntime, error) {
+		t.Fatal("ensureCodex started a new app-server")
+		return nil, nil
+	}
+
+	// Never ran a turn, so it is already fresh.
+	client, err := service.agents.ensureCodex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client != existing {
+		t.Fatal("fresh app-server was replaced")
+	}
+
+	// Long idle, but a turn is still live.
+	service.agents.codexLastTurn = time.Now().Add(-2 * codexAppServerIdleTTL)
+	service.agents.codexTurns["task-1"] = &codexTurn{}
+	client, err = service.agents.ensureCodex(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client != existing {
+		t.Fatal("app-server with a live turn was replaced")
+	}
+}
+
+func TestForgetCodexRuntimeKeepsClaudeTurns(t *testing.T) {
+	service := NewService("test")
+	t.Cleanup(func() { _ = service.agents.Close() })
+	fake := newFakeCodexRuntime()
+	service.agents.codex = fake
+	service.agents.activeTurns["codex-task"] = "codex-turn"
+	service.agents.codexTurns["codex-task"] = &codexTurn{}
+	service.agents.activeTurns["claude-task"] = "claude-turn"
+
+	service.agents.forgetRuntime(fake)
+
+	if turn := service.agents.activeTurns["codex-task"]; turn != "" {
+		t.Fatalf("codex active turn = %q, want cleared", turn)
+	}
+	if turn := service.agents.activeTurns["claude-task"]; turn != "claude-turn" {
+		t.Fatalf("claude active turn = %q, want claude-turn", turn)
+	}
+}
+
 func TestCodexInputRequestIsCancelledHeadlessly(t *testing.T) {
 	service := NewService("test")
 	fake := newFakeCodexRuntime()

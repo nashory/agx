@@ -43,16 +43,17 @@ type agentEventService struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 
-	mu           sync.Mutex
-	codex        codexRuntime
-	startCodex   func(context.Context) (codexRuntime, error)
-	subscribers  map[string]map[*agentstream.EventQueue]struct{}
-	threadToTask map[string]string
-	activeTurns  map[string]string
-	codexTurns   map[string]*codexTurn
-	turnCancels  map[string]context.CancelFunc
-	claudeQueues map[string][]string
-	museQueues   map[string][]string
+	mu            sync.Mutex
+	codex         codexRuntime
+	startCodex    func(context.Context) (codexRuntime, error)
+	subscribers   map[string]map[*agentstream.EventQueue]struct{}
+	threadToTask  map[string]string
+	activeTurns   map[string]string
+	codexTurns    map[string]*codexTurn
+	codexLastTurn time.Time
+	turnCancels   map[string]context.CancelFunc
+	claudeQueues  map[string][]string
+	museQueues    map[string][]string
 }
 
 // codexTurn records what a live Codex turn has produced so far, keyed by task
@@ -196,6 +197,9 @@ func (s *agentEventService) SendTaskMessage(ctx context.Context, task db.Task, p
 	s.mu.Unlock()
 	if activeTurn != "" {
 		_, err := client.TurnSteer(ctx, threadID, activeTurn, message)
+		if err == nil {
+			s.noteCodexTurn()
+		}
 		return err
 	}
 	turn, err := client.TurnStart(ctx, threadID, message, taskWorkingDir(task, project), task.AllMighty)
@@ -205,6 +209,7 @@ func (s *agentEventService) SendTaskMessage(ctx context.Context, task db.Task, p
 	s.mu.Lock()
 	s.activeTurns[task.ID] = turn.Turn.ID
 	s.codexTurns[task.ID] = &codexTurn{}
+	s.codexLastTurn = time.Now()
 	s.mu.Unlock()
 	if err := s.runtime.store.UpdateTaskStatus(task.ID, db.StatusActive); err == nil {
 		s.runtime.emitMetadataEvent(task.ProjectID)
@@ -378,8 +383,41 @@ func (s *agentEventService) InterruptTask(ctx context.Context, task db.Task) err
 	return client.TurnInterrupt(ctx, *task.AgentThreadID, activeTurn)
 }
 
+// codexAppServerIdleTTL bounds how long the shared Codex app-server may sit
+// unused before AGX replaces it. An app-server holds a writer lock on every
+// thread it has opened, so an idle one keeps those sessions unavailable to other
+// Codex clients, and one left running for days has been seen to silently stop
+// accepting turn input. Replacing it costs a few seconds on the next message and
+// loses no context: threads are persisted and resumed by id.
+const codexAppServerIdleTTL = 30 * time.Minute
+
+// retireIdleCodexLocked detaches an idle app-server so the caller can close it
+// outside the lock and start a fresh one. A client that has never run a turn is
+// already fresh, and one with a live turn is in use, so neither is retired.
+func (s *agentEventService) retireIdleCodexLocked() codexRuntime {
+	if s.codex == nil || s.codexLastTurn.IsZero() || len(s.codexTurns) > 0 {
+		return nil
+	}
+	if time.Since(s.codexLastTurn) < codexAppServerIdleTTL {
+		return nil
+	}
+	client := s.codex
+	s.codex = nil
+	s.codexLastTurn = time.Time{}
+	return client
+}
+
+// noteCodexTurn records that the app-server just accepted turn input, which is
+// what keeps it from being retired as idle.
+func (s *agentEventService) noteCodexTurn() {
+	s.mu.Lock()
+	s.codexLastTurn = time.Now()
+	s.mu.Unlock()
+}
+
 func (s *agentEventService) ensureCodex(ctx context.Context) (codexRuntime, error) {
 	s.mu.Lock()
+	retired := s.retireIdleCodexLocked()
 	if s.codex != nil {
 		client := s.codex
 		s.mu.Unlock()
@@ -387,6 +425,11 @@ func (s *agentEventService) ensureCodex(ctx context.Context) (codexRuntime, erro
 	}
 	start := s.startCodex
 	s.mu.Unlock()
+
+	if retired != nil {
+		_ = retired.Close()
+		logRuntimeOperation("codex_app_server", "status", "retired", "reason", "idle")
+	}
 
 	client, err := start(ctx)
 	if err != nil {
@@ -763,11 +806,18 @@ func taskWorkingDir(task db.Task, project db.Project) string {
 	return project.Path
 }
 
+// forgetRuntime drops the app-server that just went away along with the turns it
+// owned. Only Codex turn state is discarded: Claude and Muse turns run in their
+// own processes and must survive an app-server restart.
 func (s *agentEventService) forgetRuntime(client codexRuntime) {
 	s.mu.Lock()
 	if s.codex == client {
 		s.codex = nil
-		s.activeTurns = map[string]string{}
+		s.codexLastTurn = time.Time{}
+		for taskID := range s.codexTurns {
+			delete(s.activeTurns, taskID)
+		}
+		s.codexTurns = map[string]*codexTurn{}
 	}
 	s.mu.Unlock()
 }
