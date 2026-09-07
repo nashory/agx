@@ -13,11 +13,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nashory/agx/internal/agent"
 	"github.com/nashory/agx/internal/agentstream"
 	"github.com/nashory/agx/internal/db"
+	"github.com/nashory/agx/internal/processtree"
 )
 
 type museJSONEnvelope struct {
@@ -32,6 +34,7 @@ const museSessionBusyRetryAttempts = 61
 var museSessionBusyRetryDelay = 2 * time.Second
 var museSessionObserveInterval = 250 * time.Millisecond
 var museFinalCandidateDelay = time.Second
+var museFinalCandidateRecoveryGracePeriod = 30 * time.Second
 
 type museTurnSessionObserver struct {
 	task              db.Task
@@ -85,6 +88,9 @@ func (s *agentEventService) launchMuseTurn(task db.Task, project db.Project, tur
 func (s *agentEventService) runMuseTurn(ctx context.Context, cancel context.CancelFunc, task db.Task, project db.Project, turnID, message string) {
 	defer cancel()
 	err := s.execMuseStream(ctx, task, project, turnID, message)
+	if !s.isCurrentTurn(task.ID, turnID) {
+		return
+	}
 	if errors.Is(err, errStructuredFailurePublished) {
 		_ = s.runtime.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
 		s.runtime.emitMetadataEvent(task.ProjectID)
@@ -195,6 +201,7 @@ func (s *agentEventService) execMuseStreamOnce(ctx context.Context, task db.Task
 	}
 	defer os.Remove(promptFile)
 	cmd := exec.CommandContext(ctx, museExecCommand(ag.Command), museStreamArgs(task, workingDir, promptFile)...)
+	processtree.Configure(cmd)
 	cmd.Dir = workingDir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -208,24 +215,56 @@ func (s *agentEventService) execMuseStreamOnce(ctx context.Context, task db.Task
 	}
 	observerCtx, stopObserver := context.WithCancel(ctx)
 	observerDone := make(chan struct{})
+	processDone := make(chan struct{})
+	finalCandidateReady := make(chan struct{}, 1)
+	var finalCandidatePublished atomic.Bool
+	var terminalSeen atomic.Bool
+	var failurePublished atomic.Bool
+	var recoveryTriggered atomic.Bool
 	go func() {
 		defer close(observerDone)
-		observer.observe(observerCtx, func(event agentstream.Event) {
+		observer.observe(observerCtx, func(event agentstream.Event, finalCandidate bool) {
 			s.publish(task.ID, event)
+			if finalCandidate {
+				finalCandidatePublished.Store(true)
+				select {
+				case finalCandidateReady <- struct{}{}:
+				default:
+				}
+			}
 		})
 	}()
+	recoveryDone := make(chan struct{})
+	go func() {
+		defer close(recoveryDone)
+		select {
+		case <-finalCandidateReady:
+		case <-processDone:
+			return
+		case <-ctx.Done():
+			return
+		}
+		timer := time.NewTimer(museFinalCandidateRecoveryGracePeriod)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			recoveryTriggered.Store(true)
+			logRuntimeOperation("muse_stream_recovery", "task_id", task.ID, "turn_id", turnID, "reason", "final_candidate_without_process_exit")
+			_ = processtree.Terminate(cmd)
+		case <-processDone:
+		case <-ctx.Done():
+		}
+	}()
 
-	terminalSeen := false
-	failurePublished := false
 	readErr := agentstream.ReadJSONLines(stdout, func(line []byte) error {
 		for _, event := range observer.filterStreamEvents(mapMuseJSONLine(task, turnID, line)) {
 			s.publish(task.ID, event)
 			if event.Kind == agentstream.EventTurnCompleted {
-				terminalSeen = true
+				terminalSeen.Store(true)
 			}
 			if event.Kind == agentstream.EventError || event.Kind == agentstream.EventInterrupted {
-				terminalSeen = true
-				failurePublished = true
+				terminalSeen.Store(true)
+				failurePublished.Store(true)
 			}
 			if event.Cursor != "" {
 				cursor := event.Cursor
@@ -235,22 +274,36 @@ func (s *agentEventService) execMuseStreamOnce(ctx context.Context, task db.Task
 		return nil
 	})
 	waitErr := cmd.Wait()
+	close(processDone)
 	stopObserver()
 	<-observerDone
-	if readErr != nil {
+	<-recoveryDone
+	if readErr != nil && !recoveryTriggered.Load() {
 		return readErr
 	}
-	if failurePublished {
+	if failurePublished.Load() {
 		return errStructuredFailurePublished
 	}
-	if waitErr != nil {
+	if waitErr != nil && !recoveryTriggered.Load() {
 		errText := strings.TrimSpace(stderr.String())
 		if errText == "" {
 			errText = waitErr.Error()
 		}
 		return fmt.Errorf("Muse stream failed: %s", errText)
 	}
-	if !terminalSeen {
+	if finalCandidatePublished.Load() && !terminalSeen.Load() {
+		event := agentstream.Event{
+			ID:        agentstream.StableEventID(task.ID, agentstream.EventTurnCompleted, turnID, "recovered"),
+			TaskID:    task.ID,
+			TurnID:    turnID,
+			Kind:      agentstream.EventTurnCompleted,
+			Agent:     task.Agent,
+			CreatedAt: time.Now(),
+		}
+		s.publish(task.ID, event)
+		terminalSeen.Store(true)
+	}
+	if !terminalSeen.Load() {
 		return fmt.Errorf("Muse stream ended without a terminal result")
 	}
 	return nil
@@ -267,7 +320,7 @@ func newMuseTurnSessionObserver(task db.Task, turnID, workingDir string, started
 	return observer
 }
 
-func (o *museTurnSessionObserver) observe(ctx context.Context, publish func(agentstream.Event)) {
+func (o *museTurnSessionObserver) observe(ctx context.Context, publish func(agentstream.Event, bool)) {
 	if o == nil || publish == nil {
 		return
 	}
@@ -277,18 +330,18 @@ func (o *museTurnSessionObserver) observe(ctx context.Context, publish func(agen
 		select {
 		case <-ctx.Done():
 			for _, event := range o.readEvents() {
-				publish(event)
+				publish(event, false)
 			}
 			if event := o.flushFinalCandidate(time.Now(), true); event != nil {
-				publish(*event)
+				publish(*event, true)
 			}
 			return
 		case <-ticker.C:
 			for _, event := range o.readEvents() {
-				publish(event)
+				publish(event, false)
 			}
 			if event := o.flushFinalCandidate(time.Now(), false); event != nil {
-				publish(*event)
+				publish(*event, true)
 			}
 		}
 	}

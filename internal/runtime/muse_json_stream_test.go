@@ -361,6 +361,69 @@ func TestMuseSessionAlreadyInUse(t *testing.T) {
 	}
 }
 
+func TestMuseStreamRecoversFinalSessionMessageWithoutProcessExit(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	workspace := t.TempDir()
+	sessionID := "session-recovery"
+	logPath := writeMuseSessionLog(t, dataHome, "2026", "09", "05", sessionID, workspace)
+	t.Setenv("AGX_MUSE_LOG", logPath)
+
+	finalRecord := `{"sequence":3,"recorded_at":9999999999999999,"payload_type":"runtime.session","payload":{"kind":"run","event":{"kind":"assistant_message_committed","message_id":"message-1","text":"done"}}}`
+	posix := "#!/bin/sh\nprintf '%s\\n' '" + finalRecord + "' >> \"$AGX_MUSE_LOG\"\nsleep 30\n"
+	batch := batchLines(
+		"@echo off",
+		`>> "%AGX_MUSE_LOG%" echo `+finalRecord,
+		"ping 127.0.0.1 -n 31 >nul",
+	)
+	writeStubCommandOnPath(t, "muse", posix, batch)
+
+	previousObserveInterval := museSessionObserveInterval
+	previousCandidateDelay := museFinalCandidateDelay
+	previousRecoveryGrace := museFinalCandidateRecoveryGracePeriod
+	museSessionObserveInterval = 10 * time.Millisecond
+	museFinalCandidateDelay = 10 * time.Millisecond
+	museFinalCandidateRecoveryGracePeriod = 100 * time.Millisecond
+	t.Cleanup(func() {
+		museSessionObserveInterval = previousObserveInterval
+		museFinalCandidateDelay = previousCandidateDelay
+		museFinalCandidateRecoveryGracePeriod = previousRecoveryGrace
+	})
+
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(workspace, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "muse task", nil, "muse", true, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.AgentThreadID = &sessionID
+	service := NewService("test")
+	service.store = store
+	t.Cleanup(func() { _ = service.agents.Close() })
+
+	started := time.Now()
+	if err := service.agents.execMuseStream(context.Background(), task, project, "turn-1", "hello"); err != nil {
+		t.Fatalf("execMuseStream() error = %v, want recovered success", err)
+	}
+	if elapsed := time.Since(started); elapsed > 15*time.Second {
+		t.Fatalf("recovery took %v, want under 15 seconds", elapsed)
+	}
+	messages, err := store.ListTaskTranscriptMessages(task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Role != "assistant" || messages[0].Body != "done" {
+		t.Fatalf("messages = %#v, want recovered assistant response", messages)
+	}
+}
+
 func TestClaudeStreamRequiresTerminalResult(t *testing.T) {
 	writeStubCommandOnPath(t, "claude", stubExitZeroPosix, stubExitZeroBatch)
 
@@ -381,6 +444,59 @@ func TestClaudeStreamRequiresTerminalResult(t *testing.T) {
 	err = service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "hello")
 	if err == nil || !strings.Contains(err.Error(), "without a terminal result") {
 		t.Fatalf("execClaudeStreamOnce() error = %v, want missing terminal error", err)
+	}
+}
+
+func TestClaudeStreamRecoversEndTurnWithoutResult(t *testing.T) {
+	posix := `#!/bin/sh
+printf '%s\n' '{"type":"assistant","message":{"id":"msg-1","stop_reason":"end_turn","content":[{"type":"thinking","thinking":"still working"}]}}'
+sleep 1
+printf '%s\n' '{"type":"assistant","message":{"id":"msg-1","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}'
+sleep 30
+`
+	batch := batchLines(
+		"@echo off",
+		`echo {"type":"assistant","message":{"id":"msg-1","stop_reason":"end_turn","content":[{"type":"thinking","thinking":"still working"}]}}`,
+		"ping 127.0.0.1 -n 2 >nul",
+		`echo {"type":"assistant","message":{"id":"msg-1","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`,
+		"ping 127.0.0.1 -n 31 >nul",
+	)
+	writeStubCommandOnPath(t, "claude", posix, batch)
+
+	previousGracePeriod := claudeEndTurnGracePeriod
+	claudeEndTurnGracePeriod = 100 * time.Millisecond
+	t.Cleanup(func() { claudeEndTurnGracePeriod = previousGracePeriod })
+
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "claude task", nil, "claude", true, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	t.Cleanup(func() { _ = service.agents.Close() })
+
+	started := time.Now()
+	if err := service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "hello"); err != nil {
+		t.Fatalf("execClaudeStreamOnce() error = %v, want recovered success", err)
+	}
+	if elapsed := time.Since(started); elapsed > 15*time.Second {
+		t.Fatalf("recovery took %v, want under 15 seconds", elapsed)
+	}
+	messages, err := store.ListTaskTranscriptMessages(task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Role != "assistant" || messages[0].Body != "done" {
+		t.Fatalf("messages = %#v, want recovered assistant response", messages)
 	}
 }
 
