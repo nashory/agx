@@ -408,6 +408,25 @@ func TestCodexTurnWithoutOutputIsReported(t *testing.T) {
 	}
 }
 
+func TestCodexRuntimeExitRecoversActiveTurn(t *testing.T) {
+	service, fake, task := newCodexTurnTestService(t)
+	fake.stderr = "codex: connection lost"
+
+	runCodexNotifications(t, service, fake, codexTurnStarted("turn-1"))
+
+	updated, err := service.store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != db.StatusWaiting {
+		t.Fatalf("task status = %q, want waiting", updated.Status)
+	}
+	bodies := codexStatusMessages(t, service, task.ID)
+	if len(bodies) != 1 || !strings.Contains(bodies[0], "stopped before the turn completed") || !strings.Contains(bodies[0], fake.stderr) {
+		t.Fatalf("status messages = %#v, want app-server exit diagnostic", bodies)
+	}
+}
+
 func TestCodexTurnWithOutputIsNotReported(t *testing.T) {
 	service, fake, task := newCodexTurnTestService(t)
 
@@ -978,6 +997,33 @@ func TestInterruptInactiveCodexTaskDoesNotStartRuntime(t *testing.T) {
 
 	if err := service.agents.InterruptTask(context.Background(), task); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInterruptClaudeTaskClearsActiveTurnImmediately(t *testing.T) {
+	service := NewService("test")
+	t.Cleanup(func() { _ = service.agents.Close() })
+	task := db.Task{ID: "task-1", Agent: "claude"}
+	turnCtx, cancel := context.WithCancel(context.Background())
+	service.agents.activeTurns[task.ID] = "turn-1"
+	service.agents.turnCancels[task.ID] = cancel
+	service.agents.claudeQueues[task.ID] = []string{"queued"}
+
+	if err := service.agents.InterruptTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	service.agents.mu.Lock()
+	activeTurn := service.agents.activeTurns[task.ID]
+	queued := service.agents.claudeQueues[task.ID]
+	_, hasCancel := service.agents.turnCancels[task.ID]
+	service.agents.mu.Unlock()
+	if activeTurn != "" || len(queued) != 0 || hasCancel {
+		t.Fatalf("activeTurn=%q queued=%#v hasCancel=%v, want cleared", activeTurn, queued, hasCancel)
+	}
+	select {
+	case <-turnCtx.Done():
+	default:
+		t.Fatal("turn context was not canceled")
 	}
 }
 

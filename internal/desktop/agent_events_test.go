@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nashory/agx/internal/agentstream"
 	"github.com/nashory/agx/internal/codexapp"
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
@@ -479,6 +480,33 @@ func TestAgentEventServiceStopClearsStructuredRuntime(t *testing.T) {
 	}
 }
 
+func TestInterruptClaudeTaskClearsActiveTurnImmediately(t *testing.T) {
+	service := newAgentEventService(&App{})
+	t.Cleanup(func() { _ = service.Close() })
+	task := db.Task{ID: "task-1", Agent: "claude"}
+	turnCtx, cancel := context.WithCancel(context.Background())
+	service.activeTurns[task.ID] = "turn-1"
+	service.turnCancels[task.ID] = cancel
+	service.claudeQueues[task.ID] = []string{"queued"}
+
+	if err := service.InterruptTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	service.mu.Lock()
+	activeTurn := service.activeTurns[task.ID]
+	queued := service.claudeQueues[task.ID]
+	_, hasCancel := service.turnCancels[task.ID]
+	service.mu.Unlock()
+	if activeTurn != "" || len(queued) != 0 || hasCancel {
+		t.Fatalf("activeTurn=%q queued=%#v hasCancel=%v, want cleared", activeTurn, queued, hasCancel)
+	}
+	select {
+	case <-turnCtx.Done():
+	default:
+		t.Fatal("turn context was not canceled")
+	}
+}
+
 func TestAgentEventServiceClearResetsCodexContext(t *testing.T) {
 	app, project := newTestApp(t)
 	fake := newFakeCodexRuntime()
@@ -576,6 +604,22 @@ func TestMapClaudeStreamLineMapsAssistantText(t *testing.T) {
 	event := events[0]
 	if event.Kind != "assistant_message" || event.Text != "hello\nworld" || event.TaskID != "task-1" {
 		t.Fatalf("event = %#v", event)
+	}
+}
+
+func TestInspectClaudeStreamLineDetectsAssistantEndTurn(t *testing.T) {
+	task := db.Task{ID: "task-1", Agent: "claude"}
+	mapped := inspectClaudeStreamLine(task, "turn-1", []byte(`{"type":"assistant","message":{"id":"msg-1","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`))
+	if !mapped.endTurn {
+		t.Fatal("end_turn was not detected")
+	}
+	if len(mapped.events) != 1 || mapped.events[0].Kind != agentstream.EventAssistantMessage {
+		t.Fatalf("events = %#v, want assistant message", mapped.events)
+	}
+
+	thinkingOnly := inspectClaudeStreamLine(task, "turn-1", []byte(`{"type":"assistant","message":{"id":"msg-1","stop_reason":"end_turn","content":[{"type":"thinking","thinking":"still working"}]}}`))
+	if thinkingOnly.endTurn {
+		t.Fatal("thinking-only end_turn started terminal recovery")
 	}
 }
 

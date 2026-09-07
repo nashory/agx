@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nashory/agx/internal/agent"
@@ -16,6 +17,7 @@ import (
 	"github.com/nashory/agx/internal/codexapp"
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
+	"github.com/nashory/agx/internal/processtree"
 )
 
 type codexRuntime interface {
@@ -37,6 +39,11 @@ const museStreamKind = "muse-jsonl"
 const agentEventSubscriberBuffer = 256
 
 var errStructuredFailurePublished = errors.New("structured agent failure already published")
+
+// Claude normally follows an assistant end_turn message with a result record
+// and process exit. Bound the wait so a missing result cannot block queued
+// follow-ups forever.
+var claudeEndTurnGracePeriod = 30 * time.Second
 
 type agentEventService struct {
 	runtime *Service
@@ -350,6 +357,8 @@ func (s *agentEventService) InterruptTask(ctx context.Context, task db.Task) err
 	if isClaudeTask(task.Agent) || isMuseTask(task.Agent) {
 		s.mu.Lock()
 		cancel := s.turnCancels[task.ID]
+		delete(s.activeTurns, task.ID)
+		delete(s.turnCancels, task.ID)
 		if isClaudeTask(task.Agent) {
 			delete(s.claudeQueues, task.ID)
 		} else {
@@ -599,6 +608,9 @@ func (s *agentEventService) launchClaudeTurn(task db.Task, project db.Project, t
 func (s *agentEventService) runClaudeTurn(ctx context.Context, cancel context.CancelFunc, task db.Task, project db.Project, turnID, message string) {
 	defer cancel()
 	err := s.execClaudeStream(ctx, task, project, turnID, message)
+	if !s.isCurrentTurn(task.ID, turnID) {
+		return
+	}
 	if errors.Is(err, errStructuredFailurePublished) {
 		_ = s.runtime.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
 		s.runtime.emitMetadataEvent(task.ProjectID)
@@ -635,6 +647,12 @@ func (s *agentEventService) runClaudeTurn(ctx context.Context, cancel context.Ca
 	s.runtime.emitMetadataEvent(task.ProjectID)
 	s.runtime.syncDiscordAsync()
 	s.finishClaudeTurn(task, project, turnID, true)
+}
+
+func (s *agentEventService) isCurrentTurn(taskID, turnID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeTurns[taskID] == turnID
 }
 
 func (s *agentEventService) finishClaudeTurn(task db.Task, project db.Project, completedTurnID string, startQueued bool) {
@@ -710,6 +728,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	}
 	args := claudeStreamArgs(task)
 	cmd := exec.CommandContext(ctx, ag.Command, args...)
+	processtree.Configure(cmd)
 	cmd.Dir = taskWorkingDir(task, project)
 	cmd.Stdin = strings.NewReader(message)
 	stdout, err := cmd.StdoutPipe()
@@ -723,14 +742,24 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	}
 	terminalSeen := false
 	failurePublished := false
+	endTurnSeen := false
+	var terminalReceived atomic.Bool
+	recoveryTriggered := make(chan struct{})
+	var endTurnTimer *time.Timer
 	readErr := agentstream.ReadJSONLines(stdout, func(line []byte) error {
-		for _, event := range mapClaudeStreamLine(task, turnID, line) {
+		mapped := inspectClaudeStreamLine(task, turnID, line)
+		for _, event := range mapped.events {
 			s.publish(task.ID, event)
 			if event.Kind == agentstream.EventTurnCompleted {
 				terminalSeen = true
+				terminalReceived.Store(true)
+				if endTurnTimer != nil {
+					endTurnTimer.Stop()
+				}
 			}
 			if event.Kind == agentstream.EventError || event.Kind == agentstream.EventInterrupted {
 				terminalSeen = true
+				terminalReceived.Store(true)
 				failurePublished = true
 			}
 			if event.Cursor != "" {
@@ -740,14 +769,52 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 				_ = s.runtime.store.UpdateTaskAgentStream(task.ID, &threadID, &cursor, &streamKind)
 			}
 		}
+		if mapped.endTurn && !terminalSeen && !endTurnSeen {
+			endTurnSeen = true
+			endTurnTimer = time.AfterFunc(claudeEndTurnGracePeriod, func() {
+				if terminalReceived.Load() {
+					return
+				}
+				close(recoveryTriggered)
+				_ = processtree.Terminate(cmd)
+			})
+		}
 		return nil
 	})
+	if endTurnTimer != nil {
+		endTurnTimer.Stop()
+	}
 	waitErr := cmd.Wait()
+	recovered := false
+	select {
+	case <-recoveryTriggered:
+		recovered = true
+	default:
+	}
 	if readErr != nil {
 		return readErr
 	}
 	if failurePublished {
 		return errStructuredFailurePublished
+	}
+	if recovered && endTurnSeen {
+		waitErr = nil
+	}
+	if waitErr == nil && endTurnSeen && !terminalSeen {
+		event := claudeEndTurnCompletedEvent(task, turnID)
+		s.publish(task.ID, event)
+		terminalSeen = true
+		if event.Cursor != "" {
+			cursor := event.Cursor
+			streamKind := claudeStreamKind
+			_ = s.runtime.store.UpdateTaskAgentStream(task.ID, &cursor, &cursor, &streamKind)
+		}
+		if recovered {
+			logRuntimeOperation("claude_stream_recovery",
+				"task", shortDiagnosticID(task.ID),
+				"reason", "missing_result_after_end_turn",
+			)
+		}
 	}
 	if waitErr != nil {
 		errText := strings.TrimSpace(stderr.String())
@@ -810,16 +877,44 @@ func taskWorkingDir(task db.Task, project db.Project) string {
 // owned. Only Codex turn state is discarded: Claude and Muse turns run in their
 // own processes and must survive an app-server restart.
 func (s *agentEventService) forgetRuntime(client codexRuntime) {
+	type lostTurn struct {
+		taskID string
+		turnID string
+	}
+	var lostTurns []lostTurn
 	s.mu.Lock()
 	if s.codex == client {
 		s.codex = nil
 		s.codexLastTurn = time.Time{}
 		for taskID := range s.codexTurns {
+			lostTurns = append(lostTurns, lostTurn{taskID: taskID, turnID: s.activeTurns[taskID]})
 			delete(s.activeTurns, taskID)
 		}
 		s.codexTurns = map[string]*codexTurn{}
 	}
 	s.mu.Unlock()
+	if len(lostTurns) == 0 || s.ctx.Err() != nil || s.runtime.store == nil {
+		return
+	}
+	message := enrichCodexError("Codex app-server stopped before the turn completed.", client.RecentStderr())
+	for _, lost := range lostTurns {
+		task, err := s.runtime.store.GetTask(lost.taskID)
+		if err != nil {
+			continue
+		}
+		s.publish(task.ID, agentstream.Event{
+			ID:        agentstream.StableEventID(task.ID, agentstream.EventError, lost.turnID, "app-server-stopped"),
+			TaskID:    task.ID,
+			TurnID:    lost.turnID,
+			Kind:      agentstream.EventError,
+			Agent:     task.Agent,
+			CreatedAt: time.Now(),
+			Error:     message,
+		})
+		_ = s.runtime.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
+		s.runtime.emitMetadataEvent(task.ProjectID)
+	}
+	s.runtime.syncDiscordAsync()
 }
 
 func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
@@ -1144,9 +1239,18 @@ func isStructuredTask(task agxdiscord.TaskSummary) bool {
 }
 
 func mapClaudeStreamLine(task db.Task, turnID string, line []byte) []agentstream.Event {
+	return inspectClaudeStreamLine(task, turnID, line).events
+}
+
+type claudeStreamMapping struct {
+	events  []agentstream.Event
+	endTurn bool
+}
+
+func inspectClaudeStreamLine(task db.Task, turnID string, line []byte) claudeStreamMapping {
 	line = bytes.TrimSpace(line)
 	if len(line) == 0 || line[0] != '{' {
-		return nil
+		return claudeStreamMapping{}
 	}
 	var envelope struct {
 		Type      string          `json:"type"`
@@ -1164,14 +1268,17 @@ func mapClaudeStreamLine(task db.Task, turnID string, line []byte) []agentstream
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
-		return nil
+		return claudeStreamMapping{}
 	}
 	now := time.Now()
 	switch envelope.Type {
 	case "assistant":
-		return mapClaudeAssistantMessage(task, turnID, envelope.Message, now)
+		return claudeStreamMapping{
+			events:  mapClaudeAssistantMessage(task, turnID, envelope.Message, now),
+			endTurn: claudeAssistantEnded(envelope.Message),
+		}
 	case "user":
-		return mapClaudeToolResults(task, turnID, envelope.Message, now)
+		return claudeStreamMapping{events: mapClaudeToolResults(task, turnID, envelope.Message, now)}
 	case "result":
 		tokens := envelope.Usage.InputTokens + envelope.Usage.OutputTokens + envelope.Usage.CacheCreationInputTokens + envelope.Usage.CacheReadInputTokens
 		event := agentstream.Event{
@@ -1195,9 +1302,41 @@ func mapClaudeStreamLine(task db.Task, turnID string, line []byte) []agentstream
 				event.Error = "Claude returned an error."
 			}
 		}
-		return []agentstream.Event{event}
+		return claudeStreamMapping{events: []agentstream.Event{event}}
 	default:
-		return nil
+		return claudeStreamMapping{}
+	}
+}
+
+func claudeAssistantEnded(raw json.RawMessage) bool {
+	var message struct {
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(raw, &message) != nil || !strings.EqualFold(strings.TrimSpace(message.StopReason), "end_turn") {
+		return false
+	}
+	for _, content := range message.Content {
+		if content.Type == "text" && strings.TrimSpace(content.Text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeEndTurnCompletedEvent(task db.Task, turnID string) agentstream.Event {
+	cursor := claudeThreadID(task)
+	return agentstream.Event{
+		ID:        agentstream.StableEventID(task.ID, agentstream.EventTurnCompleted, turnID, "assistant-end-turn"),
+		TaskID:    task.ID,
+		TurnID:    turnID,
+		Kind:      agentstream.EventTurnCompleted,
+		Agent:     task.Agent,
+		CreatedAt: time.Now(),
+		Cursor:    cursor,
 	}
 }
 

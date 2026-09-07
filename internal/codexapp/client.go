@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/nashory/agx/internal/processtree"
 )
 
 // StreamKind identifies Codex app-server event streams persisted on tasks.
@@ -109,6 +111,7 @@ func Start(ctx context.Context, opts Options) (*Client, error) {
 		command = "codex"
 	}
 	cmd := exec.Command(command, appServerArgs()...)
+	processtree.Prepare(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -126,9 +129,7 @@ func Start(ctx context.Context, opts Options) (*Client, error) {
 	}
 	client := NewClient(stdout, stdin, closerFunc(func() error {
 		_ = stdin.Close()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		_ = processtree.Terminate(cmd)
 		return cmd.Wait()
 	}))
 	client.captureStderr(stderr)
