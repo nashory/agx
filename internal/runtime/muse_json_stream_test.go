@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nashory/agx/internal/agentstream"
+	"github.com/nashory/agx/internal/claudestream"
 	"github.com/nashory/agx/internal/db"
 )
 
@@ -497,6 +498,46 @@ sleep 30
 	}
 	if len(messages) != 1 || messages[0].Role != "assistant" || messages[0].Body != "done" {
 		t.Fatalf("messages = %#v, want recovered assistant response", messages)
+	}
+}
+
+func TestClaudeStreamRecoversStalledQuickTool(t *testing.T) {
+	posix := `#!/bin/sh
+printf '%s\n' '{"type":"assistant","message":{"id":"msg-1","content":[{"type":"tool_use","id":"tool-1","name":"Edit","input":{"file_path":"test.txt"}}]}}'
+sleep 30
+`
+	batch := batchLines(
+		"@echo off",
+		`echo {"type":"assistant","message":{"id":"msg-1","content":[{"type":"tool_use","id":"tool-1","name":"Edit","input":{"file_path":"test.txt"}}]}}`,
+		"ping 127.0.0.1 -n 31 >nul",
+	)
+	writeStubCommandOnPath(t, "claude", posix, batch)
+
+	previousTimeout := claudeQuickToolTimeout
+	claudeQuickToolTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { claudeQuickToolTimeout = previousTimeout })
+
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := db.Task{ID: db.NewTaskID(), ProjectID: project.ID, Agent: "claude"}
+	service := NewService("test")
+	service.store = store
+	t.Cleanup(func() { _ = service.agents.Close() })
+
+	started := time.Now()
+	err = service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "hello")
+	if !errors.Is(err, claudestream.ErrToolStalled) || !strings.Contains(err.Error(), "Edit") {
+		t.Fatalf("execClaudeStreamOnce() error = %v, want an Edit stall", err)
+	}
+	if elapsed := time.Since(started); elapsed > 15*time.Second {
+		t.Fatalf("recovery took %v, want under 15 seconds", elapsed)
 	}
 }
 

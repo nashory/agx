@@ -14,6 +14,7 @@ import (
 
 	"github.com/nashory/agx/internal/agent"
 	"github.com/nashory/agx/internal/agentstream"
+	"github.com/nashory/agx/internal/claudestream"
 	"github.com/nashory/agx/internal/codexapp"
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
@@ -42,6 +43,7 @@ var errStructuredFailurePublished = errors.New("structured agent failure already
 // and process exit. Bound the wait so a missing result cannot block queued
 // follow-ups forever.
 var claudeEndTurnGracePeriod = 30 * time.Second
+var claudeQuickToolTimeout = claudestream.DefaultQuickToolTimeout
 
 type agentEventService struct {
 	app    *App
@@ -508,7 +510,7 @@ func (s *agentEventService) runClaudeTurn(ctx context.Context, cancel context.Ca
 		_ = s.app.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
 		s.app.emitMetadataEvent(task.ProjectID)
 		s.app.syncDiscordAsync()
-		s.finishClaudeTurn(task, project, turnID, false)
+		s.finishClaudeTurn(task, project, turnID, errors.Is(err, claudestream.ErrToolStalled))
 		return
 	}
 	_ = s.app.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
@@ -614,9 +616,13 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	var terminalReceived atomic.Bool
 	recoveryTriggered := make(chan struct{})
 	var endTurnTimer *time.Timer
+	toolWatchdog := claudestream.NewToolWatchdog(claudeQuickToolTimeout, func() {
+		_ = processtree.Terminate(cmd)
+	})
 	readErr := agentstream.ReadJSONLines(stdout, func(line []byte) error {
 		mapped := inspectClaudeStreamLine(task, turnID, line)
 		for _, event := range mapped.events {
+			toolWatchdog.Observe(event)
 			s.publish(task.ID, event)
 			if event.Kind == agentstream.EventTurnCompleted {
 				terminalSeen = true
@@ -652,12 +658,16 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	if endTurnTimer != nil {
 		endTurnTimer.Stop()
 	}
+	toolWatchdog.Stop()
 	waitErr := cmd.Wait()
 	recovered := false
 	select {
 	case <-recoveryTriggered:
 		recovered = true
 	default:
+	}
+	if stallErr := toolWatchdog.Err(); stallErr != nil {
+		return stallErr
 	}
 	if readErr != nil {
 		return readErr
