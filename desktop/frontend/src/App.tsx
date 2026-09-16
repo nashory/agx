@@ -48,6 +48,7 @@ import {
   clampZoomLevel,
   defaultZoomLevel,
   errorMessage,
+  focusAndRevealGridItem,
   focusMainContent,
   focusSidebarNavigation,
   hasStructuredSession,
@@ -991,6 +992,8 @@ function TaskView({
   const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const [grantingAccess, setGrantingAccess] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
+  const taskBoardRef = useRef<HTMLElement>(null);
+  const keyboardNavigationRef = useRef(false);
   const taskCounts = useMemo(() => taskInterfaceCounts(tasks), [tasks]);
   const visibleTasks = useMemo(() => tasksForInterfaceFilter(tasks, taskFilter), [tasks, taskFilter]);
   const focusedTask = visibleTasks.find((task) => task.id === focusedTaskID) ?? null;
@@ -1012,6 +1015,13 @@ function TaskView({
     }
     setFocusedTaskID((current) => (current && visibleTasks.some((task) => task.id === current) ? current : visibleTasks[0].id));
   }, [visibleTasks]);
+
+  useLayoutEffect(() => {
+    if (!keyboardNavigationRef.current || !focusedTaskID) return;
+    keyboardNavigationRef.current = false;
+    const focusedIndex = visibleTasks.findIndex((task) => task.id === focusedTaskID);
+    if (focusedIndex >= 0) focusAndRevealGridItem(taskBoardRef.current, focusedIndex);
+  }, [focusedTaskID, visibleTasks, viewMode]);
 
   useEffect(() => {
     const visibleIDs = new Set(visibleTasks.map((task) => task.id));
@@ -1068,6 +1078,7 @@ function TaskView({
         if (event.key in moves) {
           event.preventDefault();
           const nextIndex = Math.min(visibleTasks.length - 1, Math.max(0, currentIndex + moves[event.key]));
+          keyboardNavigationRef.current = true;
           setFocusedTaskID(visibleTasks[nextIndex].id);
           return;
         }
@@ -1306,7 +1317,7 @@ function TaskView({
         </section>
       )}
       <section className={`task-board-layout ${showTaskOutput ? 'with-output' : ''}`}>
-        <section className="task-board-main">
+        <section className="task-board-main" ref={taskBoardRef}>
           {visibleTasks.length === 0 ? (
             <EmptyState title={tasks.length === 0 ? 'No tasks' : `No ${taskInterfaceLabel(taskFilter)} tasks`} detail={tasks.length === 0 ? 'Create a task to start an agent session.' : 'Switch tabs or create a matching task.'} />
           ) : viewMode === 'list' ? (

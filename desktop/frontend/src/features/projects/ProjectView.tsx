@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   Code2,
@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 
 import { api } from '../../api';
-import { errorMessage, isTextEntry, projectGridColumns } from '../../appLogic';
+import { errorMessage, focusAndRevealGridItem, isTextEntry, projectGridColumns } from '../../appLogic';
 import type { LanguageStat, Project, ProjectCandidate } from '../../types';
 import { EmptyState, ErrorBar, Header, IconButton, type ThemeMode } from '../../ui';
 
@@ -42,48 +42,95 @@ export function ProjectView({
   const [editDescription, setEditDescription] = useState('');
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const gridRef = useRef<HTMLElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const keyboardNavigationRef = useRef(false);
+  const visibleProjects = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase();
+    if (!query) return projects;
+    return projects
+      .map((item, index) => {
+        const name = item.name.toLocaleLowerCase();
+        const path = item.path.toLocaleLowerCase();
+        const description = item.description?.toLocaleLowerCase() ?? '';
+        const score = name === query ? 0 : name.startsWith(query) ? 1 : name.includes(query) ? 2 : path.includes(query) ? 3 : description.includes(query) ? 4 : -1;
+        return { item, index, score };
+      })
+      .filter((result) => result.score >= 0)
+      .sort((left, right) => left.score - right.score || left.index - right.index)
+      .map((result) => result.item);
+  }, [projects, searchQuery]);
 
   useEffect(() => {
-    setSelectedIndex((value) => Math.min(Math.max(value, 0), Math.max(projects.length - 1, 0)));
-  }, [projects.length]);
+    setSelectedIndex((value) => Math.min(Math.max(value, 0), Math.max(visibleProjects.length - 1, 0)));
+  }, [visibleProjects.length]);
+
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [searchQuery]);
+
+  useLayoutEffect(() => {
+    if (!keyboardNavigationRef.current) return;
+    keyboardNavigationRef.current = false;
+    focusAndRevealGridItem(gridRef.current, selectedIndex);
+  }, [selectedIndex, visibleProjects]);
+
+  function moveSelection(offset: number) {
+    if (visibleProjects.length === 0) return;
+    keyboardNavigationRef.current = true;
+    setSelectedIndex((value) => Math.min(visibleProjects.length - 1, Math.max(0, value + offset)));
+  }
+
+  function openSelectedProject() {
+    const selected = visibleProjects[selectedIndex];
+    if (selected) onOpenProject(selected);
+  }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (adding || editing || deleting || projects.length === 0 || isTextEntry(event.target)) return;
+      if (adding || editing || deleting) return;
+      const searchShortcut = ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') || (event.key === '/' && !isTextEntry(event.target));
+      if (searchShortcut) {
+        event.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
+      if (visibleProjects.length === 0 || isTextEntry(event.target)) return;
       const columns = projectGridColumns(gridRef.current);
       if (event.altKey && event.key === 'Enter') {
         event.preventDefault();
-        onOpenProject(projects[selectedIndex]);
+        openSelectedProject();
         return;
       }
       switch (event.key) {
         case 'ArrowRight':
           event.preventDefault();
-          setSelectedIndex((value) => Math.min(projects.length - 1, value + 1));
+          moveSelection(1);
           break;
         case 'ArrowLeft':
           event.preventDefault();
-          setSelectedIndex((value) => Math.max(0, value - 1));
+          moveSelection(-1);
           break;
         case 'ArrowDown':
           event.preventDefault();
-          setSelectedIndex((value) => Math.min(projects.length - 1, value + columns));
+          moveSelection(columns);
           break;
         case 'ArrowUp':
           event.preventDefault();
-          setSelectedIndex((value) => Math.max(0, value - columns));
+          moveSelection(-columns);
           break;
         case 'Enter':
           event.preventDefault();
-          onOpenProject(projects[selectedIndex]);
+          openSelectedProject();
           break;
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [adding, deleting, editing, onOpenProject, projects, selectedIndex]);
+  }, [adding, deleting, editing, onOpenProject, selectedIndex, visibleProjects]);
 
   function startEdit(project: Project) {
     setEditing(project);
@@ -133,18 +180,63 @@ export function ProjectView({
         </IconButton>
       </Header>
       <ErrorBar error={error || localError} />
+      <section className="project-search-toolbar" role="search" aria-label="Project search">
+        <label className="project-search-control">
+          <Search size={18} aria-hidden="true" />
+          <input
+            ref={searchRef}
+            value={searchQuery}
+            aria-label="Search projects"
+            placeholder="Search projects by name or path"
+            onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                event.stopPropagation();
+                openSelectedProject();
+                return;
+              }
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                event.stopPropagation();
+                const columns = projectGridColumns(gridRef.current);
+                moveSelection(event.key === 'ArrowDown' ? columns : -columns);
+              }
+            }}
+          />
+          {searchQuery && (
+            <button className="project-search-clear" aria-label="Clear project search" onClick={() => {
+              setSearchQuery('');
+              searchRef.current?.focus();
+            }}>
+              <X size={16} />
+            </button>
+          )}
+          <kbd>⌘/Ctrl K</kbd>
+        </label>
+        <span className="project-search-count">{visibleProjects.length} of {projects.length} projects</span>
+      </section>
       {projects.length === 0 ? (
         <EmptyState title="No projects" detail="Add a project to open a local git repository." />
+      ) : visibleProjects.length === 0 ? (
+        <EmptyState title="No matching projects" detail="Try another project name or path." />
       ) : (
         <section className="project-grid" ref={gridRef}>
-          {projects.map((item, index) => (
+          {visibleProjects.map((item, index) => (
             <article
               className={`project-card ${index === selectedIndex ? 'selected' : ''}`}
               key={item.id}
               tabIndex={0}
+              data-grid-index={index}
               style={{ animationDelay: `${Math.min(index * 35, 240)}ms` }}
               onClick={() => setSelectedIndex(index)}
               onFocus={() => setSelectedIndex(index)}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget || event.key !== 'Enter') return;
+                event.preventDefault();
+                event.stopPropagation();
+                onOpenProject(item);
+              }}
               onDoubleClick={() => onOpenProject(item)}
             >
               <Folder size={22} />

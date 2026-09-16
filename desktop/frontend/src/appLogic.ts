@@ -166,6 +166,14 @@ export function projectGridColumns(grid: HTMLElement | null): number {
   return Math.max(1, Math.floor((grid.clientWidth + gap) / (firstCard.offsetWidth + gap)));
 }
 
+export function focusAndRevealGridItem(container: HTMLElement | null, index: number): HTMLElement | null {
+  const item = container?.querySelector<HTMLElement>(`[data-grid-index="${index}"]`) ?? null;
+  if (!item) return null;
+  item.focus({ preventScroll: true });
+  item.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  return item;
+}
+
 export function errorMessage(err: unknown): string {
   return humanizeErrorMessage(err instanceof Error ? err.message : String(err));
 }

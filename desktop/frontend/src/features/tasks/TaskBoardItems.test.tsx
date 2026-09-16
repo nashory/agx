@@ -31,6 +31,26 @@ describe('TaskBoardItems', () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
+  it('makes the focused task card available to roving keyboard focus', () => {
+    const { container } = render(<TaskCard task={task} busy={false} focused onFocus={vi.fn()} onOpen={vi.fn()} onAction={vi.fn()} index={3} />);
+    const card = container.querySelector<HTMLElement>('.task-card')!;
+
+    expect(card.tabIndex).toBe(0);
+    expect(card.dataset.gridIndex).toBe('3');
+  });
+
+  it('opens a focused task card with Enter', async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const { container } = render(<TaskCard task={task} busy={false} focused onFocus={vi.fn()} onOpen={onOpen} onAction={vi.fn()} />);
+    const card = container.querySelector<HTMLElement>('.task-card')!;
+
+    card.focus();
+    await user.keyboard('{Enter}');
+
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
   it('renames tasks through the action callback', async () => {
     const user = userEvent.setup();
     const onAction = vi.fn();

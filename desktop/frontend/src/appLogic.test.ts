@@ -7,6 +7,7 @@ import {
   defaultPreferences,
   discordSyncLabel,
   discordSyncTime,
+  focusAndRevealGridItem,
   humanizeErrorMessage,
   loadPreferences,
   preferenceKey,
@@ -131,7 +132,7 @@ describe('appLogic', () => {
   it('calculates columns for project and task grids', () => {
     const grid = document.createElement('section');
     Object.defineProperty(grid, 'clientWidth', { value: 640 });
-    vi.spyOn(window, 'getComputedStyle').mockReturnValue({ columnGap: '16px' } as CSSStyleDeclaration);
+    const computedStyle = vi.spyOn(window, 'getComputedStyle').mockReturnValue({ columnGap: '16px' } as CSSStyleDeclaration);
 
     const projectCard = document.createElement('article');
     projectCard.className = 'project-card';
@@ -145,5 +146,26 @@ describe('appLogic', () => {
     Object.defineProperty(taskCard, 'offsetWidth', { value: 200 });
     grid.append(taskCard);
     expect(projectGridColumns(grid)).toBe(3);
+    computedStyle.mockRestore();
+  });
+
+  it('focuses and reveals a keyboard-selected grid item', () => {
+    const grid = document.createElement('section');
+    const first = document.createElement('article');
+    const second = document.createElement('article');
+    first.dataset.gridIndex = '0';
+    second.dataset.gridIndex = '1';
+    first.tabIndex = -1;
+    second.tabIndex = -1;
+    const scrollIntoView = vi.fn();
+    second.scrollIntoView = scrollIntoView;
+    grid.append(first, second);
+    document.body.append(grid);
+
+    expect(focusAndRevealGridItem(grid, 1)).toBe(second);
+    expect(document.activeElement).toBe(second);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+
+    grid.remove();
   });
 });

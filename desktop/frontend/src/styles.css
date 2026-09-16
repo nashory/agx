@@ -861,6 +861,82 @@
   padding: 22px;
 }
 
+.project-search-toolbar {
+  position: sticky;
+  top: 72px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 22px 0;
+  background: linear-gradient(to bottom, var(--bg) 72%, transparent);
+}
+
+.project-search-control {
+  min-width: min(560px, 70vw);
+  max-width: 760px;
+  height: 42px;
+  flex: 1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  padding: 0 10px 0 12px;
+  box-shadow: var(--shadow);
+}
+
+.project-search-control:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent), var(--shadow);
+}
+
+.project-search-control input {
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
+}
+
+.project-search-control kbd {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  padding: 3px 6px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.project-search-clear {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.project-search-clear:hover,
+.project-search-clear:focus-visible {
+  color: var(--text-strong);
+  background: var(--surface-muted);
+}
+
+.project-search-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .task-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, var(--task-card-width));
@@ -3660,6 +3736,17 @@
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .project-search-toolbar {
+    top: 96px;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .project-search-control {
+    width: 100%;
+    min-width: 0;
   }
 
   .project-access-inline {

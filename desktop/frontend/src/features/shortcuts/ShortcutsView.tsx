@@ -13,6 +13,7 @@ const shortcutGroups: ShortcutGroup[] = [
     title: 'Workspace',
     rows: [
       { action: 'Back to projects', keys: ['Alt', 'Backspace'] },
+      { action: 'Focus project search', keys: ['/', 'or', 'Ctrl / Cmd', 'K'] },
       { action: 'Move between projects or tasks', keys: ['Arrow keys'] },
       { action: 'Open selected project or task', keys: ['Enter', 'or', 'Alt', 'Enter'] },
       { action: 'Focus new task title', keys: ['Ctrl / Cmd', 'N'] },

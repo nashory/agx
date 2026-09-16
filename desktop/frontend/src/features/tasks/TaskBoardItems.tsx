@@ -61,8 +61,24 @@ export function TaskCard({
   return (
     <article
       className={`task-card ${selectable ? 'selectable selection-mode' : ''} ${focused ? 'focused' : ''} ${selected ? 'selected' : ''}`}
+      data-grid-index={index}
+      tabIndex={focused ? 0 : -1}
       style={{ animationDelay: `${Math.min(index * 30, 240)}ms` }}
       onClick={handleCardClick}
+      onFocus={(event) => {
+        if (event.target === event.currentTarget) onFocus();
+      }}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || event.key !== 'Enter') return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (selectable) {
+          onToggleSelect();
+          return;
+        }
+        onFocus();
+        onOpen();
+      }}
     >
       {selectable && (
         <label className="task-select-control" onClick={(event) => event.stopPropagation()}>
@@ -133,10 +149,26 @@ export function TaskList({
 
   return (
     <section className="task-table">
-      {tasks.map((task) => (
+      {tasks.map((task, index) => (
         <div
           className={`task-row ${selectable ? 'selectable selection-mode' : ''} ${task.id === focusedTaskID ? 'focused' : ''} ${selectedTaskIDs?.has(task.id) ? 'selected' : ''}`}
           key={task.id}
+          data-grid-index={index}
+          tabIndex={task.id === focusedTaskID ? 0 : -1}
+          onFocus={(event) => {
+            if (event.target === event.currentTarget) onFocusTask(task.id);
+          }}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget || event.key !== 'Enter') return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (selectable) {
+              onToggleSelect(task.id);
+              return;
+            }
+            onFocusTask(task.id);
+            onSelectTask(task);
+          }}
           onClick={() => {
             if (selectable) {
               onToggleSelect(task.id);
