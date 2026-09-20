@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -453,16 +454,34 @@ func TestClaudeStreamRecoversEndTurnWithoutResult(t *testing.T) {
 printf '%s\n' '{"type":"assistant","message":{"id":"msg-1","stop_reason":"end_turn","content":[{"type":"thinking","thinking":"still working"}]}}'
 sleep 1
 printf '%s\n' '{"type":"assistant","message":{"id":"msg-1","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}'
-sleep 30
+sleep 30 &
+printf '%s' "$!" > "$AGX_ORPHAN_PID"
+exit 0
 `
 	batch := batchLines(
 		"@echo off",
 		`echo {"type":"assistant","message":{"id":"msg-1","stop_reason":"end_turn","content":[{"type":"thinking","thinking":"still working"}]}}`,
 		"ping 127.0.0.1 -n 2 >nul",
 		`echo {"type":"assistant","message":{"id":"msg-1","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}`,
-		"ping 127.0.0.1 -n 31 >nul",
+		`powershell -NoProfile -Command "$p = Start-Process -FilePath ping.exe -ArgumentList '127.0.0.1','-n','31' -NoNewWindow -PassThru; Set-Content -NoNewline -Path $env:AGX_ORPHAN_PID -Value $p.Id"`,
+		"exit /b 0",
 	)
 	writeStubCommandOnPath(t, "claude", posix, batch)
+	orphanPIDPath := filepath.Join(t.TempDir(), "orphan.pid")
+	t.Setenv("AGX_ORPHAN_PID", orphanPIDPath)
+	t.Cleanup(func() {
+		contents, err := os.ReadFile(orphanPIDPath)
+		if err != nil {
+			return
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+		if err != nil {
+			return
+		}
+		if process, err := os.FindProcess(pid); err == nil {
+			_ = process.Kill()
+		}
+	})
 
 	previousGracePeriod := claudeEndTurnGracePeriod
 	claudeEndTurnGracePeriod = 100 * time.Millisecond

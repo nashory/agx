@@ -617,6 +617,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	recoveryTriggered := make(chan struct{})
 	var endTurnTimer *time.Timer
 	toolWatchdog := claudestream.NewToolWatchdog(claudeQuickToolTimeout, func() {
+		_ = stdout.Close()
 		_ = processtree.Terminate(cmd)
 	})
 	readErr := agentstream.ReadJSONLines(stdout, func(line []byte) error {
@@ -650,6 +651,10 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 					return
 				}
 				close(recoveryTriggered)
+				// A launcher or hook may outlive the root process while still
+				// holding its inherited stdout handle. Close our read side so
+				// ReadJSONLines cannot wait forever for an EOF that never comes.
+				_ = stdout.Close()
 				_ = processtree.Terminate(cmd)
 			})
 		}
@@ -666,6 +671,12 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 		recovered = true
 	default:
 	}
+	if recovered && endTurnSeen {
+		// Closing stdout is the recovery signal, so its read error is
+		// expected and must not turn a completed response into a failure.
+		readErr = nil
+		waitErr = nil
+	}
 	if stallErr := toolWatchdog.Err(); stallErr != nil {
 		return stallErr
 	}
@@ -674,9 +685,6 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	}
 	if failurePublished {
 		return errStructuredFailurePublished
-	}
-	if recovered && endTurnSeen {
-		waitErr = nil
 	}
 	if waitErr == nil && endTurnSeen && !terminalSeen {
 		event := claudeEndTurnCompletedEvent(task, turnID)
