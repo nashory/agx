@@ -183,7 +183,9 @@ For Desktop changes, verify the relevant flow in `./bin/agx-desktop`:
 For Discord changes, test with a private Discord server and bot:
 
 ```bash
-read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
+printf 'Discord bot token: '
+read -r -s DISCORD_BOT_TOKEN
+printf '\n'
 export DISCORD_BOT_TOKEN
 
 ./bin/agx chat connect \

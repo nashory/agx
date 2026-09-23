@@ -59,14 +59,19 @@ logs, or remote follow-up.
 
 ## Quick Start
 
-Install the macOS Desktop app:
+On macOS, install the runtime prerequisites and the Desktop app:
 
 ```bash
+brew install tmux git
 brew tap nashory/tap
 brew install --cask nashory/tap/agx
 ```
 
-Install at least one supported agent CLI and sign in outside AGX:
+Install at least one supported agent CLI separately, then run it once in your
+terminal and complete its sign-in flow. AGX reuses that local authentication;
+it does not sign in to the agent for you.
+
+Check which supported agents are available:
 
 ```bash
 which codex || true
@@ -84,8 +89,11 @@ direct tmux access:
 ```bash
 brew install --formula nashory/tap/agx
 agx doctor
-agx launch --platform macos
+agx launch --platform macos --skip-discord
 ```
+
+`--skip-discord` starts the runtime without asking for Discord credentials. Add
+Discord later using the complete [Discord setup](#discord) below.
 
 See [docs/INSTALL.md](docs/INSTALL.md) for macOS, Linux, Docker, first-run
 setup, and troubleshooting.
@@ -214,7 +222,7 @@ agx attach <task-id>
 Manage the runtime:
 
 ```bash
-agx launch --platform macos
+agx launch --platform macos --skip-discord
 agx runtime status
 agx runtime stop
 agx runtime start
@@ -293,24 +301,20 @@ agx runtime status
 On Linux, use the CLI/runtime and TUI:
 
 ```bash
-agx launch --platform linux \
-  --discord-server-id "$DISCORD_SERVER_ID" \
-  --allow-user "$YOUR_DISCORD_USER_ID"
+agx launch --platform linux --skip-discord
 agx tui
 ```
 
 On Windows, run the native Windows runtime:
 
 ```powershell
-agx launch --platform windows \
-  --discord-server-id "$DISCORD_SERVER_ID" \
-  --allow-user "$YOUR_DISCORD_USER_ID"
+agx launch --platform windows --skip-discord
 ```
 
 Inside a WSL2 Linux shell, use the Linux path instead:
 
 ```bash
-agx launch --platform linux
+agx launch --platform linux --skip-discord
 ```
 
 In Docker, use the Ubuntu runtime environment:
@@ -326,42 +330,110 @@ make -C docker tui
 Discord integration is optional. When enabled, AGX mirrors local projects and
 Discord-attached tasks into a server so you can control selected work remotely.
 
-Typical CLI setup:
+Use a private server and a dedicated bot application. AGX connects directly
+from your machine to Discord; there is no hosted AGX bot or relay.
 
-```toml
-# ~/.config/agx/config.toml
-[discord]
-guild_id = "your-discord-server-id"
-allowed_user_ids = ["your-discord-user-id"]
-```
+### 1. Create the Discord bot
+
+1. Open the [Discord Developer Portal](https://discord.com/developers/applications),
+   choose **New Application**, and give it a name such as `AGX Coding`.
+2. Open the application's **Bot** page. Create the bot if Discord asks, then
+   reset/copy its **bot token**. The token is not the Application ID, Public
+   Key, or Client Secret.
+3. On the same page, enable **Message Content Intent** under **Privileged
+   Gateway Intents**. AGX needs it to receive normal follow-up messages in task
+   channels. The Server Members and Presence intents are not required.
+4. Keep the token private. Anyone with it can operate the bot.
+
+### 2. Copy the server and user IDs
+
+In Discord, open **User Settings -> Advanced** and enable **Developer Mode**.
+Then:
+
+- right-click the private server icon and choose **Copy Server ID**;
+- right-click your own avatar or username and choose **Copy User ID**.
+
+The allowed user ID must be your human Discord account ID, not the bot's ID.
+AGX accepts commands only from that user and only in the configured server.
+
+### 3. Invite and connect
+
+The easiest setup is in AGX Desktop:
+
+1. Open the **Discord** tab and enter the bot token, Server ID, and Allowed User
+   ID.
+2. Click **Invite AGX Coding**, select your private server in the browser, and
+   authorize the requested permissions.
+3. Return to AGX and click **Connect**. The initial sync starts automatically;
+   use **Soft Sync** later if the mirrored channels need repair.
+
+The generated invite requests only the scopes and permissions AGX uses:
+`bot`, `applications.commands`, Manage Channels, View Channels, Send Messages,
+Read Message History, Add Reactions, and Use Application Commands. Administrator
+permission is not required.
+
+For CLI-only setups, first create an invite in the Developer Portal under
+**OAuth2 -> URL Generator** using those same scopes and permissions, open the
+generated URL, and add the bot to your server. Then enter the connection values:
 
 ```bash
-read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
+printf 'Discord bot token: '
+read -r -s DISCORD_BOT_TOKEN
+printf '\n'
 export DISCORD_BOT_TOKEN
 
-agx discord connect
+export DISCORD_SERVER_ID='your-server-id'
+export DISCORD_USER_ID='your-user-id'
+
+agx launch --skip-discord
+agx discord connect \
+  --guild "$DISCORD_SERVER_ID" \
+  --allow-user "$DISCORD_USER_ID"
+```
+
+`agx discord connect` saves the settings and starts the initial sync. If the
+runtime is already running, omit the `agx launch --skip-discord` line. To repair
+missing or stale mirrored channels after the initial sync has finished, run:
+
+```bash
 agx discord sync
+```
+
+`agx launch` detects the current platform; `--platform macos`, `linux`, or
+`windows` is only needed when you want to be explicit. Stable IDs may instead
+be stored under `[discord]` in `~/.config/agx/config.toml`; see the
+[Discord guide](docs/DISCORD.md).
+
+### 4. Verify the setup
+
+```bash
 agx discord status
 ```
 
-`agx launch` performs the same Discord connect/sync step after runtime startup
-when the Discord IDs are present in `config.toml` and `DISCORD_BOT_TOKEN` is
-set.
+Look for `enabled: true`, `connected: true`, and the expected guild name. The
+server should contain `#agx-control`. Run `/heartbeat` or `/ps` there; use
+`/task create` to create a Discord-controlled task. Regular messages sent in an
+AGX task channel are forwarded to that task's agent.
 
-You can also pass the IDs as flags when you do not want to edit TOML:
+If setup fails, check these first:
 
-```bash
-agx discord connect \
-  --guild "$DISCORD_SERVER_ID" \
-  --allow-user "$YOUR_DISCORD_USER_ID"
-```
+- **Bot connects but ignores regular messages:** enable Message Content Intent
+  in the Developer Portal, then reconnect.
+- **Unknown Guild, Missing Access, or missing channels:** invite the bot to the
+  same server whose ID you configured and verify its role still has the
+  requested channel permissions.
+- **Slash commands do not appear:** ensure the invite included
+  `applications.commands`, reconnect, and run Soft Sync again.
+- **“You are not allowed” response:** the Allowed User ID must be your own user
+  ID, not the bot or application ID.
+- **Another bridge is already running:** stop the other AGX runtime using this
+  bot before reconnecting.
 
-Only the configured Discord user ID can control AGX. Use a private server and a
-dedicated bot token. The token and Discord config are stored locally under the
-AGX config directory. Disconnecting clears the stored bot token; the server ID
-and allowed user ID remain on that machine so reconnecting only requires a fresh
-token. Prefer `DISCORD_BOT_TOKEN` over `--token` so the token does not appear in
-shell history or process arguments.
+The bot token and Discord config are stored locally under `~/.config/agx/` with
+user-only file permissions. `agx discord disconnect` disables Discord and
+clears the stored token while retaining the server and allowed-user IDs for
+convenience. Prefer `DISCORD_BOT_TOKEN` over `--token` so the secret does not
+appear in shell history or process arguments.
 
 AGX release builds do not include a shared bot token. Because the runtime runs
 locally and connects directly to Discord, each installation should use its own
@@ -379,7 +451,8 @@ Common Discord commands include:
 | `/task create` | Create a Discord-controlled task. |
 | `/task delete` | Delete a task and its Discord channel. |
 | `/status task:<id>` | Show task status. |
-| `/logs` | Show a task log snapshot. |
+| `/task logs task:<ref>` | Show recent terminal output for a task. |
+| `/logs` | Show recent AGX runtime logs. |
 | `/interrupt` | Interrupt the current task channel's running turn. |
 | `/kill` | Delete the current task and remove this task channel. |
 | `/clear` | Clear the current task channel's agent context. |
@@ -388,8 +461,8 @@ Common Discord commands include:
 | `/runtime doctor` | Check and repair recoverable runtime issues without restarting. |
 | `/runtime restart` | Restart the installed AGX runtime service. |
 
-See [docs/DISCORD.md](docs/DISCORD.md) for setup details and the full command
-reference.
+See [docs/DISCORD.md](docs/DISCORD.md) for platform-specific setup, recovery
+steps, and the full command reference.
 
 ## Supported Agents
 

@@ -23,10 +23,11 @@ Start the runtime only:
 ./bin/agx launch --platform macos --skip-discord
 ```
 
-Start the runtime and connect Discord:
+After inviting a bot and exporting `DISCORD_BOT_TOKEN` as described in
+[docs/DISCORD.md](docs/DISCORD.md), connect it to the running runtime:
 
 ```bash
-./bin/agx launch --platform macos --discord-server-id <server-id>
+./bin/agx discord connect --guild <server-id> --allow-user <user-id>
 ```
 
 Open Desktop:
@@ -58,10 +59,11 @@ Start the runtime only:
 .\bin\agx.exe launch --platform windows --skip-discord
 ```
 
-Start the runtime and connect Discord:
+After inviting a bot and setting `DISCORD_BOT_TOKEN` as described in
+[docs/DISCORD.md](docs/DISCORD.md), connect it to the running runtime:
 
 ```powershell
-.\bin\agx.exe launch --platform windows --discord-server-id <server-id>
+.\bin\agx.exe discord connect --guild <server-id> --allow-user <user-id>
 ```
 
 Open Desktop:
@@ -100,10 +102,11 @@ Start the runtime only:
 ./bin/agx launch --platform linux --skip-discord
 ```
 
-Start the runtime and connect Discord:
+After inviting a bot and exporting `DISCORD_BOT_TOKEN` as described in
+[docs/DISCORD.md](docs/DISCORD.md), connect it to the running runtime:
 
 ```bash
-./bin/agx launch --platform linux --discord-server-id <server-id>
+./bin/agx discord connect --guild <server-id> --allow-user <user-id>
 ```
 
 Open Desktop:
@@ -176,4 +179,3 @@ On Windows from the repo build:
 ```powershell
 .\bin\agx.exe voice-stt setup
 ```
-

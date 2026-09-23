@@ -22,11 +22,12 @@ tmux, git, Unix sockets, SQLite, and normal child processes. Native Windows uses
 ConPTY, authenticated localhost TCP, Windows file locks, and Windows Service
 support. Linux Desktop packaging is not part of the first public release yet.
 
-The `launch` command runs sanity checks, installs or starts the runtime service,
-and connects Discord when configured. Under the hood, AGX uses a macOS launchd
-user service on macOS and a `systemd --user` service on native Linux or WSL2
-Ubuntu. Docker runs the runtime in the foreground inside the container and does
-not require systemd.
+The `launch` command runs sanity checks and installs or starts the runtime
+service. By default it also expects to connect Discord; use `--skip-discord` for
+a runtime-only first launch. Under the hood, AGX uses a macOS launchd user
+service on macOS and a `systemd --user` service on native Linux or WSL2 Ubuntu.
+Docker runs the runtime in the foreground inside the container and does not
+require systemd.
 
 If `systemd --user` is unavailable in WSL2, `agx launch` falls back to a
 detached runtime process and prints the runtime log paths for diagnosis.
@@ -128,7 +129,7 @@ shasum -a 256 -c checksums.txt
 For native Linux service management:
 
 ```bash
-agx launch --platform linux
+agx launch --platform linux --skip-discord
 systemctl --user status dev.agx.runtime.service
 ```
 
@@ -142,14 +143,14 @@ loginctl enable-linger "$USER"
 On Windows, extract the preview zip and use the native Windows runtime:
 
 ```powershell
-.\agx.exe launch --platform windows
+.\agx.exe launch --platform windows --skip-discord
 .\agx-desktop.exe
 ```
 
 Inside a WSL2 Linux shell, use the Linux runtime path:
 
 ```bash
-agx launch --platform linux
+agx launch --platform linux --skip-discord
 ```
 
 ## First Run
@@ -160,7 +161,7 @@ processes, worktrees, and Discord bridge.
 For normal use on macOS, install it as a user launchd service:
 
 ```bash
-agx launch --platform macos
+agx launch --platform macos --skip-discord
 agx runtime status
 ```
 
@@ -228,13 +229,17 @@ Open the Desktop app to manage projects and tasks visually.
 
 ## Optional: Discord Control
 
-Discord is optional. To use it:
+Discord is optional. Before connecting, create a dedicated bot, enable its
+Message Content Intent, invite it with the required scopes and channel
+permissions, and copy your Server ID and human User ID. The complete walkthrough
+is in [DISCORD.md](DISCORD.md).
 
-1. Create or choose a Discord server.
-2. Create a Discord bot and copy its token.
-3. On macOS Desktop, open the Discord tab, enter the bot token, server ID, and
-   allowed Discord user ID, then connect and run a Soft Sync.
-4. On Linux or WSL2, put the stable IDs in `~/.config/agx/config.toml` and
+To connect it:
+
+1. On macOS Desktop, open the Discord tab, enter the bot token, Server ID, and
+   Allowed User ID. Click **Invite AGX Coding** before **Connect**. The initial
+   sync starts automatically.
+2. On Linux or WSL2, put the stable IDs in `~/.config/agx/config.toml` and
    connect from the CLI:
 
 ```toml
@@ -244,11 +249,12 @@ allowed_user_ids = ["your-discord-user-id"]
 ```
 
 ```bash
-read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
+printf 'Discord bot token: '
+read -r -s DISCORD_BOT_TOKEN
+printf '\n'
 export DISCORD_BOT_TOKEN
-agx launch --platform linux \
-  --discord-server-id "$DISCORD_SERVER_ID" \
-  --allow-user "$YOUR_DISCORD_USER_ID"
+agx launch --platform linux --skip-discord
+agx discord connect
 ```
 
 The bot token is stored in AGX's local config with file permissions restricted
@@ -299,7 +305,7 @@ agx ps
 If the runtime is not running, start it:
 
 ```bash
-agx launch --platform linux
+agx launch --platform linux --skip-discord
 ```
 
 If Discord is connected from another process, stop the old runtime or bridge

@@ -41,10 +41,11 @@ go build -o agx.exe ./cmd/agx
 ./agx.exe doctor
 ```
 
-Launch the runtime and connect Discord:
+To add Discord, first complete the bot setup and set `DISCORD_BOT_TOKEN` as
+described in [DISCORD.md](DISCORD.md), then connect it to the running runtime:
 
 ```powershell
-./agx.exe launch --platform windows --discord-server-id <server-id>
+./agx.exe discord connect --guild <server-id> --allow-user <user-id>
 ```
 
 `--platform windows` means native Windows. Inside a WSL2 shell use

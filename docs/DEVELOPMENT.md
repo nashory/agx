@@ -306,7 +306,9 @@ For Desktop changes, verify the affected path in `./bin/agx-desktop`:
 Use a private Discord test server and a dedicated bot token.
 
 ```bash
-read -rsp "Discord bot token: " DISCORD_BOT_TOKEN
+printf 'Discord bot token: '
+read -r -s DISCORD_BOT_TOKEN
+printf '\n'
 export DISCORD_BOT_TOKEN
 
 ./bin/agx chat connect \
