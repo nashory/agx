@@ -535,7 +535,7 @@ func TestSemanticRendererRendersSuccessfulCommandAsProgress(t *testing.T) {
 	}
 }
 
-func TestSemanticRendererDoesNotRenderSuccessfulMuseCommandAsDone(t *testing.T) {
+func TestSemanticRendererRendersSuccessfulMuseCommandOutput(t *testing.T) {
 	renderer := NewSemanticRenderer()
 	exitCode := 0
 	actions := renderer.Render(agentstream.Event{
@@ -543,12 +543,12 @@ func TestSemanticRendererDoesNotRenderSuccessfulMuseCommandAsDone(t *testing.T) 
 		Kind:    agentstream.EventCommandCompleted,
 		Command: &agentstream.CommandEvent{Command: "Check repository status", ExitCode: &exitCode, Stdout: "clean"},
 	})
-	if len(actions) != 0 {
-		t.Fatalf("actions = %#v, want Muse success to keep the current progress message", actions)
+	if len(actions) != 1 || actions[0].Kind != RenderUpdateProgress || !strings.Contains(actions[0].Content, "clean") {
+		t.Fatalf("actions = %#v, want Muse success output", actions)
 	}
 }
 
-func TestSemanticRendererRendersFriendlyMuseCommandFailure(t *testing.T) {
+func TestSemanticRendererRendersMuseCommandFailure(t *testing.T) {
 	renderer := NewSemanticRenderer()
 	exitCode := 1
 	actions := renderer.Render(agentstream.Event{
@@ -559,11 +559,11 @@ func TestSemanticRendererRendersFriendlyMuseCommandFailure(t *testing.T) {
 	if len(actions) != 1 || actions[0].Kind != RenderUpdateProgress {
 		t.Fatalf("actions = %#v, want one Muse failure progress update", actions)
 	}
-	if !strings.Contains(actions[0].Content, "Could not complete: Check repository status") || !strings.Contains(actions[0].Content, "permission denied") {
-		t.Fatalf("content = %q, want concise friendly failure", actions[0].Content)
+	if !strings.Contains(actions[0].Content, "failed with exit code 1") || !strings.Contains(actions[0].Content, "permission denied") {
+		t.Fatalf("content = %q, want command failure", actions[0].Content)
 	}
-	if strings.Contains(actions[0].Content, "raw trace") {
-		t.Fatalf("content = %q, should not include raw multiline failure output", actions[0].Content)
+	if !strings.Contains(actions[0].Content, "raw trace") {
+		t.Fatalf("content = %q, want complete bounded failure output", actions[0].Content)
 	}
 }
 

@@ -387,9 +387,6 @@ func (r SemanticRenderer) Render(event agentstream.Event) []RenderAction {
 		output := strings.TrimSpace(strings.Join([]string{event.Command.Stdout, event.Command.Stderr}, "\n"))
 		return []RenderAction{{Kind: RenderUpdateProgress, Content: r.progress("⚙️ Running...", output)}}
 	case agentstream.EventCommandCompleted:
-		if isMuseAgent(event.Agent) {
-			return r.renderMuseCommandCompleted(event)
-		}
 		return r.renderCommandCompleted(event)
 	case agentstream.EventFileChanged:
 		if event.File == nil || strings.TrimSpace(event.File.Path) == "" {
@@ -556,30 +553,6 @@ func (r SemanticRenderer) renderCommandCompleted(event agentstream.Event) []Rend
 		return []RenderAction{{Kind: RenderUpdateProgress, Content: r.progress("✅ Done.", preview)}}
 	}
 	return []RenderAction{{Kind: RenderUpdateProgress, Content: "✅ Done."}}
-}
-
-func (r SemanticRenderer) renderMuseCommandCompleted(event agentstream.Event) []RenderAction {
-	if event.Command == nil {
-		return nil
-	}
-	failed := event.Command.ExitCode != nil && *event.Command.ExitCode != 0
-	if !failed {
-		// The active progress message already says what Muse is doing. Successful
-		// shell output is implementation detail and turning every completion into
-		// "Done" makes a normal multi-step task look noisy and repetitive.
-		return nil
-	}
-	description := museProgressDescription(event.Command.Command)
-	label := "⚠️ A step could not be completed."
-	if description != "" {
-		label = "⚠️ Could not complete: " + truncateRunesWithEllipsis(strings.TrimSuffix(description, "."), 140) + "."
-	}
-	rawDetail := strings.TrimSpace(strings.Join([]string{event.Command.Stderr, event.Command.Stdout}, "\n"))
-	if rawDetail == "" {
-		return []RenderAction{{Kind: RenderUpdateProgress, Content: label}}
-	}
-	detail := summarizeAgentError(rawDetail)
-	return []RenderAction{{Kind: RenderUpdateProgress, Content: r.progress(label, detail)}}
 }
 
 func (r SemanticRenderer) messageBudget() int {

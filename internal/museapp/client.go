@@ -19,8 +19,10 @@ const StreamKind = "muse-msp"
 
 type Options struct {
 	Command        string
+	Provider       string
 	DisableSandbox bool
 	TrustWorkspace bool
+	Ephemeral      bool
 }
 
 type Notification struct {
@@ -90,6 +92,12 @@ func Start(ctx context.Context, opts Options) (*Client, error) {
 		command = "muse"
 	}
 	args := []string{"serve"}
+	if strings.TrimSpace(opts.Provider) != "" {
+		args = append(args, "--provider", strings.TrimSpace(opts.Provider))
+	}
+	if opts.Ephemeral {
+		args = append(args, "--no-session-log")
+	}
 	if opts.DisableSandbox {
 		args = append(args, "--disable-sandbox")
 	}

@@ -2,10 +2,16 @@ package museapp
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/google/uuid"
 )
+
+func IsSessionNotFound(err error) bool {
+	var callErr *CallError
+	return errors.As(err, &callErr) && callErr.Code == -32020
+}
 
 const (
 	MethodInitialize    = "initialize"
@@ -112,12 +118,32 @@ func (c *Client) TurnStart(ctx context.Context, sessionID, text, ifBusy string) 
 func (c *Client) TurnSteer(ctx context.Context, sessionID, turnID, text string) (TurnResponse, error) {
 	var out TurnResponse
 	err := c.Call(ctx, MethodTurnSteer, map[string]any{
-		"commandId": NewCommandID(),
-		"sessionId": sessionID,
-		"turnId":    turnID,
-		"input":     []any{map[string]any{"type": "text", "text": text}},
+		"commandId":      NewCommandID(),
+		"sessionId":      sessionID,
+		"expectedTurnId": turnID,
+		"input":          []any{map[string]any{"type": "text", "text": text}},
 	}, &out)
 	return out, err
+}
+
+func (c *Client) ApprovalDecide(ctx context.Context, sessionID, approvalID string, requirement any, choiceID string) error {
+	return c.Call(ctx, "approval/decide", map[string]any{
+		"commandId": NewCommandID(), "sessionId": sessionID,
+		"approvalId": approvalID, "requirementId": requirement, "choiceId": choiceID,
+	}, nil)
+}
+
+func (c *Client) UserInputAnswer(ctx context.Context, sessionID, userInputID, questionID, answer string, freeText bool) error {
+	value := map[string]any{"questionId": questionID}
+	if freeText {
+		value["freeText"] = answer
+	} else {
+		value["selectedLabel"] = answer
+	}
+	return c.Call(ctx, "userInput/answer", map[string]any{
+		"commandId": NewCommandID(), "sessionId": sessionID, "userInputId": userInputID,
+		"answers": []any{value},
+	}, nil)
 }
 
 func (c *Client) TurnInterrupt(ctx context.Context, sessionID, turnID string) error {

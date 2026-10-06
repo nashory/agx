@@ -18,6 +18,7 @@ import (
 	"github.com/nashory/agx/internal/codexapp"
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
+	"github.com/nashory/agx/internal/museapp"
 	"github.com/nashory/agx/internal/processtree"
 )
 
@@ -35,8 +36,23 @@ type codexRuntime interface {
 	Close() error
 }
 
+type museRuntime interface {
+	Initialize(context.Context) (museapp.InitializeResponse, error)
+	SessionStart(context.Context, string, string, bool) (museapp.SessionResponse, error)
+	SessionResume(context.Context, string, string) (museapp.SessionResponse, error)
+	TurnStart(context.Context, string, string, string) (museapp.TurnResponse, error)
+	TurnSteer(context.Context, string, string, string) (museapp.TurnResponse, error)
+	TurnInterrupt(context.Context, string, string) error
+	ApprovalDecide(context.Context, string, string, any, string) error
+	UserInputAnswer(context.Context, string, string, string, string, bool) error
+	Respond(museapp.Notification, any) error
+	Events() <-chan museapp.Notification
+	RecentStderr() string
+	Close() error
+}
+
 const claudeStreamKind = "claude-stream-json"
-const museStreamKind = "muse-jsonl"
+const museStreamKind = museapp.StreamKind
 const agentEventSubscriberBuffer = 256
 
 var errStructuredFailurePublished = errors.New("structured agent failure already published")
@@ -55,6 +71,8 @@ type agentEventService struct {
 	mu            sync.Mutex
 	codex         codexRuntime
 	startCodex    func(context.Context) (codexRuntime, error)
+	muse          museRuntime
+	startMuse     func(context.Context) (museRuntime, error)
 	subscribers   map[string]map[*agentstream.EventQueue]struct{}
 	threadToTask  map[string]string
 	activeTurns   map[string]string
@@ -63,6 +81,18 @@ type agentEventService struct {
 	turnCancels   map[string]context.CancelFunc
 	claudeQueues  map[string][]string
 	museQueues    map[string][]string
+	musePrompts   map[string]musePendingPrompt
+	museItemTurns map[string]string
+}
+
+type musePendingPrompt struct {
+	kind           string
+	sessionID      string
+	id             string
+	questionID     string
+	requirement    any
+	choicesByLabel map[string]string
+	allowFreeText  bool
 }
 
 // codexTurn records what a live Codex turn has produced so far, keyed by task
@@ -85,19 +115,32 @@ func (t *codexTurn) isSilent() bool {
 func newAgentEventService(runtime *Service) *agentEventService {
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &agentEventService{
-		runtime:      runtime,
-		ctx:          ctx,
-		cancel:       cancel,
-		subscribers:  map[string]map[*agentstream.EventQueue]struct{}{},
-		threadToTask: map[string]string{},
-		activeTurns:  map[string]string{},
-		codexTurns:   map[string]*codexTurn{},
-		turnCancels:  map[string]context.CancelFunc{},
-		claudeQueues: map[string][]string{},
-		museQueues:   map[string][]string{},
+		runtime:       runtime,
+		ctx:           ctx,
+		cancel:        cancel,
+		subscribers:   map[string]map[*agentstream.EventQueue]struct{}{},
+		threadToTask:  map[string]string{},
+		activeTurns:   map[string]string{},
+		codexTurns:    map[string]*codexTurn{},
+		turnCancels:   map[string]context.CancelFunc{},
+		claudeQueues:  map[string][]string{},
+		museQueues:    map[string][]string{},
+		musePrompts:   map[string]musePendingPrompt{},
+		museItemTurns: map[string]string{},
 	}
 	service.startCodex = func(ctx context.Context) (codexRuntime, error) {
 		client, err := codexapp.Start(service.ctx, codexapp.Options{})
+		if err != nil {
+			return nil, err
+		}
+		if _, err := client.Initialize(ctx); err != nil {
+			_ = client.Close()
+			return nil, err
+		}
+		return client, nil
+	}
+	service.startMuse = func(ctx context.Context) (museRuntime, error) {
+		client, err := museapp.Start(service.ctx, museapp.Options{})
 		if err != nil {
 			return nil, err
 		}
@@ -114,7 +157,9 @@ func (s *agentEventService) Close() error {
 	s.cancel()
 	s.mu.Lock()
 	codex := s.codex
+	muse := s.muse
 	s.codex = nil
+	s.muse = nil
 	for taskID, subscribers := range s.subscribers {
 		for subscriber := range subscribers {
 			subscriber.Close()
@@ -126,15 +171,23 @@ func (s *agentEventService) Close() error {
 	s.codexTurns = map[string]*codexTurn{}
 	s.claudeQueues = map[string][]string{}
 	s.museQueues = map[string][]string{}
+	s.musePrompts = map[string]musePendingPrompt{}
+	s.museItemTurns = map[string]string{}
 	for _, cancel := range s.turnCancels {
 		cancel()
 	}
 	s.turnCancels = map[string]context.CancelFunc{}
 	s.mu.Unlock()
+	var closeErr error
 	if codex != nil {
-		return codex.Close()
+		closeErr = codex.Close()
 	}
-	return nil
+	if muse != nil {
+		if err := muse.Close(); closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 func (s *agentEventService) SubscribeAgentEvents(ctx context.Context, task agxdiscord.TaskSummary) (<-chan agentstream.Event, error) {
@@ -149,6 +202,11 @@ func (s *agentEventService) SubscribeAgentEvents(ctx context.Context, task agxdi
 	}
 	if isCodexTask(task.Agent) {
 		if _, err := s.ensureCodex(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if isMuseTask(task.Agent) {
+		if _, err := s.ensureMuse(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -191,7 +249,7 @@ func (s *agentEventService) SendTaskMessage(ctx context.Context, task db.Task, p
 		return s.startClaudeTurn(ctx, task, project, message)
 	}
 	if isMuseTask(task.Agent) {
-		return s.startMuseTurn(ctx, task, project, message)
+		return s.startMuseMSPTurn(ctx, task, project, message)
 	}
 	client, err := s.ensureCodex(ctx)
 	if err != nil {
@@ -232,7 +290,7 @@ func (s *agentEventService) clearTaskContext(ctx context.Context, task db.Task, 
 		return s.clearClaudeTaskContext(task)
 	}
 	if isMuseTask(task.Agent) {
-		return s.clearMuseTaskContext(task)
+		return s.clearMuseTaskContext(ctx, task, project)
 	}
 	if !isCodexTask(task.Agent) {
 		return agentstream.UnsupportedError{TaskID: task.ID, Agent: task.Agent}
@@ -306,12 +364,13 @@ func (s *agentEventService) clearClaudeTaskContext(task db.Task) error {
 	return nil
 }
 
-func (s *agentEventService) clearMuseTaskContext(task db.Task) error {
+func (s *agentEventService) clearMuseTaskContext(ctx context.Context, task db.Task, project db.Project) error {
 	s.mu.Lock()
 	cancel := s.turnCancels[task.ID]
 	delete(s.activeTurns, task.ID)
 	delete(s.turnCancels, task.ID)
 	delete(s.museQueues, task.ID)
+	delete(s.musePrompts, task.ID)
 	for threadID, taskID := range s.threadToTask {
 		if taskID == task.ID {
 			delete(s.threadToTask, threadID)
@@ -330,7 +389,12 @@ func (s *agentEventService) clearMuseTaskContext(task db.Task) error {
 	s.recordContextCleared(task)
 	s.runtime.emitMetadataEvent(task.ProjectID)
 	s.runtime.syncDiscordAsync()
-	return nil
+	client, err := s.ensureMuse(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = s.ensureMuseSession(ctx, client, taskWithThread(task, threadID), project)
+	return err
 }
 
 func (s *agentEventService) recordContextCleared(task db.Task) {
@@ -342,7 +406,12 @@ func (s *agentEventService) PrepareTask(ctx context.Context, task db.Task, proje
 		return s.ensureClaudeStreamTask(task)
 	}
 	if isMuseTask(task.Agent) {
-		return s.ensureMuseStreamTask(task)
+		client, err := s.ensureMuse(ctx)
+		if err != nil {
+			return err
+		}
+		_, err = s.ensureMuseSession(ctx, client, task, project)
+		return err
 	}
 	if !isCodexTask(task.Agent) {
 		return agentstream.UnsupportedError{TaskID: task.ID, Agent: task.Agent}
@@ -356,7 +425,20 @@ func (s *agentEventService) PrepareTask(ctx context.Context, task db.Task, proje
 }
 
 func (s *agentEventService) InterruptTask(ctx context.Context, task db.Task) error {
-	if isClaudeTask(task.Agent) || isMuseTask(task.Agent) {
+	if isMuseTask(task.Agent) {
+		s.mu.Lock()
+		activeTurn := s.activeTurns[task.ID]
+		s.mu.Unlock()
+		if activeTurn == "" || task.AgentThreadID == nil {
+			return nil
+		}
+		client, err := s.ensureMuse(ctx)
+		if err != nil {
+			return err
+		}
+		return client.TurnInterrupt(ctx, strings.TrimSpace(*task.AgentThreadID), activeTurn)
+	}
+	if isClaudeTask(task.Agent) {
 		s.mu.Lock()
 		cancel := s.turnCancels[task.ID]
 		delete(s.activeTurns, task.ID)
@@ -1220,6 +1302,12 @@ func (s *agentEventService) forgetTask(taskID string) {
 	delete(s.codexTurns, taskID)
 	delete(s.claudeQueues, taskID)
 	delete(s.museQueues, taskID)
+	delete(s.musePrompts, taskID)
+	for key := range s.museItemTurns {
+		if strings.HasPrefix(key, taskID+":") {
+			delete(s.museItemTurns, key)
+		}
+	}
 	if cancel := s.turnCancels[taskID]; cancel != nil {
 		cancels = append(cancels, cancel)
 	}
