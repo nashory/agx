@@ -349,6 +349,23 @@ export function SettingsView({
           </div>
           <div className="setting-row">
             <div>
+              <strong>Compute</strong>
+              <span>Auto prefers an available GPU. CPU forces Whisper to run without GPU acceleration.</span>
+            </div>
+            <Select
+              ariaLabel="Voice transcription compute"
+              value={localVoiceSTT.compute || 'auto'}
+              disabled={busy || savingVoiceSTT}
+              options={[
+                { value: 'auto', label: 'Auto' },
+                { value: 'gpu', label: 'GPU' },
+                { value: 'cpu', label: 'CPU' },
+              ]}
+              onChange={(value) => updateVoiceSTT('compute', voiceSTTCompute(value))}
+            />
+          </div>
+          <div className="setting-row">
+            <div>
               <strong>ffmpeg</strong>
               <span>Command or absolute path used to convert Discord Ogg voice messages.</span>
             </div>
@@ -483,6 +500,7 @@ export function SettingsView({
 function defaultVoiceSTTConfig(): VoiceSTTConfig {
   return {
     mode: 'auto',
+    compute: 'auto',
     ffmpegPath: '',
     whisperPath: '',
     modelPath: '',
@@ -493,6 +511,10 @@ function defaultVoiceSTTConfig(): VoiceSTTConfig {
 
 function voiceSTTMode(value: string): VoiceSTTConfig['mode'] {
   return value === 'disabled' || value === 'enabled' ? value : 'auto';
+}
+
+function voiceSTTCompute(value: string): VoiceSTTConfig['compute'] {
+  return value === 'gpu' || value === 'cpu' ? value : 'auto';
 }
 
 function voiceSTTStatus(config: VoiceSTTConfig): string {

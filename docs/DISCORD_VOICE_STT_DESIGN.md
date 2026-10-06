@@ -118,6 +118,7 @@ Local STT configuration should be explicit and optional:
 
 ```text
 discord.voice_stt.mode          disabled | auto | enabled
+discord.voice_stt.compute       auto | gpu | cpu
 discord.voice_stt.ffmpeg_path   optional path or command name
 discord.voice_stt.whisper_path  optional path or command name
 discord.voice_stt.model_path    optional model path
@@ -134,10 +135,16 @@ Mode semantics:
 - `enabled`: The user explicitly wants STT. Missing dependencies should produce
   a clear Discord/Desktop error for voice messages, but still must not prevent
   AGX startup or non-voice task flows.
+- `compute = auto`: Let whisper.cpp prefer an available GPU and fall back to
+  CPU when the installed binary has no compatible GPU backend.
+- `compute = gpu`: Prefer the configured GPU-enabled whisper.cpp build.
+- `compute = cpu`: Pass `--no-gpu` so the same configuration works on machines
+  without a supported GPU.
 
 Desktop settings should expose this as a small "Voice transcription" section:
 
 - Mode selector: Disabled, Auto, Enabled.
+- Compute selector: Auto, GPU, CPU.
 - `ffmpeg` path.
 - Whisper binary path.
 - Model path.
@@ -181,19 +188,25 @@ type VoiceTranscript struct {
 }
 ```
 
-Initial implementation should shell out to local tools instead of linking a
-large native library into AGX:
+The runtime should use local tools instead of linking a large native library
+into AGX:
 
 1. Convert Discord Ogg/Opus to a temporary 16 kHz mono WAV with `ffmpeg`.
-2. Run a configured local Whisper command against the WAV.
-3. Read plain text output.
+2. At runtime startup, launch the `whisper-server` binary next to the configured
+   `whisper-cli` and load the model once.
+3. Send converted audio to the loopback-only server for inference.
 4. Delete temporary conversion/output files.
+
+If `whisper-server` is unavailable, AGX falls back to invoking `whisper-cli`
+for compatibility. The fallback reloads the model for every message and is
+therefore slower, especially for Large models.
 
 Recommended command support:
 
 ```text
 ffmpeg -y -i <input.ogg> -ar 16000 -ac 1 <tmp.wav>
 whisper-cli -m <model.bin> -f <tmp.wav> -otxt -of <tmp-output-prefix>
+whisper-server -m <model.bin> --host 127.0.0.1 --port <ephemeral-port>
 ```
 
 AGX should not assume a fixed binary path. The backend should resolve command

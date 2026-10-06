@@ -207,6 +207,7 @@ func TestServiceConfigVoiceSTTEndpoints(t *testing.T) {
 
 	req := patchConfigRequest{VoiceSTT: &VoiceSTTConfig{
 		Mode:        "enabled",
+		Compute:     " cpu ",
 		FFmpegPath:  " /opt/bin/ffmpeg ",
 		WhisperPath: " /opt/bin/whisper-cli ",
 		ModelPath:   " /models/ggml-base.bin ",
@@ -217,7 +218,7 @@ func TestServiceConfigVoiceSTTEndpoints(t *testing.T) {
 	if code := runtimeAPIRequest(t, service, http.MethodPatch, "/v1/config", req, &cfg); code != http.StatusOK {
 		t.Fatalf("patch config status = %d, want 200", code)
 	}
-	if cfg.VoiceSTT.Mode != config.VoiceSTTEnabled || cfg.VoiceSTT.FFmpegPath != "/opt/bin/ffmpeg" || cfg.VoiceSTT.WhisperPath != "/opt/bin/whisper-cli" || cfg.VoiceSTT.ModelPath != "/models/ggml-base.bin" || cfg.VoiceSTT.Language != "ko" || cfg.VoiceSTT.Timeout != "90s" {
+	if cfg.VoiceSTT.Mode != config.VoiceSTTEnabled || cfg.VoiceSTT.Compute != config.VoiceComputeCPU || cfg.VoiceSTT.FFmpegPath != "/opt/bin/ffmpeg" || cfg.VoiceSTT.WhisperPath != "/opt/bin/whisper-cli" || cfg.VoiceSTT.ModelPath != "/models/ggml-base.bin" || cfg.VoiceSTT.Language != "ko" || cfg.VoiceSTT.Timeout != "90s" {
 		t.Fatalf("VoiceSTT = %#v, want normalized enabled config", cfg.VoiceSTT)
 	}
 

@@ -15,6 +15,9 @@ const (
 	VoiceSTTDisabled = "disabled"
 	VoiceSTTAuto     = "auto"
 	VoiceSTTEnabled  = "enabled"
+	VoiceComputeAuto = "auto"
+	VoiceComputeGPU  = "gpu"
+	VoiceComputeCPU  = "cpu"
 )
 
 type Config struct {
@@ -45,15 +48,16 @@ type WorktreeConfig struct {
 }
 
 type DiscordConfig struct {
-	Enabled        bool     `toml:"enabled"`
-	BotToken       string   `toml:"bot_token"`
-	GuildID        string   `toml:"guild_id"`
-	AllowedUserIDs []string `toml:"allowed_user_ids"`
+	Enabled        bool           `toml:"enabled"`
+	BotToken       string         `toml:"bot_token"`
+	GuildID        string         `toml:"guild_id"`
+	AllowedUserIDs []string       `toml:"allowed_user_ids"`
 	VoiceSTT       VoiceSTTConfig `toml:"voice_stt"`
 }
 
 type VoiceSTTConfig struct {
 	Mode        string `toml:"mode"`
+	Compute     string `toml:"compute"`
 	FFmpegPath  string `toml:"ffmpeg_path"`
 	WhisperPath string `toml:"whisper_path"`
 	ModelPath   string `toml:"model_path"`
@@ -172,6 +176,7 @@ func saveGlobalConfig(cfg Config) error {
 
 func normalizeVoiceSTTConfig(cfg VoiceSTTConfig) VoiceSTTConfig {
 	cfg.Mode = normalizeVoiceSTTMode(cfg.Mode)
+	cfg.Compute = normalizeVoiceCompute(cfg.Compute)
 	cfg.FFmpegPath = strings.TrimSpace(cfg.FFmpegPath)
 	cfg.WhisperPath = strings.TrimSpace(cfg.WhisperPath)
 	cfg.ModelPath = strings.TrimSpace(cfg.ModelPath)
@@ -184,6 +189,17 @@ func normalizeVoiceSTTConfig(cfg VoiceSTTConfig) VoiceSTTConfig {
 		cfg.Timeout = "60s"
 	}
 	return cfg
+}
+
+func normalizeVoiceCompute(compute string) string {
+	switch strings.ToLower(strings.TrimSpace(compute)) {
+	case VoiceComputeGPU:
+		return VoiceComputeGPU
+	case VoiceComputeCPU:
+		return VoiceComputeCPU
+	default:
+		return VoiceComputeAuto
+	}
 }
 
 func normalizeVoiceSTTMode(mode string) string {

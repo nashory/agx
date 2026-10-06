@@ -27,6 +27,7 @@ var previousDefaultModelNames = map[string]struct{}{
 
 type LocalWhisperConfig struct {
 	Mode        string `json:"mode"`
+	Compute     string `json:"compute"`
 	FFmpegPath  string `json:"ffmpegPath"`
 	WhisperPath string `json:"whisperPath"`
 	ModelPath   string `json:"modelPath"`
@@ -165,6 +166,7 @@ func shouldUseCurrentDefaultModel(configured, resolved string) bool {
 func ConfigDTO(cfg config.VoiceSTTConfig) LocalWhisperConfig {
 	return LocalWhisperConfig{
 		Mode:        cfg.Mode,
+		Compute:     cfg.Compute,
 		FFmpegPath:  cfg.FFmpegPath,
 		WhisperPath: cfg.WhisperPath,
 		ModelPath:   cfg.ModelPath,

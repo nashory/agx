@@ -33,7 +33,7 @@ export type WailsApp = {
   RuntimeStatus(): Promise<RuntimeStatusInfo>;
   RuntimeConfig(): Promise<RuntimeConfigInfo>;
   UpdateDefaultAgent(agentName: string): Promise<RuntimeConfigInfo>;
-  UpdateVoiceSTT(mode: string, ffmpegPath: string, whisperPath: string, modelPath: string, language: string, timeout: string): Promise<RuntimeConfigInfo>;
+  UpdateVoiceSTT(mode: string, compute: string, ffmpegPath: string, whisperPath: string, modelPath: string, language: string, timeout: string): Promise<RuntimeConfigInfo>;
   SetupVoiceSTT(): Promise<VoiceSTTSetupResult>;
   RuntimeStart(): Promise<RuntimeStatusInfo>;
   RuntimeInstallService(): Promise<RuntimeStatusInfo>;
@@ -130,6 +130,7 @@ function defaultRuntimeConfig(): RuntimeConfigInfo {
     defaultAgent: 'codex',
     voiceStt: {
       mode: 'auto',
+      compute: 'auto',
       ffmpegPath: '',
       whisperPath: '',
       modelPath: '',
@@ -232,9 +233,17 @@ export const api: WailsApp = {
   async UpdateDefaultAgent(agentName) {
     return app()?.UpdateDefaultAgent(agentName) ?? { ...defaultRuntimeConfig(), defaultAgent: agentName || 'codex' };
   },
-  async UpdateVoiceSTT(mode, ffmpegPath, whisperPath, modelPath, language, timeout) {
-    const voiceStt: VoiceSTTConfig = { mode: mode === 'disabled' || mode === 'enabled' ? mode : 'auto', ffmpegPath, whisperPath, modelPath, language, timeout };
-    return app()?.UpdateVoiceSTT(voiceStt.mode, voiceStt.ffmpegPath, voiceStt.whisperPath, voiceStt.modelPath, voiceStt.language, voiceStt.timeout) ?? { ...defaultRuntimeConfig(), voiceStt };
+  async UpdateVoiceSTT(mode, compute, ffmpegPath, whisperPath, modelPath, language, timeout) {
+    const voiceStt: VoiceSTTConfig = {
+      mode: mode === 'disabled' || mode === 'enabled' ? mode : 'auto',
+      compute: compute === 'gpu' || compute === 'cpu' ? compute : 'auto',
+      ffmpegPath,
+      whisperPath,
+      modelPath,
+      language,
+      timeout,
+    };
+    return app()?.UpdateVoiceSTT(voiceStt.mode, voiceStt.compute, voiceStt.ffmpegPath, voiceStt.whisperPath, voiceStt.modelPath, voiceStt.language, voiceStt.timeout) ?? { ...defaultRuntimeConfig(), voiceStt };
   },
   async SetupVoiceSTT() {
     return app()?.SetupVoiceSTT() ?? { config: defaultRuntimeConfig().voiceStt, downloaded: false, modelUrl: '', warnings: ['Wails runtime is not connected'] };

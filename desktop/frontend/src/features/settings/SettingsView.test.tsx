@@ -41,7 +41,7 @@ function renderSettings(overrides: Partial<{
       onToggleTheme={vi.fn()}
       onResetDatabase={vi.fn().mockResolvedValue(undefined)}
       runtimeStatus={runtimeStatus}
-      runtimeConfig={overrides.runtimeConfig ?? { defaultAgent: 'codex', voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' } }}
+      runtimeConfig={overrides.runtimeConfig ?? { defaultAgent: 'codex', voiceStt: { mode: 'auto', compute: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' } }}
       agents={agents}
       onDefaultAgentChange={onDefaultAgentChange}
       onVoiceSTTChange={onVoiceSTTChange}
@@ -88,7 +88,7 @@ describe('SettingsView', () => {
   });
 
   it('shows an unavailable configured default agent instead of silently replacing it', () => {
-    renderSettings({ runtimeConfig: { defaultAgent: 'local-agent', voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' } } });
+    renderSettings({ runtimeConfig: { defaultAgent: 'local-agent', voiceStt: { mode: 'auto', compute: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' } } });
 
     expect(screen.getByRole('combobox', { name: 'Default agent' })).toHaveTextContent('local-agent (not installed)');
   });
@@ -108,6 +108,8 @@ describe('SettingsView', () => {
 
     await user.click(screen.getByRole('combobox', { name: 'Voice transcription mode' }));
     await user.click(screen.getByRole('option', { name: 'Enabled' }));
+    await user.click(screen.getByRole('combobox', { name: 'Voice transcription compute' }));
+    await user.click(screen.getByRole('option', { name: 'GPU' }));
     await user.type(screen.getByPlaceholderText('ffmpeg'), 'ffmpeg');
     await user.type(screen.getByPlaceholderText('whisper-cli'), 'whisper-cli');
     await user.type(screen.getByPlaceholderText('Auto'), '/models/base.bin');
@@ -119,6 +121,7 @@ describe('SettingsView', () => {
 
     await waitFor(() => expect(onVoiceSTTChange).toHaveBeenCalledWith({
       mode: 'enabled',
+      compute: 'gpu',
       ffmpegPath: 'ffmpeg',
       whisperPath: 'whisper-cli',
       modelPath: '/models/base.bin',

@@ -212,19 +212,19 @@ func TestUpdateVoiceSTTUsesRuntimeClient(t *testing.T) {
 	client := &fakeRuntimeClient{
 		updateVoiceSTTFunc: func(_ context.Context, voice agxruntime.VoiceSTTConfig) (agxruntime.RuntimeConfig, error) {
 			got = voice
-			return agxruntime.RuntimeConfig{DefaultAgent: "codex", VoiceSTT: agxruntime.VoiceSTTConfig{Mode: config.VoiceSTTEnabled, Language: "ko", Timeout: "90s"}}, nil
+			return agxruntime.RuntimeConfig{DefaultAgent: "codex", VoiceSTT: agxruntime.VoiceSTTConfig{Mode: config.VoiceSTTEnabled, Compute: config.VoiceComputeGPU, Language: "ko", Timeout: "90s"}}, nil
 		},
 	}
 	withFakeRuntimeClient(t, client)
 
-	cfg, err := app.UpdateVoiceSTT("enabled", "ffmpeg", "whisper-cli", "model.bin", "ko", "90s")
+	cfg, err := app.UpdateVoiceSTT("enabled", "gpu", "ffmpeg", "whisper-cli", "model.bin", "ko", "90s")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Mode != config.VoiceSTTEnabled || got.FFmpegPath != "ffmpeg" || got.WhisperPath != "whisper-cli" || got.ModelPath != "model.bin" || got.Language != "ko" || got.Timeout != "90s" {
+	if got.Mode != config.VoiceSTTEnabled || got.Compute != config.VoiceComputeGPU || got.FFmpegPath != "ffmpeg" || got.WhisperPath != "whisper-cli" || got.ModelPath != "model.bin" || got.Language != "ko" || got.Timeout != "90s" {
 		t.Fatalf("UpdateVoiceSTT args = %#v, want provided config", got)
 	}
-	if cfg.VoiceSTT.Mode != config.VoiceSTTEnabled || cfg.VoiceSTT.Language != "ko" || cfg.VoiceSTT.Timeout != "90s" {
+	if cfg.VoiceSTT.Mode != config.VoiceSTTEnabled || cfg.VoiceSTT.Compute != config.VoiceComputeGPU || cfg.VoiceSTT.Language != "ko" || cfg.VoiceSTT.Timeout != "90s" {
 		t.Fatalf("UpdateVoiceSTT result = %#v, want runtime config", cfg)
 	}
 }

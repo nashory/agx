@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +49,7 @@ func TestLocalWhisperTranscriberRunsFFmpegAndWhisper(t *testing.T) {
 	}
 	if err := config.SaveVoiceSTT(config.VoiceSTTConfig{
 		Mode:        config.VoiceSTTEnabled,
+		Compute:     config.VoiceComputeCPU,
 		FFmpegPath:  ffmpegPath,
 		WhisperPath: whisperPath,
 		ModelPath:   modelPath,
@@ -71,7 +74,7 @@ func TestLocalWhisperTranscriberRunsFFmpegAndWhisper(t *testing.T) {
 	if runner.calls[0].name != ffmpegPath {
 		t.Fatalf("first call = %#v, want ffmpeg", runner.calls[0])
 	}
-	if runner.calls[1].name != whisperPath || !containsArgPair(runner.calls[1].args, "-m", modelPath) || !containsArg(runner.calls[1].args, "-otxt") || !containsArgPair(runner.calls[1].args, "-l", "ko") {
+	if runner.calls[1].name != whisperPath || !containsArgPair(runner.calls[1].args, "-m", modelPath) || !containsArg(runner.calls[1].args, "-otxt") || !containsArg(runner.calls[1].args, "--no-gpu") || !containsArgPair(runner.calls[1].args, "-l", "ko") {
 		t.Fatalf("whisper call = %#v, want model, text output, and language", runner.calls[1])
 	}
 }
@@ -130,6 +133,57 @@ func TestNormalizeVoiceTranscriptText(t *testing.T) {
 	got := normalizeVoiceTranscriptText(" Okay, then test file.\r\n Let's see   how it works.\n")
 	if got != "Okay, then test file. Let's see how it works." {
 		t.Fatalf("normalizeVoiceTranscriptText() = %q", got)
+	}
+}
+
+func TestWhisperServerArgsSelectCompute(t *testing.T) {
+	cfg := config.VoiceSTTConfig{ModelPath: "model.bin", Language: "ko", Compute: config.VoiceComputeCPU}
+	cpuArgs := whisperServerArgs(cfg, 1234)
+	if !containsArg(cpuArgs, "--no-gpu") {
+		t.Fatalf("CPU args = %#v, want --no-gpu", cpuArgs)
+	}
+	cfg.Compute = config.VoiceComputeGPU
+	gpuArgs := whisperServerArgs(cfg, 1234)
+	if containsArg(gpuArgs, "--no-gpu") {
+		t.Fatalf("GPU args = %#v, do not want --no-gpu", gpuArgs)
+	}
+	if !containsArgPair(gpuArgs, "--port", "1234") || !containsArgPair(gpuArgs, "-l", "ko") {
+		t.Fatalf("GPU args = %#v, want port and language", gpuArgs)
+	}
+}
+
+func TestWhisperServerInference(t *testing.T) {
+	wavPath := filepath.Join(t.TempDir(), "input.wav")
+	if err := os.WriteFile(wavPath, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/inference" {
+			t.Fatalf("request = %s %s, want POST /inference", r.Method, r.URL.Path)
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.FormValue("language"); got != "ko" {
+			t.Fatalf("language = %q, want ko", got)
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = file.Close()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"transcribed voice"}`))
+	}))
+	defer server.Close()
+
+	transcriber := &whisperServerTranscriber{client: server.Client()}
+	text, err := transcriber.infer(context.Background(), server.URL, wavPath, "ko")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "transcribed voice" {
+		t.Fatalf("text = %q, want transcribed voice", text)
 	}
 }
 

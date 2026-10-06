@@ -100,7 +100,7 @@ export default function App() {
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatusInfo>({ running: false, uptimeSeconds: 0, socketPath: '', lockPath: '', recovery: {} });
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigInfo>({
     defaultAgent: 'codex',
-    voiceStt: { mode: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' },
+    voiceStt: { mode: 'auto', compute: 'auto', ffmpegPath: '', whisperPath: '', modelPath: '', language: 'auto', timeout: '60s' },
   });
   const [globalAgents, setGlobalAgents] = useState<Agent[]>([]);
   const [runtimeChecked, setRuntimeChecked] = useState(false);
@@ -338,7 +338,7 @@ export default function App() {
     setError('');
     appendLog(`$ set voice stt ${voiceStt.mode}`);
     try {
-      const cfg = await api.UpdateVoiceSTT(voiceStt.mode, voiceStt.ffmpegPath, voiceStt.whisperPath, voiceStt.modelPath, voiceStt.language, voiceStt.timeout);
+      const cfg = await api.UpdateVoiceSTT(voiceStt.mode, voiceStt.compute, voiceStt.ffmpegPath, voiceStt.whisperPath, voiceStt.modelPath, voiceStt.language, voiceStt.timeout);
       setRuntimeConfig(cfg);
       appendLog(`[ok] voice stt ${cfg.voiceStt.mode}`);
     } catch (err) {

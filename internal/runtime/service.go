@@ -192,6 +192,15 @@ func (s *Service) Start(ctx context.Context) (err error) {
 		return fmt.Errorf("cleanup orphan attachments: %w", err)
 	}
 	cfg, _ := config.LoadGlobal()
+	if voice, ok := s.voice.(managedVoiceTranscriber); ok && cfg.Discord.VoiceSTT.Mode != config.VoiceSTTDisabled {
+		go func() {
+			if err := voice.Warm(s.backgroundContext()); err != nil {
+				logRuntimeOperation("voice_stt_warm", "status", "failed", "error", err)
+				return
+			}
+			logRuntimeOperation("voice_stt_warm", "status", "ready")
+		}()
+	}
 	s.discord.Configure(cfg.Discord)
 	s.discord.SetStore(store)
 	s.discord.SetCommandService(discordCommandService{runtime: s})
@@ -378,6 +387,11 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 		if s.agents != nil {
 			if closeErr := s.agents.Close(); err == nil {
+				err = closeErr
+			}
+		}
+		if voice, ok := s.voice.(managedVoiceTranscriber); ok {
+			if closeErr := voice.Close(); err == nil {
 				err = closeErr
 			}
 		}

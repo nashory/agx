@@ -51,6 +51,7 @@ func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 	if req.VoiceSTT != nil {
 		cfg.Discord.VoiceSTT = config.VoiceSTTConfig{
 			Mode:        req.VoiceSTT.Mode,
+			Compute:     req.VoiceSTT.Compute,
 			FFmpegPath:  req.VoiceSTT.FFmpegPath,
 			WhisperPath: req.VoiceSTT.WhisperPath,
 			ModelPath:   req.VoiceSTT.ModelPath,
@@ -60,6 +61,13 @@ func (s *Service) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		if err := config.SaveVoiceSTT(cfg.Discord.VoiceSTT); err != nil {
 			writeError(w, err)
 			return
+		}
+		if voice, ok := s.voice.(managedVoiceTranscriber); ok {
+			go func() {
+				if err := voice.Reload(s.backgroundContext()); err != nil {
+					logRuntimeOperation("voice_stt_reload", "status", "failed", "error", err)
+				}
+			}()
 		}
 		logRuntimeOperation("config_update", "voice_stt_mode", cfg.Discord.VoiceSTT.Mode)
 		changed = true
@@ -80,6 +88,7 @@ func runtimeConfigDTO(cfg config.Config) RuntimeConfig {
 		DefaultAgent: cfg.DefaultAgent,
 		VoiceSTT: VoiceSTTConfig{
 			Mode:        cfg.Discord.VoiceSTT.Mode,
+			Compute:     cfg.Discord.VoiceSTT.Compute,
 			FFmpegPath:  cfg.Discord.VoiceSTT.FFmpegPath,
 			WhisperPath: cfg.Discord.VoiceSTT.WhisperPath,
 			ModelPath:   cfg.Discord.VoiceSTT.ModelPath,

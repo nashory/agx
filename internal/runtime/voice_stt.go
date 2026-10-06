@@ -16,6 +16,13 @@ type voiceTranscriber interface {
 	Transcribe(ctx context.Context, inputPath string) (voiceTranscript, error)
 }
 
+type managedVoiceTranscriber interface {
+	voiceTranscriber
+	Warm(context.Context) error
+	Reload(context.Context) error
+	Close() error
+}
+
 type voiceTranscript struct {
 	Text     string
 	Engine   string

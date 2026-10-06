@@ -162,6 +162,7 @@ allowed_user_ids = ["user"]
 
 	if err := SaveVoiceSTT(VoiceSTTConfig{
 		Mode:        "enabled",
+		Compute:     " gpu ",
 		FFmpegPath:  " /opt/bin/ffmpeg ",
 		WhisperPath: " /opt/bin/whisper-cli ",
 		ModelPath:   " /models/ggml-base.bin ",
@@ -182,7 +183,7 @@ allowed_user_ids = ["user"]
 		t.Fatalf("Discord = %#v, want preserved connection config", cfg.Discord)
 	}
 	voice := cfg.Discord.VoiceSTT
-	if voice.Mode != VoiceSTTEnabled || voice.FFmpegPath != "/opt/bin/ffmpeg" || voice.WhisperPath != "/opt/bin/whisper-cli" || voice.ModelPath != "/models/ggml-base.bin" || voice.Language != "ko" || voice.Timeout != "90s" {
+	if voice.Mode != VoiceSTTEnabled || voice.Compute != VoiceComputeGPU || voice.FFmpegPath != "/opt/bin/ffmpeg" || voice.WhisperPath != "/opt/bin/whisper-cli" || voice.ModelPath != "/models/ggml-base.bin" || voice.Language != "ko" || voice.Timeout != "90s" {
 		t.Fatalf("VoiceSTT = %#v, want normalized enabled config", voice)
 	}
 }
@@ -195,7 +196,7 @@ func TestVoiceSTTDefaultsToAuto(t *testing.T) {
 	if len(warnings) > 0 {
 		t.Fatalf("LoadGlobal warnings = %v", warnings)
 	}
-	if cfg.Discord.VoiceSTT.Mode != VoiceSTTAuto || cfg.Discord.VoiceSTT.Language != "auto" || cfg.Discord.VoiceSTT.Timeout != "60s" {
+	if cfg.Discord.VoiceSTT.Mode != VoiceSTTAuto || cfg.Discord.VoiceSTT.Compute != VoiceComputeAuto || cfg.Discord.VoiceSTT.Language != "auto" || cfg.Discord.VoiceSTT.Timeout != "60s" {
 		t.Fatalf("VoiceSTT defaults = %#v, want auto language and timeout", cfg.Discord.VoiceSTT)
 	}
 }

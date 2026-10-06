@@ -125,6 +125,7 @@ export type RuntimeConfigInfo = {
 
 export type VoiceSTTConfig = {
   mode: 'disabled' | 'auto' | 'enabled';
+  compute: 'auto' | 'gpu' | 'cpu';
   ffmpegPath: string;
   whisperPath: string;
   modelPath: string;

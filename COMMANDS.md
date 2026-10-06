@@ -179,3 +179,7 @@ On Windows from the repo build:
 ```powershell
 .\bin\agx.exe voice-stt setup
 ```
+
+When `whisper-server` is installed beside `whisper-cli`, the runtime keeps the
+configured model loaded between voice messages. Select `auto`, `gpu`, or `cpu`
+compute in Desktop settings; CPU mode explicitly disables GPU acceleration.

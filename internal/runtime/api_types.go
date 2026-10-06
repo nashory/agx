@@ -107,6 +107,7 @@ type RuntimeConfig struct {
 
 type VoiceSTTConfig struct {
 	Mode        string `json:"mode"`
+	Compute     string `json:"compute"`
 	FFmpegPath  string `json:"ffmpegPath"`
 	WhisperPath string `json:"whisperPath"`
 	ModelPath   string `json:"modelPath"`

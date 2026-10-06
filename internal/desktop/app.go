@@ -251,6 +251,7 @@ type RuntimeConfigInfo struct {
 
 type VoiceSTTConfigInfo struct {
 	Mode        string `json:"mode"`
+	Compute     string `json:"compute"`
 	FFmpegPath  string `json:"ffmpegPath"`
 	WhisperPath string `json:"whisperPath"`
 	ModelPath   string `json:"modelPath"`
@@ -878,9 +879,10 @@ func (a *App) UpdateDefaultAgent(agentName string) (RuntimeConfigInfo, error) {
 	}, nil
 }
 
-func (a *App) UpdateVoiceSTT(mode, ffmpegPath, whisperPath, modelPath, language, timeout string) (RuntimeConfigInfo, error) {
+func (a *App) UpdateVoiceSTT(mode, compute, ffmpegPath, whisperPath, modelPath, language, timeout string) (RuntimeConfigInfo, error) {
 	voice := agxruntime.VoiceSTTConfig{
 		Mode:        mode,
+		Compute:     compute,
 		FFmpegPath:  ffmpegPath,
 		WhisperPath: whisperPath,
 		ModelPath:   modelPath,
@@ -899,6 +901,7 @@ func (a *App) UpdateVoiceSTT(mode, ffmpegPath, whisperPath, modelPath, language,
 	}
 	if err := config.SaveVoiceSTT(config.VoiceSTTConfig{
 		Mode:        mode,
+		Compute:     compute,
 		FFmpegPath:  ffmpegPath,
 		WhisperPath: whisperPath,
 		ModelPath:   modelPath,
@@ -929,6 +932,7 @@ func (a *App) SetupVoiceSTT() (VoiceSTTSetupResultInfo, error) {
 	return VoiceSTTSetupResultInfo{
 		Config: VoiceSTTConfigInfo{
 			Mode:        result.Config.Mode,
+			Compute:     result.Config.Compute,
 			FFmpegPath:  result.Config.FFmpegPath,
 			WhisperPath: result.Config.WhisperPath,
 			ModelPath:   result.Config.ModelPath,
@@ -946,6 +950,7 @@ func runtimeConfigInfoDTO(cfg agxruntime.RuntimeConfig) RuntimeConfigInfo {
 		DefaultAgent: cfg.DefaultAgent,
 		VoiceSTT: VoiceSTTConfigInfo{
 			Mode:        cfg.VoiceSTT.Mode,
+			Compute:     cfg.VoiceSTT.Compute,
 			FFmpegPath:  cfg.VoiceSTT.FFmpegPath,
 			WhisperPath: cfg.VoiceSTT.WhisperPath,
 			ModelPath:   cfg.VoiceSTT.ModelPath,
@@ -958,6 +963,7 @@ func runtimeConfigInfoDTO(cfg agxruntime.RuntimeConfig) RuntimeConfigInfo {
 func voiceSTTConfigInfoDTO(cfg config.VoiceSTTConfig) VoiceSTTConfigInfo {
 	return VoiceSTTConfigInfo{
 		Mode:        cfg.Mode,
+		Compute:     cfg.Compute,
 		FFmpegPath:  cfg.FFmpegPath,
 		WhisperPath: cfg.WhisperPath,
 		ModelPath:   cfg.ModelPath,

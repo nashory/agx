@@ -40,7 +40,7 @@ type localWhisperTranscriber struct {
 }
 
 func defaultVoiceTranscriber() voiceTranscriber {
-	return localWhisperTranscriber{runner: osVoiceCommandRunner{}}
+	return newWhisperServerTranscriber()
 }
 
 func (t localWhisperTranscriber) Transcribe(ctx context.Context, inputPath string) (voiceTranscript, error) {
@@ -83,6 +83,9 @@ func (t localWhisperTranscriber) Transcribe(ctx context.Context, inputPath strin
 		return voiceTranscript{}, fmt.Errorf("ffmpeg conversion failed: %w", err)
 	}
 	args := []string{"-m", voiceCfg.ModelPath, "-f", wavPath, "-otxt", "-of", outPrefix}
+	if voiceCfg.Compute == config.VoiceComputeCPU {
+		args = append(args, "--no-gpu")
+	}
 	language := strings.TrimSpace(voiceCfg.Language)
 	if language == "" {
 		language = "auto"
