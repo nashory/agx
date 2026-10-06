@@ -21,7 +21,8 @@ Optional tools for end-to-end testing:
 - `codex`
 - `claude`
 - `gemini`
-- `muse`
+- `muse` 1.4.4 or newer (AGX uses the Muse Session Protocol provided by
+  `muse serve`)
 - a Discord test server and bot token
 
 Install host tools on macOS:

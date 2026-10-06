@@ -144,9 +144,14 @@ func newAgentEventService(runtime *Service) *agentEventService {
 		if err != nil {
 			return nil, err
 		}
-		if _, err := client.Initialize(ctx); err != nil {
+		initialized, err := client.Initialize(ctx)
+		if err != nil {
 			_ = client.Close()
 			return nil, err
+		}
+		if initialized.Schema.Version != 1 {
+			_ = client.Close()
+			return nil, fmt.Errorf("Muse MSP schema version %d is not supported", initialized.Schema.Version)
 		}
 		return client, nil
 	}

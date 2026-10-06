@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/nashory/agx/internal/agentstream"
 	"github.com/nashory/agx/internal/db"
@@ -219,11 +220,41 @@ func (s *agentEventService) rememberMuseItemTurn(taskID string, notification mus
 }
 
 func (s *agentEventService) forgetMuseRuntime(client museRuntime) {
+	var activeTaskIDs []string
 	s.mu.Lock()
 	if s.muse == client {
 		s.muse = nil
+		for taskID := range s.activeTurns {
+			activeTaskIDs = append(activeTaskIDs, taskID)
+		}
 	}
 	s.mu.Unlock()
+	if s.ctx.Err() != nil {
+		return
+	}
+	for _, taskID := range activeTaskIDs {
+		task, err := s.runtime.store.GetTask(taskID)
+		if err != nil || !isMuseTask(task.Agent) {
+			continue
+		}
+		s.mu.Lock()
+		turnID := s.activeTurns[taskID]
+		delete(s.activeTurns, taskID)
+		delete(s.musePrompts, taskID)
+		s.mu.Unlock()
+		message := "Muse MSP host stopped unexpectedly. Send another message to reconnect the session."
+		if stderr := strings.TrimSpace(client.RecentStderr()); stderr != "" {
+			message += "\n\nRecent Muse output:\n" + stderr
+		}
+		s.publish(taskID, agentstream.Event{
+			ID:     agentstream.StableEventID(taskID, agentstream.EventError, turnID, "msp-host-stopped"),
+			TaskID: taskID, TurnID: turnID, Kind: agentstream.EventError, Agent: task.Agent,
+			Error: message, CreatedAt: time.Now(),
+		})
+		_ = s.runtime.store.UpdateTaskStatus(taskID, db.StatusWaiting)
+		s.runtime.emitMetadataEvent(task.ProjectID)
+	}
+	s.runtime.syncDiscordAsync()
 }
 
 func (s *agentEventService) rememberMuseApproval(taskID string, notification museapp.Notification) {

@@ -475,7 +475,7 @@ is the global default unless you change it in Desktop Settings or
 | Claude Code | `claude` |
 | OpenAI Codex CLI | `codex` |
 | Gemini CLI | `gemini` |
-| Muse Code | `muse` |
+| Muse Code 1.4.4 or newer | `muse` |
 | Custom agents | configured in `~/.config/agx/config.toml` or `.agx/config.toml` |
 
 Custom agents can define their command, arguments, resume behavior, print
