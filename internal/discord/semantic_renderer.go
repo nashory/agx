@@ -875,7 +875,7 @@ func approvalPrompt(taskID, content string, approval *agentstream.ApprovalEvent)
 	if len(options) == 0 {
 		return nil
 	}
-	return &InteractivePrompt{TaskID: taskID, Kind: "approval", Content: content, Options: options}
+	return &InteractivePrompt{TaskID: taskID, PromptID: approval.ID, Kind: "approval", Content: content, Options: options}
 }
 
 func renderQuestion(question *agentstream.QuestionEvent) string {
@@ -892,11 +892,14 @@ func renderQuestion(question *agentstream.QuestionEvent) string {
 			lines = append(lines, "- "+option.Label)
 		}
 	}
+	if question.Multiple {
+		lines = append(lines, "Reply with one or more option labels separated by commas.")
+	}
 	return strings.Join(lines, "\n")
 }
 
 func questionPrompt(taskID, content string, question *agentstream.QuestionEvent) *InteractivePrompt {
-	if question == nil || len(question.Options) == 0 {
+	if question == nil || len(question.Options) == 0 || question.Multiple {
 		return nil
 	}
 	options := make([]InteractiveOption, 0, len(question.Options))
@@ -910,7 +913,7 @@ func questionPrompt(taskID, content string, question *agentstream.QuestionEvent)
 	if len(options) == 0 {
 		return nil
 	}
-	return &InteractivePrompt{TaskID: taskID, Kind: "question", Content: content, Options: options}
+	return &InteractivePrompt{TaskID: taskID, PromptID: question.ID, Kind: "question", Content: content, Options: options}
 }
 
 func splitDiscordMarkdown(text string, max int) []string {

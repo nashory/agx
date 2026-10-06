@@ -6,6 +6,7 @@ package discord
 type IncomingTaskMessage struct {
 	Text             string
 	DiscordMessageID string
+	PromptToken      string
 	Attachments      []IncomingAttachment
 }
 

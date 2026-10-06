@@ -96,9 +96,10 @@ type ApprovalOption struct {
 }
 
 type QuestionEvent struct {
-	ID      string
-	Prompt  string
-	Options []QuestionOption
+	ID       string
+	Prompt   string
+	Options  []QuestionOption
+	Multiple bool
 }
 
 type QuestionOption struct {

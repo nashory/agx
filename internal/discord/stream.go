@@ -2,6 +2,8 @@ package discord
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -21,10 +23,16 @@ type InteractivePromptSender interface {
 }
 
 type InteractivePrompt struct {
-	TaskID  string
-	Kind    string
-	Content string
-	Options []InteractiveOption
+	TaskID   string
+	PromptID string
+	Kind     string
+	Content  string
+	Options  []InteractiveOption
+}
+
+func PromptToken(promptID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(promptID)))
+	return hex.EncodeToString(sum[:8])
 }
 
 type InteractiveOption struct {

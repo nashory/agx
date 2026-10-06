@@ -516,6 +516,10 @@ func (r *CommandRouter) HandlePlainMessage(ctx context.Context, input CommandInp
 }
 
 func (r *CommandRouter) HandleComponentChoice(ctx context.Context, input CommandInput, taskID, choice string) (CommandResponse, error) {
+	return r.HandleComponentPromptChoice(ctx, input, taskID, "", choice)
+}
+
+func (r *CommandRouter) HandleComponentPromptChoice(ctx context.Context, input CommandInput, taskID, promptToken, choice string) (CommandResponse, error) {
 	if r.service == nil {
 		return CommandResponse{}, fmt.Errorf("discord command service is not configured")
 	}
@@ -537,7 +541,7 @@ func (r *CommandRouter) HandleComponentChoice(ctx context.Context, input Command
 	if linkedTaskID != taskID {
 		return CommandResponse{}, fmt.Errorf("this choice belongs to a different AGX task")
 	}
-	return r.handlePlainTaskMessage(ctx, taskID, IncomingTaskMessage{Text: choice})
+	return r.handlePlainTaskMessage(ctx, taskID, IncomingTaskMessage{Text: choice, PromptToken: strings.TrimSpace(promptToken)})
 }
 
 func (r *CommandRouter) killTask(ctx context.Context, input CommandInput) (CommandResponse, error) {

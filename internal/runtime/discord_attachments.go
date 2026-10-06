@@ -64,7 +64,7 @@ func (s *Service) sendDiscordTaskMessage(ctx context.Context, taskID string, mes
 	if isRuntimeStructuredDBTask(task) {
 		s.syncDiscordTaskBestEffort(task.ID)
 	}
-	if err := s.deliverTaskMessage(ctx, task, project, prompt); err != nil {
+	if err := s.deliverTaskMessage(ctx, task, project, prompt, message.PromptToken); err != nil {
 		return agxdiscord.SendTaskMessageResult{}, err
 	}
 	delivered = true
@@ -261,8 +261,11 @@ func (s *Service) taskAttachmentBytes(taskID string) (int64, error) {
 	return total, nil
 }
 
-func (s *Service) deliverTaskMessage(ctx context.Context, task db.Task, project db.Project, prompt string) error {
+func (s *Service) deliverTaskMessage(ctx context.Context, task db.Task, project db.Project, prompt, promptToken string) error {
 	if isRuntimeStructuredDBTask(task) {
+		if strings.TrimSpace(promptToken) != "" {
+			return s.agents.SendTaskPromptChoice(ctx, task, project, prompt, promptToken)
+		}
 		return s.agents.SendTaskMessage(ctx, task, project, prompt)
 	}
 	lock := s.taskLock(task.ID)

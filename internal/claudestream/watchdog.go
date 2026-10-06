@@ -85,11 +85,12 @@ func (w *ToolWatchdog) start(id, name string) {
 	if previous := w.pending[id]; previous != nil {
 		previous.Stop()
 	}
-	var timer *time.Timer
-	timer = time.AfterFunc(w.timeout, func() {
-		w.stall(id, strings.TrimSpace(name), timer)
-	})
+	timer := time.NewTimer(w.timeout)
 	w.pending[id] = timer
+	go func() {
+		<-timer.C
+		w.stall(id, strings.TrimSpace(name), timer)
+	}()
 }
 
 func (w *ToolWatchdog) complete(id string) {

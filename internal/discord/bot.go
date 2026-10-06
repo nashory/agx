@@ -517,6 +517,10 @@ func choiceComponents(prompt InteractivePrompt) []discordgo.MessageComponent {
 	}
 	rows := []discordgo.MessageComponent{}
 	row := discordgo.ActionsRow{}
+	promptToken := ""
+	if strings.TrimSpace(prompt.PromptID) != "" {
+		promptToken = PromptToken(prompt.PromptID)
+	}
 	for index, option := range prompt.Options {
 		label := truncateComponentLabel(option.Label)
 		if label == "" {
@@ -532,7 +536,7 @@ func choiceComponents(prompt InteractivePrompt) []discordgo.MessageComponent {
 		row.Components = append(row.Components, discordgo.Button{
 			Label:    label,
 			Style:    discordgo.PrimaryButton,
-			CustomID: choiceComponentID(taskID, index),
+			CustomID: choiceComponentIDForPrompt(taskID, promptToken, index),
 		})
 	}
 	if len(row.Components) > 0 && len(rows) < 5 {
@@ -542,24 +546,38 @@ func choiceComponents(prompt InteractivePrompt) []discordgo.MessageComponent {
 }
 
 func choiceComponentID(taskID string, index int) string {
-	return choiceComponentPrefix + strings.TrimSpace(taskID) + ":" + strconv.Itoa(index)
+	return choiceComponentIDForPrompt(taskID, "", index)
+}
+
+func choiceComponentIDForPrompt(taskID, promptToken string, index int) string {
+	id := choiceComponentPrefix + strings.TrimSpace(taskID) + ":" + strconv.Itoa(index)
+	if strings.TrimSpace(promptToken) != "" {
+		id += ":" + strings.TrimSpace(promptToken)
+	}
+	return id
 }
 
 func parseChoiceComponentID(customID string) (string, int, bool) {
+	taskID, _, index, ok := parseChoiceComponent(customID)
+	return taskID, index, ok
+}
+
+func parseChoiceComponent(customID string) (string, string, int, bool) {
 	customID = strings.TrimSpace(customID)
 	if !strings.HasPrefix(customID, choiceComponentPrefix) {
-		return "", 0, false
+		return "", "", 0, false
 	}
 	rest := strings.TrimPrefix(customID, choiceComponentPrefix)
-	taskID, indexText, ok := strings.Cut(rest, ":")
+	taskID, remainder, ok := strings.Cut(rest, ":")
 	if !ok || strings.TrimSpace(taskID) == "" {
-		return "", 0, false
+		return "", "", 0, false
 	}
+	indexText, promptToken, _ := strings.Cut(remainder, ":")
 	index, err := strconv.Atoi(indexText)
 	if err != nil || index < 0 {
-		return "", 0, false
+		return "", "", 0, false
 	}
-	return taskID, index, true
+	return taskID, promptToken, index, true
 }
 
 func truncateComponentLabel(label string) string {
@@ -956,7 +974,7 @@ func (b *Bot) handleComponentInteraction(session componentHandlerSession, router
 		return
 	}
 	data := i.MessageComponentData()
-	taskID, _, ok := parseChoiceComponentID(data.CustomID)
+	taskID, promptToken, _, ok := parseChoiceComponent(data.CustomID)
 	if !ok {
 		return
 	}
@@ -985,7 +1003,7 @@ func (b *Bot) handleComponentInteraction(session componentHandlerSession, router
 	if err := session.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredMessageUpdate}); err != nil {
 		return
 	}
-	response, err := router.HandleComponentChoice(context.Background(), input, taskID, choice)
+	response, err := router.HandleComponentPromptChoice(context.Background(), input, taskID, promptToken, choice)
 	if err != nil {
 		_ = b.sendMessageWithSession(context.Background(), session, i.ChannelID, "AGX choice failed: "+err.Error())
 		return

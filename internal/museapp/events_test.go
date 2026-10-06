@@ -46,3 +46,13 @@ func TestMapApprovalAndQuestion(t *testing.T) {
 		t.Fatalf("question = %#v, err=%v", question, err)
 	}
 }
+
+func TestMapReasoningDoesNotExposeRawText(t *testing.T) {
+	events, err := MapNotification(agentstream.TaskSummary{ID: "task"}, Notification{Method: NotifyItemCompleted, Params: json.RawMessage(`{"viewCursor":"v:1","item":{"itemId":"r","kind":"reasoning","turnId":"t","status":"completed","text":"private chain of thought"}}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("raw reasoning was mapped: %#v", events)
+	}
+}

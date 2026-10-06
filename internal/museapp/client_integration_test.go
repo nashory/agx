@@ -23,7 +23,8 @@ func TestMuseServeEchoIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionID := NewCommandID()
-	if _, err := client.SessionStart(ctx, sessionID, t.TempDir(), true); err != nil {
+	started, err := client.SessionStart(ctx, sessionID, t.TempDir(), true)
+	if err != nil {
 		t.Fatal(err)
 	}
 	turn, err := client.TurnStart(ctx, sessionID, "hello from AGX", "queue")
@@ -51,6 +52,23 @@ func TestMuseServeEchoIntegration(t *testing.T) {
 			if notification.Method == NotifyTurnCompleted {
 				if !seenMessage {
 					t.Fatal("turn completed without an agent message")
+				}
+				page, err := client.ViewPage(ctx, sessionID, started.ViewCursor, 1000)
+				if err != nil && !IsMethodNotFound(err) {
+					t.Fatalf("page session view: %v", err)
+				}
+				if err == nil && len(page.Events) == 0 {
+					t.Fatal("session view page was empty")
+				}
+				if IsMethodNotFound(err) {
+					if err := client.ViewUnsubscribe(ctx, sessionID); err != nil {
+						t.Fatalf("unsubscribe session view: %v", err)
+					}
+					if err := client.ViewSubscribe(ctx, sessionID, started.ViewCursor); err != nil {
+						if !IsMethodNotFound(err) {
+							t.Fatalf("resubscribe session view: %v", err)
+						}
+					}
 				}
 				return
 			}

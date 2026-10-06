@@ -13,6 +13,11 @@ func IsSessionNotFound(err error) bool {
 	return errors.As(err, &callErr) && callErr.Code == -32020
 }
 
+func IsMethodNotFound(err error) bool {
+	var callErr *CallError
+	return errors.As(err, &callErr) && callErr.Code == -32601
+}
+
 const (
 	MethodInitialize    = "initialize"
 	MethodInitialized   = "initialized"
@@ -50,6 +55,11 @@ type TurnResponse struct {
 	TurnID      string `json:"turnId"`
 	Status      string `json:"status"`
 	Disposition string `json:"disposition"`
+}
+
+type ViewPageResponse struct {
+	Events     []Notification `json:"events"`
+	NextCursor *string        `json:"nextCursor"`
 }
 
 func NewCommandID() string {
@@ -101,6 +111,21 @@ func (c *Client) SessionResume(ctx context.Context, sessionID, cursor string) (S
 	return out, err
 }
 
+func (c *Client) ViewPage(ctx context.Context, sessionID, cursor string, limit int) (ViewPageResponse, error) {
+	params := map[string]any{"sessionId": sessionID, "cursor": cursor, "direction": "forward", "limit": limit}
+	var out ViewPageResponse
+	err := c.Call(ctx, "view/page", params, &out)
+	return out, err
+}
+
+func (c *Client) ViewSubscribe(ctx context.Context, sessionID, after string) error {
+	return c.Call(ctx, "view/subscribe", map[string]any{"sessionId": sessionID, "after": after}, nil)
+}
+
+func (c *Client) ViewUnsubscribe(ctx context.Context, sessionID string) error {
+	return c.Call(ctx, "view/unsubscribe", map[string]any{"sessionId": sessionID}, nil)
+}
+
 func (c *Client) TurnStart(ctx context.Context, sessionID, text, ifBusy string) (TurnResponse, error) {
 	params := map[string]any{
 		"commandId": NewCommandID(),
@@ -133,16 +158,29 @@ func (c *Client) ApprovalDecide(ctx context.Context, sessionID, approvalID strin
 	}, nil)
 }
 
-func (c *Client) UserInputAnswer(ctx context.Context, sessionID, userInputID, questionID, answer string, freeText bool) error {
-	value := map[string]any{"questionId": questionID}
-	if freeText {
-		value["freeText"] = answer
-	} else {
-		value["selectedLabel"] = answer
+type UserInputAnswer struct {
+	QuestionID string
+	Value      string
+	Values     []string
+	FreeText   bool
+}
+
+func (c *Client) UserInputAnswer(ctx context.Context, sessionID, userInputID string, answers []UserInputAnswer) error {
+	values := make([]any, 0, len(answers))
+	for _, answer := range answers {
+		value := map[string]any{"questionId": answer.QuestionID}
+		if len(answer.Values) != 0 {
+			value["selectedLabels"] = answer.Values
+		} else if answer.FreeText {
+			value["freeText"] = answer.Value
+		} else {
+			value["selectedLabel"] = answer.Value
+		}
+		values = append(values, value)
 	}
 	return c.Call(ctx, "userInput/answer", map[string]any{
 		"commandId": NewCommandID(), "sessionId": sessionID, "userInputId": userInputID,
-		"answers": []any{value},
+		"answers": values,
 	}, nil)
 }
 

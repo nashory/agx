@@ -19,6 +19,7 @@ const (
 	NotifyApprovalRequested  = "approval/requested"
 	NotifyUserInputRequest   = "userInput/request"
 	NotifyUserInputRequested = "userInput/requested"
+	NotifyViewGap            = "view/gap"
 )
 
 type Item struct {
@@ -151,7 +152,7 @@ func mapItem(base func(agentstream.EventKind, string, string, string) agentstrea
 		event.Text = item.Text
 		return []agentstream.Event{event}
 	case "reasoning":
-		text := first(strings.Join(item.Summary, "\n"), item.Text)
+		text := strings.TrimSpace(strings.Join(item.Summary, "\n"))
 		if text == "" {
 			return nil
 		}
@@ -229,6 +230,9 @@ func mapUserInput(task agentstream.TaskSummary, notification Notification, now t
 			Options  []struct {
 				Label string `json:"label"`
 			} `json:"options"`
+			Selection struct {
+				Mode string `json:"mode"`
+			} `json:"selection"`
 		} `json:"questions"`
 	}
 	if err := json.Unmarshal(notification.Params, &params); err != nil {
@@ -242,7 +246,7 @@ func mapUserInput(task agentstream.TaskSummary, notification Notification, now t
 	for _, option := range question.Options {
 		options = append(options, agentstream.QuestionOption{ID: option.Label, Label: option.Label})
 	}
-	event := agentstream.Event{ID: agentstream.StableEventID(task.ID, agentstream.EventQuestionRequested, params.UserInputID), TaskID: task.ID, TurnID: params.TurnID, ItemID: params.ItemID, Kind: agentstream.EventQuestionRequested, Agent: "muse", CreatedAt: now, Cursor: params.ViewCursor, Question: &agentstream.QuestionEvent{ID: params.UserInputID + ":" + question.ID, Prompt: strings.TrimSpace(strings.Join([]string{question.Header, question.Question}, "\n")), Options: options}}
+	event := agentstream.Event{ID: agentstream.StableEventID(task.ID, agentstream.EventQuestionRequested, params.UserInputID), TaskID: task.ID, TurnID: params.TurnID, ItemID: params.ItemID, Kind: agentstream.EventQuestionRequested, Agent: "muse", CreatedAt: now, Cursor: params.ViewCursor, Question: &agentstream.QuestionEvent{ID: params.UserInputID + ":" + question.ID, Prompt: strings.TrimSpace(strings.Join([]string{question.Header, question.Question}, "\n")), Options: options, Multiple: strings.EqualFold(question.Selection.Mode, "multiple")}}
 	return []agentstream.Event{event}, nil
 }
 
