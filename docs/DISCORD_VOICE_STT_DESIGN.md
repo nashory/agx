@@ -201,6 +201,11 @@ If `whisper-server` is unavailable, AGX falls back to invoking `whisper-cli`
 for compatibility. The fallback reloads the model for every message and is
 therefore slower, especially for Large models.
 
+On Windows, AGX assigns its persistent `whisper-server` process to a
+kill-on-close Job Object. This lets Windows terminate the server if AGX exits
+normally, crashes, or is force-terminated, without scanning for or stopping
+Whisper processes owned by other applications.
+
 Recommended command support:
 
 ```text

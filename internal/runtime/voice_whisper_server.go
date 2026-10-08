@@ -34,8 +34,13 @@ type whisperServerTranscriber struct {
 type whisperServerInstance struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
+	guard       whisperProcessGuard
 	baseURL     string
 	fingerprint string
+}
+
+type whisperProcessGuard interface {
+	Close() error
 }
 
 type whisperServerResponse struct {
@@ -171,6 +176,12 @@ func (t *whisperServerTranscriber) ensureServer(ctx context.Context, cfg config.
 		serverCancel()
 		return "", fmt.Errorf("start Whisper server: %w", err)
 	}
+	guard, err := guardWhisperServerProcess(cmd.Process)
+	if err != nil {
+		serverCancel()
+		_ = cmd.Wait()
+		return "", fmt.Errorf("guard Whisper server process: %w", err)
+	}
 	done := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
@@ -182,6 +193,7 @@ func (t *whisperServerTranscriber) ensureServer(ctx context.Context, cfg config.
 	defer startupCancel()
 	if err := waitForWhisperServer(startupCtx, port, done); err != nil {
 		serverCancel()
+		_ = guard.Close()
 		<-done
 		summary := strings.TrimSpace(stderr.String())
 		if len(summary) > 4096 {
@@ -195,6 +207,7 @@ func (t *whisperServerTranscriber) ensureServer(ctx context.Context, cfg config.
 	t.server = &whisperServerInstance{
 		cancel:      serverCancel,
 		done:        done,
+		guard:       guard,
 		baseURL:     baseURL,
 		fingerprint: fingerprint,
 	}
@@ -206,6 +219,9 @@ func (t *whisperServerTranscriber) stopLocked() {
 		return
 	}
 	t.server.cancel()
+	if t.server.guard != nil {
+		_ = t.server.guard.Close()
+	}
 	select {
 	case <-t.server.done:
 	case <-time.After(5 * time.Second):
