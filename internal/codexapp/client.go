@@ -46,6 +46,8 @@ type Client struct {
 
 	stderrMu  sync.Mutex
 	stderrBuf []string
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // maxStderrLines bounds the retained app-server stderr so a chatty subprocess
@@ -228,7 +230,10 @@ func (c *Client) Close() error {
 	if c.closer == nil {
 		return nil
 	}
-	return c.closer.Close()
+	c.closeOnce.Do(func() {
+		c.closeErr = c.closer.Close()
+	})
+	return c.closeErr
 }
 
 // Events returns the notification stream. The channel closes when the reader

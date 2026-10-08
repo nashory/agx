@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ type fakeCodexRuntime struct {
 	stderr       string
 	inputCancels chan string
 	approvals    chan codexapp.ReviewDecision
+	closeOnce    sync.Once
 }
 
 func newFakeCodexRuntime() *fakeCodexRuntime {
@@ -103,7 +105,10 @@ func (f *fakeCodexRuntime) RecentStderr() string {
 }
 
 func (f *fakeCodexRuntime) Close() error {
-	close(f.events)
+	f.closeOnce.Do(func() {
+		defer func() { _ = recover() }()
+		close(f.events)
+	})
 	return nil
 }
 
@@ -557,6 +562,14 @@ func TestForgetCodexRuntimeKeepsClaudeTurns(t *testing.T) {
 	service.agents.activeTurns["claude-task"] = "claude-turn"
 
 	service.agents.forgetRuntime(fake)
+	select {
+	case _, ok := <-fake.events:
+		if ok {
+			t.Fatal("Codex runtime event stream remained open after forgetRuntime")
+		}
+	default:
+		t.Fatal("Codex runtime was not closed after transport failure")
+	}
 
 	if turn := service.agents.activeTurns["codex-task"]; turn != "" {
 		t.Fatalf("codex active turn = %q, want cleared", turn)

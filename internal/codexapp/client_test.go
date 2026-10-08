@@ -299,16 +299,6 @@ func TestThreadResumeTurnSteerAndInterruptMethods(t *testing.T) {
 		response   string
 	}{
 		{
-			name: "thread resume",
-			call: func(ctx context.Context, client *Client) error {
-				_, err := client.ThreadResume(ctx, "thread-1")
-				return err
-			},
-			wantMethod: MethodThreadResume,
-			wantParam:  `"threadId":"thread-1"`,
-			response:   `{"id":1,"result":{"thread":{"id":"thread-1","cwd":"/repo"}}}`,
-		},
-		{
 			name: "turn steer",
 			call: func(ctx context.Context, client *Client) error {
 				_, err := client.TurnSteer(ctx, "thread-1", "turn-1", "keep going")
@@ -355,6 +345,53 @@ func TestThreadResumeTurnSteerAndInterruptMethods(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestThreadResumeUsesMetadataOnlyResponseAndLoadsLatestTurn(t *testing.T) {
+	server, clientConn := net.Pipe()
+	defer server.Close()
+	defer clientConn.Close()
+	client := NewClient(clientConn, clientConn, clientConn)
+	done := make(chan error, 1)
+	go func() {
+		decoder := json.NewDecoder(server)
+		var resume map[string]any
+		if err := decoder.Decode(&resume); err != nil {
+			done <- err
+			return
+		}
+		params, _ := resume["params"].(map[string]any)
+		if resume["method"] != MethodThreadResume || params["excludeTurns"] != true {
+			t.Errorf("resume request = %#v, want excludeTurns=true", resume)
+		}
+		if _, err := server.Write([]byte(`{"id":1,"result":{"thread":{"id":"thread-1","cwd":"/repo","turns":[]}}}` + "\n")); err != nil {
+			done <- err
+			return
+		}
+		var list map[string]any
+		if err := decoder.Decode(&list); err != nil {
+			done <- err
+			return
+		}
+		listParams, _ := list["params"].(map[string]any)
+		if list["method"] != MethodThreadTurnsList || listParams["limit"] != float64(1) || listParams["sortDirection"] != "desc" {
+			t.Errorf("turn list request = %#v", list)
+		}
+		_, err := server.Write([]byte(`{"id":2,"result":{"data":[{"id":"turn-2","status":"inProgress"}],"nextCursor":"next"}}` + "\n"))
+		done <- err
+	}()
+
+	response, err := client.ThreadResume(context.Background(), "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, ok := response.Thread.LatestTurn()
+	if !ok || latest.ID != "turn-2" || !latest.IsInProgress() {
+		t.Fatalf("latest turn = %#v, %v", latest, ok)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

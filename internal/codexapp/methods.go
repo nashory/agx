@@ -7,12 +7,13 @@ import (
 )
 
 const (
-	MethodInitialize    = "initialize"
-	MethodThreadStart   = "thread/start"
-	MethodThreadResume  = "thread/resume"
-	MethodTurnStart     = "turn/start"
-	MethodTurnSteer     = "turn/steer"
-	MethodTurnInterrupt = "turn/interrupt"
+	MethodInitialize      = "initialize"
+	MethodThreadStart     = "thread/start"
+	MethodThreadResume    = "thread/resume"
+	MethodThreadTurnsList = "thread/turns/list"
+	MethodTurnStart       = "turn/start"
+	MethodTurnSteer       = "turn/steer"
+	MethodTurnInterrupt   = "turn/interrupt"
 )
 
 type InitializeResponse struct {
@@ -22,6 +23,10 @@ type InitializeResponse struct {
 
 type ThreadStartResponse struct {
 	Thread Thread `json:"thread"`
+}
+
+type ThreadTurnsListResponse struct {
+	Data []Turn `json:"data"`
 }
 
 type TurnStartResponse struct {
@@ -141,8 +146,19 @@ func IsThreadNotFound(err error) bool {
 // ThreadResume reconnects to an existing Codex thread by ID.
 func (c *Client) ThreadResume(ctx context.Context, threadID string) (ThreadStartResponse, error) {
 	var out ThreadStartResponse
-	err := c.Call(ctx, MethodThreadResume, map[string]any{"threadId": threadID}, &out)
-	return out, err
+	if err := c.Call(ctx, MethodThreadResume, map[string]any{"threadId": threadID, "excludeTurns": true}, &out); err != nil {
+		return out, err
+	}
+	var turns ThreadTurnsListResponse
+	if err := c.Call(ctx, MethodThreadTurnsList, map[string]any{
+		"threadId": threadID, "limit": 1, "sortDirection": "desc", "itemsView": "summary",
+	}, &turns); err != nil {
+		return ThreadStartResponse{}, err
+	}
+	if len(turns.Data) != 0 {
+		out.Thread.Turns = []Turn{turns.Data[0]}
+	}
+	return out, nil
 }
 
 // TurnStart sends a new user input turn to a thread.

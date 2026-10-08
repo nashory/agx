@@ -1031,6 +1031,7 @@ func taskWorkingDir(task db.Task, project db.Project) string {
 // owned. Only Codex turn state is discarded: Claude and Muse turns run in their
 // own processes and must survive an app-server restart.
 func (s *agentEventService) forgetRuntime(client codexRuntime) {
+	defer func() { _ = client.Close() }()
 	type lostTurn struct {
 		taskID string
 		turnID string
