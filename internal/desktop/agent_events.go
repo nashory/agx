@@ -43,6 +43,7 @@ var errStructuredFailurePublished = errors.New("structured agent failure already
 // and process exit. Bound the wait so a missing result cannot block queued
 // follow-ups forever.
 var claudeEndTurnGracePeriod = 30 * time.Second
+var claudeTerminalExitGracePeriod = 5 * time.Second
 var claudeQuickToolTimeout = claudestream.DefaultQuickToolTimeout
 
 type agentEventService struct {
@@ -615,7 +616,29 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	endTurnSeen := false
 	var terminalReceived atomic.Bool
 	recoveryTriggered := make(chan struct{})
+	var recoveryOnce sync.Once
+	triggerRecovery := func() {
+		recoveryOnce.Do(func() {
+			close(recoveryTriggered)
+			// A launcher or hook may outlive the root process while still
+			// holding its inherited stdout handle. Close our read side so
+			// ReadJSONLines cannot wait forever for an EOF that never comes.
+			_ = stdout.Close()
+			_ = processtree.Terminate(cmd)
+		})
+	}
 	var endTurnTimer *time.Timer
+	var terminalExitTimer *time.Timer
+	streamDone := make(chan struct{})
+	defer close(streamDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = stdout.Close()
+			_ = processtree.Terminate(cmd)
+		case <-streamDone:
+		}
+	}()
 	toolWatchdog := claudestream.NewToolWatchdog(claudeQuickToolTimeout, func() {
 		_ = stdout.Close()
 		_ = processtree.Terminate(cmd)
@@ -625,17 +648,18 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 		for _, event := range mapped.events {
 			toolWatchdog.Observe(event)
 			s.publish(task.ID, event)
-			if event.Kind == agentstream.EventTurnCompleted {
+			if event.Kind == agentstream.EventTurnCompleted || event.Kind == agentstream.EventError || event.Kind == agentstream.EventInterrupted {
 				terminalSeen = true
 				terminalReceived.Store(true)
 				if endTurnTimer != nil {
 					endTurnTimer.Stop()
 				}
-			}
-			if event.Kind == agentstream.EventError || event.Kind == agentstream.EventInterrupted {
-				terminalSeen = true
-				terminalReceived.Store(true)
-				failurePublished = true
+				if terminalExitTimer == nil {
+					terminalExitTimer = time.AfterFunc(claudeTerminalExitGracePeriod, triggerRecovery)
+				}
+				if event.Kind == agentstream.EventError || event.Kind == agentstream.EventInterrupted {
+					failurePublished = true
+				}
 			}
 			if event.Cursor != "" {
 				cursor := event.Cursor
@@ -650,28 +674,26 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 				if terminalReceived.Load() {
 					return
 				}
-				close(recoveryTriggered)
-				// A launcher or hook may outlive the root process while still
-				// holding its inherited stdout handle. Close our read side so
-				// ReadJSONLines cannot wait forever for an EOF that never comes.
-				_ = stdout.Close()
-				_ = processtree.Terminate(cmd)
+				triggerRecovery()
 			})
 		}
 		return nil
 	})
+	waitErr := cmd.Wait()
 	if endTurnTimer != nil {
 		endTurnTimer.Stop()
 	}
+	if terminalExitTimer != nil {
+		terminalExitTimer.Stop()
+	}
 	toolWatchdog.Stop()
-	waitErr := cmd.Wait()
 	recovered := false
 	select {
 	case <-recoveryTriggered:
 		recovered = true
 	default:
 	}
-	if recovered && endTurnSeen {
+	if recovered && (endTurnSeen || terminalSeen) {
 		// Closing stdout is the recovery signal, so its read error is
 		// expected and must not turn a completed response into a failure.
 		readErr = nil

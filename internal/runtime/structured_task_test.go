@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1155,6 +1156,65 @@ func TestAgentEventServiceClearResetsClaudeContext(t *testing.T) {
 	service.agents.mu.Unlock()
 	if activeTurn != "" || len(queued) != 0 {
 		t.Fatalf("activeTurn=%q queued=%#v, want cleared runtime state", activeTurn, queued)
+	}
+}
+
+func TestClaudeStreamRecoversTerminalResultWithoutEOF(t *testing.T) {
+	orphanPIDPath := filepath.Join(t.TempDir(), "orphan.pid")
+	t.Setenv("AGX_ORPHAN_PID", orphanPIDPath)
+	posix := `#!/bin/sh
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}'
+sleep 30 &
+printf '%s' "$!" > "$AGX_ORPHAN_PID"
+exit 0
+`
+	batch := batchLines(
+		"@echo off",
+		`echo {"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}`,
+		`powershell -NoProfile -Command "$p = Start-Process -FilePath ping.exe -ArgumentList '127.0.0.1','-n','31' -NoNewWindow -PassThru; Set-Content -NoNewline -Path $env:AGX_ORPHAN_PID -Value $p.Id"`,
+		"exit /b 0",
+	)
+	writeStubCommandOnPath(t, "claude", posix, batch)
+	t.Cleanup(func() {
+		contents, err := os.ReadFile(orphanPIDPath)
+		if err != nil {
+			return
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+		if err != nil {
+			return
+		}
+		if process, err := os.FindProcess(pid); err == nil {
+			_ = process.Kill()
+		}
+	})
+
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "claude result recovery", nil, "claude", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+
+	previousGracePeriod := claudeTerminalExitGracePeriod
+	claudeTerminalExitGracePeriod = 100 * time.Millisecond
+	t.Cleanup(func() { claudeTerminalExitGracePeriod = previousGracePeriod })
+
+	started := time.Now()
+	if err := service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "continue"); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("terminal stream recovery took %s, want at most 5s", elapsed)
 	}
 }
 
