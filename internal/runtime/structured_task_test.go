@@ -35,6 +35,7 @@ type fakeCodexRuntime struct {
 	dirtyThread  bool
 	stderr       string
 	inputCancels chan string
+	inputAnswers chan map[string][]string
 	approvals    chan codexapp.ReviewDecision
 	closeOnce    sync.Once
 }
@@ -45,6 +46,7 @@ func newFakeCodexRuntime() *fakeCodexRuntime {
 		nextThreadID: "thread-1",
 		nextTurnID:   "turn-1",
 		inputCancels: make(chan string, 1),
+		inputAnswers: make(chan map[string][]string, 1),
 		approvals:    make(chan codexapp.ReviewDecision, 1),
 	}
 }
@@ -98,6 +100,11 @@ func (f *fakeCodexRuntime) ApproveRequest(_ codexapp.Notification, decision code
 
 func (f *fakeCodexRuntime) CancelInputRequest(notification codexapp.Notification) error {
 	f.inputCancels <- notification.Method
+	return nil
+}
+
+func (f *fakeCodexRuntime) AnswerInputRequest(_ codexapp.Notification, answers map[string][]string) error {
+	f.inputAnswers <- answers
 	return nil
 }
 

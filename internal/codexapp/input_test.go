@@ -52,6 +52,44 @@ func TestIsInputRequestRequiresSupportedMethodAndID(t *testing.T) {
 	}
 }
 
+func TestAnswerUserInputRequestReturnsStructuredAnswers(t *testing.T) {
+	server, clientConn := net.Pipe()
+	defer server.Close()
+	defer clientConn.Close()
+	client := NewClient(clientConn, clientConn, clientConn)
+	reader := bufio.NewReader(server)
+	if _, err := server.Write([]byte(`{"id":"input-1","method":"item/tool/requestUserInput","params":{"threadId":"thread","questions":[{"id":"color","question":"Pick","options":[{"label":"Blue"}]}]}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	notification := <-client.Events()
+	request, ok := ParseUserInputRequest(notification)
+	if !ok || request.ThreadID != "thread" || len(request.Questions) != 1 {
+		t.Fatalf("request = %#v, %v", request, ok)
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- client.AnswerInputRequest(notification, map[string][]string{"color": {"Blue"}}) }()
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Result struct {
+			Answers map[string]struct {
+				Answers []string `json:"answers"`
+			} `json:"answers"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(line, &response); err != nil {
+		t.Fatal(err)
+	}
+	if got := response.Result.Answers["color"].Answers; len(got) != 1 || got[0] != "Blue" {
+		t.Fatalf("answers = %#v", response.Result.Answers)
+	}
+}
+
 func TestCancelMCPElicitationRequest(t *testing.T) {
 	server, clientConn := net.Pipe()
 	defer server.Close()

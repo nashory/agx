@@ -32,6 +32,7 @@ type codexRuntime interface {
 	Events() <-chan codexapp.Notification
 	ApproveRequest(codexapp.Notification, codexapp.ReviewDecision) error
 	CancelInputRequest(codexapp.Notification) error
+	AnswerInputRequest(codexapp.Notification, map[string][]string) error
 	RecentStderr() string
 	Close() error
 }
@@ -59,6 +60,7 @@ const museStreamKind = museapp.StreamKind
 const agentEventSubscriberBuffer = 256
 
 var errStructuredFailurePublished = errors.New("structured agent failure already published")
+var errClaudeQuestionPending = errors.New("Claude is waiting for user input")
 
 // Claude normally follows an assistant end_turn message with a result record
 // and process exit. Bound the wait so a missing result cannot block queued
@@ -87,10 +89,38 @@ type agentEventService struct {
 	claudeQueues  map[string][]string
 	museQueues    map[string][]string
 	musePrompts   map[string][]musePendingPrompt
+	codexPrompts  map[string][]codexPendingPrompt
+	claudePrompts map[string][]claudePendingPrompt
 	museItemTurns map[string]string
 	museGapActive map[string]bool
 	museGapQueue  map[string][]museGapRange
 	museTaskHosts map[string]museRuntime
+}
+
+type codexPendingPrompt struct {
+	notification  codexapp.Notification
+	requestID     string
+	turnID        string
+	questions     []pendingQuestion
+	answers       map[string][]string
+	questionIndex int
+}
+
+type claudePendingPrompt struct {
+	id            string
+	questions     []pendingQuestion
+	answers       []string
+	questionIndex int
+	nativeTool    bool
+}
+
+type pendingQuestion struct {
+	id             string
+	prompt         string
+	options        []agentstream.QuestionOption
+	choicesByLabel map[string]string
+	allowFreeText  bool
+	multiple       bool
 }
 
 type musePendingPrompt struct {
@@ -151,6 +181,8 @@ func newAgentEventService(runtime *Service) *agentEventService {
 		claudeQueues:  map[string][]string{},
 		museQueues:    map[string][]string{},
 		musePrompts:   map[string][]musePendingPrompt{},
+		codexPrompts:  map[string][]codexPendingPrompt{},
+		claudePrompts: map[string][]claudePendingPrompt{},
 		museItemTurns: map[string]string{},
 		museGapActive: map[string]bool{},
 		museGapQueue:  map[string][]museGapRange{},
@@ -207,6 +239,8 @@ func (s *agentEventService) Close() error {
 	s.claudeQueues = map[string][]string{}
 	s.museQueues = map[string][]string{}
 	s.musePrompts = map[string][]musePendingPrompt{}
+	s.codexPrompts = map[string][]codexPendingPrompt{}
+	s.claudePrompts = map[string][]claudePendingPrompt{}
 	s.museItemTurns = map[string]string{}
 	s.museGapActive = map[string]bool{}
 	s.museGapQueue = map[string][]museGapRange{}
@@ -297,6 +331,15 @@ func (s *agentEventService) sendTaskMessage(ctx context.Context, task db.Task, p
 		return s.clearTaskContext(ctx, task, project)
 	}
 	if isClaudeTask(task.Agent) {
+		if resolved, answer, err := s.resolveClaudePrompt(task.ID, message, promptToken); resolved || err != nil {
+			if err != nil {
+				return err
+			}
+			if answer == "" {
+				return nil
+			}
+			message = answer
+		}
 		return s.startClaudeTurn(ctx, task, project, message)
 	}
 	if isMuseTask(task.Agent) {
@@ -304,6 +347,9 @@ func (s *agentEventService) sendTaskMessage(ctx context.Context, task db.Task, p
 	}
 	client, err := s.ensureCodex(ctx)
 	if err != nil {
+		return err
+	}
+	if resolved, err := s.resolveCodexPrompt(client, task.ID, message, promptToken); resolved || err != nil {
 		return err
 	}
 	threadID, err := s.ensureCodexThread(ctx, client, task, project)
@@ -359,6 +405,7 @@ func (s *agentEventService) clearTaskContext(ctx context.Context, task db.Task, 
 	activeTurn = s.activeTurns[task.ID]
 	delete(s.activeTurns, task.ID)
 	delete(s.codexTurns, task.ID)
+	delete(s.codexPrompts, task.ID)
 	for threadID, taskID := range s.threadToTask {
 		if taskID == task.ID {
 			delete(s.threadToTask, threadID)
@@ -394,6 +441,7 @@ func (s *agentEventService) clearClaudeTaskContext(task db.Task) error {
 	delete(s.activeTurns, task.ID)
 	delete(s.turnCancels, task.ID)
 	delete(s.claudeQueues, task.ID)
+	delete(s.claudePrompts, task.ID)
 	for threadID, taskID := range s.threadToTask {
 		if taskID == task.ID {
 			delete(s.threadToTask, threadID)
@@ -753,6 +801,15 @@ func (s *agentEventService) runClaudeTurn(ctx context.Context, cancel context.Ca
 		s.finishClaudeTurn(task, project, turnID, false)
 		return
 	}
+	if errors.Is(err, errClaudeQuestionPending) {
+		_ = s.runtime.store.UpdateTaskStatus(task.ID, db.StatusWaiting)
+		s.runtime.emitMetadataEvent(task.ProjectID)
+		s.runtime.syncDiscordAsync()
+		// A fast Discord click can arrive while the Claude process is still
+		// shutting down. Preserve that queued answer and resume immediately.
+		s.finishClaudeTurn(task, project, turnID, true)
+		return
+	}
 	if err != nil {
 		kind := agentstream.EventError
 		text := strings.TrimSpace(err.Error())
@@ -876,6 +933,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 		return err
 	}
 	terminalSeen := false
+	questionPending := false
 	failurePublished := false
 	endTurnSeen := false
 	var terminalReceived atomic.Bool
@@ -908,6 +966,14 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 		_ = processtree.Terminate(cmd)
 	})
 	readErr := agentstream.ReadJSONLines(stdout, func(line []byte) error {
+		if prompt, ok := parseClaudeQuestionLine(line); ok {
+			if s.rememberClaudeQuestion(task.ID, turnID, prompt) {
+				if prompt.nativeTool {
+					questionPending = true
+					triggerRecovery()
+				}
+			}
+		}
 		mapped := inspectClaudeStreamLine(task, turnID, line)
 		for _, event := range mapped.events {
 			toolWatchdog.Observe(event)
@@ -963,6 +1029,9 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 		readErr = nil
 		waitErr = nil
 	}
+	if questionPending {
+		return errClaudeQuestionPending
+	}
 	if stallErr := toolWatchdog.Err(); stallErr != nil {
 		logRuntimeOperation("claude_stream_recovery",
 			"task", shortDiagnosticID(task.ID),
@@ -1006,7 +1075,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 }
 
 func claudeStreamArgs(task db.Task) []string {
-	args := []string{"--print", "--verbose", "--output-format", "stream-json", "--disallowedTools", "AskUserQuestion"}
+	args := []string{"--print", "--verbose", "--output-format", "stream-json", "--append-system-prompt", claudeQuestionSystemPrompt}
 	threadID := claudeThreadID(task)
 	if task.AgentEventCursor != nil && strings.TrimSpace(*task.AgentEventCursor) != "" {
 		args = append(args, "--resume", threadID)
@@ -1098,6 +1167,9 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 	defer s.forgetRuntime(client)
 	for notification := range client.Events() {
 		if codexapp.IsInputRequest(notification) {
+			if request, ok := codexapp.ParseUserInputRequest(notification); ok && s.rememberCodexQuestion(notification, request) {
+				continue
+			}
 			if err := client.CancelInputRequest(notification); err != nil {
 				logRuntimeOperation("codex_user_input",
 					"status", "cancel_failed",
@@ -1376,6 +1448,8 @@ func (s *agentEventService) forgetTask(taskID string) {
 	delete(s.claudeQueues, taskID)
 	delete(s.museQueues, taskID)
 	delete(s.musePrompts, taskID)
+	delete(s.codexPrompts, taskID)
+	delete(s.claudePrompts, taskID)
 	for key := range s.museItemTurns {
 		if strings.HasPrefix(key, taskID+":") {
 			delete(s.museItemTurns, key)
@@ -1543,6 +1617,9 @@ func mapClaudeAssistantMessage(task db.Task, turnID string, raw json.RawMessage,
 	var textParts []string
 	for _, content := range message.Content {
 		if content.Type == "text" && strings.TrimSpace(content.Text) != "" {
+			if _, ok := parseClaudeQuestionPayload(content.Text, message.ID); ok {
+				continue
+			}
 			textParts = append(textParts, strings.TrimSpace(content.Text))
 		}
 	}
@@ -1562,6 +1639,9 @@ func mapClaudeAssistantMessage(task db.Task, turnID string, raw json.RawMessage,
 	}
 	for _, content := range message.Content {
 		if content.Type != "tool_use" || strings.TrimSpace(content.Name) == "" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(content.Name), "AskUserQuestion") {
 			continue
 		}
 		toolID := strings.TrimSpace(content.ID)
