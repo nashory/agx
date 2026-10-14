@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -91,19 +92,7 @@ func Start(ctx context.Context, opts Options) (*Client, error) {
 	if command == "" {
 		command = "muse"
 	}
-	args := []string{"serve"}
-	if strings.TrimSpace(opts.Provider) != "" {
-		args = append(args, "--provider", strings.TrimSpace(opts.Provider))
-	}
-	if opts.Ephemeral {
-		args = append(args, "--no-session-log")
-	}
-	if opts.DisableSandbox {
-		args = append(args, "--disable-sandbox")
-	}
-	if opts.TrustWorkspace {
-		args = append(args, "--trust-workspace")
-	}
+	args := serveArgs(opts)
 	cmd := exec.Command(command, args...)
 	processtree.Prepare(cmd)
 	stdin, err := cmd.StdinPipe()
@@ -128,6 +117,30 @@ func Start(ctx context.Context, opts Options) (*Client, error) {
 	}))
 	client.captureStderr(stderr)
 	return client, nil
+}
+
+func serveArgs(opts Options) []string {
+	args := make([]string, 0, 8)
+	if opts.DisableSandbox && runtime.GOOS == "darwin" {
+		// Muse at Meta is wrapped by the Meta launcher, which applies its own
+		// macOS sandbox before Muse starts. --disable-sandbox only disables
+		// Muse's inner tool sandbox, so all-mighty sessions need both flags.
+		args = append(args, "--dangerously-disable-osx-sandbox")
+	}
+	args = append(args, "serve")
+	if strings.TrimSpace(opts.Provider) != "" {
+		args = append(args, "--provider", strings.TrimSpace(opts.Provider))
+	}
+	if opts.Ephemeral {
+		args = append(args, "--no-session-log")
+	}
+	if opts.DisableSandbox {
+		args = append(args, "--disable-sandbox")
+	}
+	if opts.TrustWorkspace {
+		args = append(args, "--trust-workspace")
+	}
+	return args
 }
 
 func NewClient(reader io.Reader, writer io.Writer, closer io.Closer) *Client {

@@ -6,10 +6,29 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestServeArgsDisableBothSandboxLayers(t *testing.T) {
+	got := serveArgs(Options{Provider: "echo", DisableSandbox: true, TrustWorkspace: true, Ephemeral: true})
+	want := []string{"serve", "--provider", "echo", "--no-session-log", "--disable-sandbox", "--trust-workspace"}
+	if runtime.GOOS == "darwin" {
+		want = append([]string{"--dangerously-disable-osx-sandbox"}, want...)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("serveArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestServeArgsKeepSandboxByDefault(t *testing.T) {
+	if got, want := serveArgs(Options{}), []string{"serve"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("serveArgs() = %#v, want %#v", got, want)
+	}
+}
 
 func TestClientCallAndNotification(t *testing.T) {
 	reader, serverWriter := io.Pipe()
