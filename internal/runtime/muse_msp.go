@@ -146,15 +146,12 @@ func (s *agentEventService) startMuseMSPTurn(ctx context.Context, task db.Task, 
 		return err
 	}
 
-	s.mu.Lock()
-	activeTurn := s.activeTurns[task.ID]
-	s.mu.Unlock()
-	var turn museapp.TurnResponse
-	if activeTurn != "" {
-		turn, err = client.TurnSteer(ctx, sessionID, activeTurn, message)
-	} else {
-		turn, err = client.TurnStart(ctx, sessionID, message, "queue")
-	}
+	// User messages are independent turns, not steering instructions. A visible
+	// assistant reply can precede Muse's terminal notification while hooks and
+	// EOT gates finish. Steering during that window races the terminal state and
+	// can be accepted synchronously but later rejected as already_terminal,
+	// leaving AGX active forever. Let MSP queue the next turn atomically instead.
+	turn, err := client.TurnStart(ctx, sessionID, message, "queue")
 	if err != nil {
 		return err
 	}

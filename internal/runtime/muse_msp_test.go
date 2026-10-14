@@ -16,6 +16,7 @@ type fakeMuseRuntime struct {
 	sessionID       string
 	workspace       string
 	startedText     string
+	startIfBusy     string
 	steeredText     string
 	interruptedTurn string
 	approvalChoice  string
@@ -42,9 +43,44 @@ func (f *fakeMuseRuntime) ViewPage(context.Context, string, string, int) (museap
 }
 func (f *fakeMuseRuntime) ViewSubscribe(context.Context, string, string) error { return nil }
 func (f *fakeMuseRuntime) ViewUnsubscribe(context.Context, string) error       { return nil }
-func (f *fakeMuseRuntime) TurnStart(_ context.Context, _ string, text, _ string) (museapp.TurnResponse, error) {
+func (f *fakeMuseRuntime) TurnStart(_ context.Context, _ string, text, ifBusy string) (museapp.TurnResponse, error) {
 	f.startedText = text
+	f.startIfBusy = ifBusy
 	return museapp.TurnResponse{TurnID: museapp.NewCommandID(), Status: "accepted"}, nil
+}
+
+func TestMuseMSPQueuesFollowUpInsteadOfSteeringFinishingTurn(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "muse", nil, "muse", true, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	fake := newFakeMuseRuntime()
+	service.agents.startMuse = func(context.Context, bool) (museRuntime, error) { return fake, nil }
+	service.agents.mu.Lock()
+	service.agents.activeTurns[task.ID] = "finishing-turn"
+	service.agents.mu.Unlock()
+	t.Cleanup(func() { _ = service.agents.Close() })
+
+	if err := service.agents.startMuseMSPTurn(context.Background(), task, project, "follow up"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.startedText != "follow up" || fake.startIfBusy != "queue" {
+		t.Fatalf("TurnStart text=%q ifBusy=%q, want queued follow-up", fake.startedText, fake.startIfBusy)
+	}
+	if fake.steeredText != "" {
+		t.Fatalf("TurnSteer received %q", fake.steeredText)
+	}
 }
 func (f *fakeMuseRuntime) TurnSteer(_ context.Context, _, _ string, text string) (museapp.TurnResponse, error) {
 	f.steeredText = text
