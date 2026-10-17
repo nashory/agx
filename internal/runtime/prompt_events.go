@@ -276,6 +276,9 @@ func promptAnswer(question pendingQuestion, message string) ([]string, bool) {
 		for _, part := range strings.Split(trimmed, ",") {
 			value, ok := question.choicesByLabel[strings.ToLower(strings.TrimSpace(part))]
 			if !ok {
+				if question.allowFreeText {
+					return []string{trimmed}, true
+				}
 				return nil, false
 			}
 			if !seen[value] {

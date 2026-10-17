@@ -50,6 +50,22 @@ func TestClaudeQuestionParsingAndSequentialAnswers(t *testing.T) {
 	}
 }
 
+func TestClaudeMultiSelectQuestionAllowsClarifyingReply(t *testing.T) {
+	question := pendingQuestion{
+		choicesByLabel: map[string]string{"fix ceiling": "Fix ceiling", "fix network": "Fix network"},
+		allowFreeText:  true,
+		multiple:       true,
+	}
+	answers, ok := promptAnswer(question, "Is fixing the ceiling critical?")
+	if !ok || len(answers) != 1 || answers[0] != "Is fixing the ceiling critical?" {
+		t.Fatalf("promptAnswer() = %#v, %v, want clarifying reply", answers, ok)
+	}
+	answers, ok = promptAnswer(question, "Fix ceiling, Fix network")
+	if !ok || strings.Join(answers, ",") != "Fix ceiling,Fix network" {
+		t.Fatalf("promptAnswer() = %#v, %v, want selected labels", answers, ok)
+	}
+}
+
 func TestClaudeQuestionMarkerParsingAndSuppression(t *testing.T) {
 	line := []byte(`{"type":"assistant","message":{"id":"msg-1","content":[{"type":"text","text":"<agx-question>{\"questions\":[{\"header\":\"Color\",\"question\":\"Pick one\",\"options\":[{\"label\":\"Blue\"}],\"multiSelect\":false}]}</agx-question>"}]}}`)
 	prompt, ok := parseClaudeQuestionLine(line)
