@@ -61,6 +61,28 @@ func TestClaudeQuestionMarkerParsingAndSuppression(t *testing.T) {
 	}
 }
 
+func TestClaudeQuestionMarkerReleasesActiveTurn(t *testing.T) {
+	line := []byte(`{"type":"assistant","message":{"id":"msg-1","content":[{"type":"text","text":"<agx-question>{\"questions\":[{\"header\":\"Mode\",\"question\":\"Choose\",\"options\":[{\"label\":\"Keep\"}],\"multiSelect\":false}]}</agx-question>"}]}}`)
+	prompt, ok := parseClaudeQuestionLine(line)
+	if !ok || prompt.nativeTool {
+		t.Fatalf("parseClaudeQuestionLine() = %#v, %v, want fallback marker", prompt, ok)
+	}
+	service := NewService("test")
+	releases := 0
+	if !service.agents.acceptClaudeQuestion("task", "turn", prompt, func() { releases++ }) {
+		t.Fatal("fallback question was not accepted")
+	}
+	if releases != 1 {
+		t.Fatalf("turn releases = %d, want 1", releases)
+	}
+	if service.agents.acceptClaudeQuestion("task", "turn", prompt, func() { releases++ }) {
+		t.Fatal("duplicate question was accepted")
+	}
+	if releases != 1 {
+		t.Fatalf("duplicate question released turn; releases = %d", releases)
+	}
+}
+
 func TestClaudeQuestionToolIsNotRenderedAsGenericTool(t *testing.T) {
 	line := []byte(`{"type":"assistant","message":{"id":"msg","content":[{"type":"tool_use","id":"tool-1","name":"AskUserQuestion","input":{"questions":[]}}]}}`)
 	if events := mapClaudeStreamLine(testClaudeTask(), "turn", line); len(events) != 0 {

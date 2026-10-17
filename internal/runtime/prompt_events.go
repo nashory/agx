@@ -118,6 +118,20 @@ func (s *agentEventService) rememberClaudeQuestion(taskID, turnID string, prompt
 	return true
 }
 
+func (s *agentEventService) acceptClaudeQuestion(taskID, turnID string, prompt claudePendingPrompt, releaseTurn func()) bool {
+	if !s.rememberClaudeQuestion(taskID, turnID, prompt) {
+		return false
+	}
+	// Questions emitted through either the native tool or the fallback marker
+	// are terminal for this headless turn. Release it immediately so a late
+	// Discord choice resumes the agent instead of waiting behind a process
+	// whose stdout may still be held open by a background child.
+	if releaseTurn != nil {
+		releaseTurn()
+	}
+	return true
+}
+
 func (s *agentEventService) resolveClaudePrompt(taskID, message, promptToken string) (bool, string, error) {
 	s.mu.Lock()
 	prompts := s.claudePrompts[taskID]

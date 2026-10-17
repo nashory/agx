@@ -967,11 +967,8 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	})
 	readErr := agentstream.ReadJSONLines(stdout, func(line []byte) error {
 		if prompt, ok := parseClaudeQuestionLine(line); ok {
-			if s.rememberClaudeQuestion(task.ID, turnID, prompt) {
-				if prompt.nativeTool {
-					questionPending = true
-					triggerRecovery()
-				}
+			if s.acceptClaudeQuestion(task.ID, turnID, prompt, triggerRecovery) {
+				questionPending = true
 			}
 		}
 		mapped := inspectClaudeStreamLine(task, turnID, line)
