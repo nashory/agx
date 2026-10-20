@@ -53,16 +53,33 @@ func parseClaudeQuestionLine(line []byte) (claudePendingPrompt, bool) {
 }
 
 func parseClaudeQuestionPayload(text, id string) (claudePendingPrompt, bool) {
+	_, raw, ok := splitClaudeQuestionPayload(text)
+	if !ok {
+		return claudePendingPrompt{}, false
+	}
+	return parseClaudeQuestionJSON([]byte(raw), id)
+}
+
+func splitClaudeQuestionPayload(text string) (string, string, bool) {
 	start := strings.Index(text, claudeQuestionStart)
 	if start < 0 {
-		return claudePendingPrompt{}, false
+		return text, "", false
 	}
-	start += len(claudeQuestionStart)
-	end := strings.Index(text[start:], claudeQuestionEnd)
+	payloadStart := start + len(claudeQuestionStart)
+	end := strings.Index(text[payloadStart:], claudeQuestionEnd)
 	if end < 0 {
-		return claudePendingPrompt{}, false
+		return text, "", false
 	}
-	return parseClaudeQuestionJSON([]byte(text[start:start+end]), id)
+	payloadEnd := payloadStart + end
+	visibleParts := make([]string, 0, 2)
+	if prefix := strings.TrimSpace(text[:start]); prefix != "" {
+		visibleParts = append(visibleParts, prefix)
+	}
+	if suffix := strings.TrimSpace(text[payloadEnd+len(claudeQuestionEnd):]); suffix != "" {
+		visibleParts = append(visibleParts, suffix)
+	}
+	visible := strings.Join(visibleParts, "\n\n")
+	return visible, text[payloadStart:payloadEnd], true
 }
 
 func parseClaudeQuestionJSON(raw []byte, id string) (claudePendingPrompt, bool) {

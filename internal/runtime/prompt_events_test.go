@@ -105,6 +105,18 @@ func TestClaudeQuestionMarkerParsingAndSuppression(t *testing.T) {
 	}
 }
 
+func TestClaudeQuestionMarkerPreservesSubstantiveAnswer(t *testing.T) {
+	line := []byte(`{"type":"assistant","message":{"id":"msg-1","content":[{"type":"text","text":"Here is the complete storyline.\n\n<agx-question>{\"questions\":[{\"header\":\"Next\",\"question\":\"Apply it?\",\"options\":[{\"label\":\"Apply\"}],\"multiSelect\":false}]}</agx-question>"}]}}`)
+	prompt, ok := parseClaudeQuestionLine(line)
+	if !ok || prompt.questions[0].prompt != "Next\nApply it?" {
+		t.Fatalf("parseClaudeQuestionLine() = %#v, %v", prompt, ok)
+	}
+	events := mapClaudeStreamLine(testClaudeTask(), "turn", line)
+	if len(events) != 1 || events[0].Kind != agentstream.EventAssistantMessage || events[0].Text != "Here is the complete storyline." {
+		t.Fatalf("events = %#v, want visible answer without marker", events)
+	}
+}
+
 func TestClaudeQuestionMarkerReleasesActiveTurn(t *testing.T) {
 	line := []byte(`{"type":"assistant","message":{"id":"msg-1","content":[{"type":"text","text":"<agx-question>{\"questions\":[{\"header\":\"Mode\",\"question\":\"Choose\",\"options\":[{\"label\":\"Keep\"}],\"multiSelect\":false}]}</agx-question>"}]}}`)
 	prompt, ok := parseClaudeQuestionLine(line)

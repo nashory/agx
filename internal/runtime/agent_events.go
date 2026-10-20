@@ -966,11 +966,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 		_ = processtree.Terminate(cmd)
 	})
 	readErr := agentstream.ReadJSONLines(stdout, func(line []byte) error {
-		if prompt, ok := parseClaudeQuestionLine(line); ok {
-			if s.acceptClaudeQuestion(task.ID, turnID, prompt, triggerRecovery) {
-				questionPending = true
-			}
-		}
+		prompt, hasPrompt := parseClaudeQuestionLine(line)
 		mapped := inspectClaudeStreamLine(task, turnID, line)
 		for _, event := range mapped.events {
 			toolWatchdog.Observe(event)
@@ -994,6 +990,13 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 				streamKind := claudeStreamKind
 				_ = s.runtime.store.UpdateTaskAgentStream(task.ID, &threadID, &cursor, &streamKind)
 			}
+		}
+		// Publish any substantive assistant text before rendering the question.
+		// Claude's fallback marker is appended to the same text block, so
+		// accepting the prompt first would make Discord show the question before
+		// the answer that motivated it.
+		if hasPrompt && s.acceptClaudeQuestion(task.ID, turnID, prompt, triggerRecovery) {
+			questionPending = true
 		}
 		if mapped.endTurn && !terminalSeen && !endTurnSeen {
 			endTurnSeen = true
@@ -1615,6 +1618,10 @@ func mapClaudeAssistantMessage(task db.Task, turnID string, raw json.RawMessage,
 	for _, content := range message.Content {
 		if content.Type == "text" && strings.TrimSpace(content.Text) != "" {
 			if _, ok := parseClaudeQuestionPayload(content.Text, message.ID); ok {
+				visible, _, _ := splitClaudeQuestionPayload(content.Text)
+				if visible != "" {
+					textParts = append(textParts, visible)
+				}
 				continue
 			}
 			textParts = append(textParts, strings.TrimSpace(content.Text))
