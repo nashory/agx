@@ -137,6 +137,9 @@ func (s *agentEventService) resolveClaudePrompt(taskID, message, promptToken str
 	prompts := s.claudePrompts[taskID]
 	if len(prompts) == 0 {
 		s.mu.Unlock()
+		if strings.TrimSpace(promptToken) != "" {
+			return true, "", fmt.Errorf("this Discord choice belongs to an expired Claude prompt")
+		}
 		return false, "", nil
 	}
 	prompt := prompts[0]
@@ -147,6 +150,19 @@ func (s *agentEventService) resolveClaudePrompt(taskID, message, promptToken str
 		return true, "", fmt.Errorf("this Discord choice belongs to an expired Claude prompt")
 	}
 	answers, ok := promptAnswer(question, message)
+	// A normal Discord message has no prompt token. When buttons are present,
+	// only an exact option label should answer the question; any other text is a
+	// new instruction or clarification. Drop the stale prompt and let the raw
+	// message start a new Claude turn instead of trapping the conversation in
+	// the question state. Free-text-only questions still accept normal replies.
+	if promptToken == "" && len(question.options) > 0 {
+		answers, ok = promptOptionAnswer(question, message)
+		if !ok {
+			delete(s.claudePrompts, taskID)
+			s.mu.Unlock()
+			return false, "", nil
+		}
+	}
 	if !ok {
 		s.mu.Unlock()
 		return true, "", fmt.Errorf("answer does not match the pending Claude prompt")
@@ -171,6 +187,11 @@ func (s *agentEventService) resolveClaudePrompt(taskID, message, promptToken str
 		lines = append(lines, fmt.Sprintf("%s: %s", prompt.questions[index].prompt, answer))
 	}
 	return true, "Here are my answers to your pending questions:\n" + strings.Join(lines, "\n"), nil
+}
+
+func promptOptionAnswer(question pendingQuestion, message string) ([]string, bool) {
+	question.allowFreeText = false
+	return promptAnswer(question, message)
 }
 
 func (s *agentEventService) rememberCodexQuestion(notification codexapp.Notification, request codexapp.UserInputRequest) bool {

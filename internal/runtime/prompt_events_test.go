@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nashory/agx/internal/agentstream"
 	"github.com/nashory/agx/internal/codexapp"
 	"github.com/nashory/agx/internal/db"
 	agxdiscord "github.com/nashory/agx/internal/discord"
@@ -50,19 +51,46 @@ func TestClaudeQuestionParsingAndSequentialAnswers(t *testing.T) {
 	}
 }
 
-func TestClaudeMultiSelectQuestionAllowsClarifyingReply(t *testing.T) {
-	question := pendingQuestion{
-		choicesByLabel: map[string]string{"fix ceiling": "Fix ceiling", "fix network": "Fix network"},
-		allowFreeText:  true,
-		multiple:       true,
+func TestClaudeOptionQuestionTreatsOtherTextAsNewInstruction(t *testing.T) {
+	service := NewService("test")
+	service.agents.claudePrompts["task"] = []claudePendingPrompt{{
+		id: "tool-1",
+		questions: []pendingQuestion{{
+			id: "q1", options: []agentstream.QuestionOption{{ID: "Fix ceiling", Label: "Fix ceiling"}},
+			choicesByLabel: map[string]string{"fix ceiling": "Fix ceiling", "fix network": "Fix network"},
+			allowFreeText:  true, multiple: true,
+		}},
+	}}
+	resolved, answer, err := service.agents.resolveClaudePrompt("task", "Instead, draft the storyline", "")
+	if err != nil || resolved || answer != "" {
+		t.Fatalf("resolveClaudePrompt() = %v, %q, %v; want raw instruction", resolved, answer, err)
 	}
-	answers, ok := promptAnswer(question, "Is fixing the ceiling critical?")
-	if !ok || len(answers) != 1 || answers[0] != "Is fixing the ceiling critical?" {
-		t.Fatalf("promptAnswer() = %#v, %v, want clarifying reply", answers, ok)
+	if len(service.agents.claudePrompts["task"]) != 0 {
+		t.Fatal("superseded Claude prompt was retained")
 	}
-	answers, ok = promptAnswer(question, "Fix ceiling, Fix network")
-	if !ok || strings.Join(answers, ",") != "Fix ceiling,Fix network" {
-		t.Fatalf("promptAnswer() = %#v, %v, want selected labels", answers, ok)
+}
+
+func TestClaudeOptionQuestionAcceptsTypedLabels(t *testing.T) {
+	service := NewService("test")
+	service.agents.claudePrompts["task"] = []claudePendingPrompt{{
+		id: "tool-1",
+		questions: []pendingQuestion{{
+			id: "q1", options: []agentstream.QuestionOption{{ID: "Fix ceiling", Label: "Fix ceiling"}, {ID: "Fix network", Label: "Fix network"}},
+			choicesByLabel: map[string]string{"fix ceiling": "Fix ceiling", "fix network": "Fix network"},
+			allowFreeText:  true, multiple: true,
+		}},
+	}}
+	resolved, answer, err := service.agents.resolveClaudePrompt("task", "Fix ceiling, Fix network", "")
+	if err != nil || !resolved || !strings.Contains(answer, "Fix ceiling, Fix network") {
+		t.Fatalf("resolveClaudePrompt() = %v, %q, %v", resolved, answer, err)
+	}
+}
+
+func TestClaudeRejectsExpiredPromptButton(t *testing.T) {
+	service := NewService("test")
+	resolved, answer, err := service.agents.resolveClaudePrompt("task", "Old choice", agxdiscord.PromptToken("old:q1"))
+	if !resolved || answer != "" || err == nil {
+		t.Fatalf("resolveClaudePrompt() = %v, %q, %v; want expired choice error", resolved, answer, err)
 	}
 }
 
