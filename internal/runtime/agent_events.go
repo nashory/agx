@@ -80,6 +80,7 @@ type agentEventService struct {
 	muse          museRuntime
 	museAllMighty museRuntime
 	startMuse     func(context.Context, bool) (museRuntime, error)
+	museStarts    map[bool]*museStartAttempt
 	subscribers   map[string]map[*agentstream.EventQueue]struct{}
 	threadToTask  map[string]string
 	activeTurns   map[string]string
@@ -95,6 +96,12 @@ type agentEventService struct {
 	museGapActive map[string]bool
 	museGapQueue  map[string][]museGapRange
 	museTaskHosts map[string]museRuntime
+}
+
+type museStartAttempt struct {
+	done   chan struct{}
+	client museRuntime
+	err    error
 }
 
 type codexPendingPrompt struct {
@@ -187,6 +194,7 @@ func newAgentEventService(runtime *Service) *agentEventService {
 		museGapActive: map[string]bool{},
 		museGapQueue:  map[string][]museGapRange{},
 		museTaskHosts: map[string]museRuntime{},
+		museStarts:    map[bool]*museStartAttempt{},
 	}
 	service.startCodex = func(ctx context.Context) (codexRuntime, error) {
 		client, err := codexapp.Start(service.ctx, codexapp.Options{})

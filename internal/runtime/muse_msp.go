@@ -29,20 +29,37 @@ func (s *agentEventService) ensureMuse(ctx context.Context, allMighty bool) (mus
 		s.mu.Unlock()
 		return client, nil
 	}
+	if attempt := s.museStarts[allMighty]; attempt != nil {
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-attempt.done:
+			return attempt.client, attempt.err
+		}
+	}
+	attempt := &museStartAttempt{done: make(chan struct{})}
+	s.museStarts[allMighty] = attempt
 	start := s.startMuse
 	s.mu.Unlock()
 
 	client, err := start(ctx, allMighty)
+	s.mu.Lock()
+	delete(s.museStarts, allMighty)
 	if err != nil {
+		attempt.err = err
+		close(attempt.done)
+		s.mu.Unlock()
 		return nil, err
 	}
-	s.mu.Lock()
 	current = s.muse
 	if allMighty {
 		current = s.museAllMighty
 	}
 	if current != nil {
 		existing := current
+		attempt.client = existing
+		close(attempt.done)
 		s.mu.Unlock()
 		_ = client.Close()
 		return existing, nil
@@ -52,6 +69,8 @@ func (s *agentEventService) ensureMuse(ctx context.Context, allMighty bool) (mus
 	} else {
 		s.muse = client
 	}
+	attempt.client = client
+	close(attempt.done)
 	s.mu.Unlock()
 	go s.forwardMuseEvents(client)
 	return client, nil

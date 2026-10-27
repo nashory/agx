@@ -833,6 +833,37 @@ func TestSyncTaskChannelDeletesChannelForUnmirroredTask(t *testing.T) {
 	}
 }
 
+func TestSyncTaskChannelPreservesOfflineDiscordTask(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "offline task", nil, "muse", false, db.TaskInterfaceDiscord, db.StatusOffline, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertDiscordMapping(db.DiscordAGXTask, task.ID, db.DiscordTypeChannel, "channel-offline"); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newFakeSyncClient()
+	if err := NewSyncer(store, client, "guild-1").SyncTaskChannel(context.Background(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.deleted) != 0 {
+		t.Fatalf("deleted = %#v, want offline Discord task channel preserved", client.deleted)
+	}
+	if _, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID); err != nil {
+		t.Fatalf("task mapping error = %v, want offline mapping kept", err)
+	}
+}
+
 func TestRebuildSyncCreatesChannelsDirectly(t *testing.T) {
 	store, err := db.OpenMemory()
 	if err != nil {
@@ -920,6 +951,44 @@ func TestSyncActiveTasksWithCleanupDeletesUnmirroredTaskChannels(t *testing.T) {
 	}
 	if _, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID); !errors.Is(err, db.ErrDiscordMappingNotFound) {
 		t.Fatalf("task mapping error = %v, want ErrDiscordMappingNotFound", err)
+	}
+}
+
+func TestSyncActiveTasksWithCleanupPreservesOfflineDiscordTaskChannel(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	project, err := store.EnsureProjectDetails(t.TempDir(), "My App", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "offline task", nil, "muse", false, db.TaskInterfaceDiscord, db.StatusOffline, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertDiscordMapping(db.DiscordAGXTask, task.ID, db.DiscordTypeChannel, "channel-offline"); err != nil {
+		t.Fatal(err)
+	}
+
+	client := newFakeSyncClient()
+	categoryName := FormatCategoryName(project.Name)
+	categoryID := "category-offline"
+	channelName := TaskChannelName(task)
+	client.category[categoryName] = categoryID
+	client.text[categoryID+"/"+channelName] = "channel-offline"
+	client.names["channel-offline"] = channelName
+	client.topics["channel-offline"] = TaskTopic(project, task)
+	if err := NewSyncer(store, client, "guild-1").SyncActiveTasksWithCleanup(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.deleted) != 0 {
+		t.Fatalf("deleted = %#v, want offline Discord task channel preserved", client.deleted)
+	}
+	if _, err := store.GetDiscordMapping(db.DiscordAGXTask, task.ID); err != nil {
+		t.Fatalf("task mapping error = %v, want offline mapping kept", err)
 	}
 }
 

@@ -15,6 +15,8 @@ import (
 	"github.com/nashory/agx/internal/worktree"
 )
 
+const structuredAgentStartupTimeout = 5 * time.Minute
+
 // createStructuredDiscordTask creates a Discord-controlled task backed by a
 // structured agent event stream instead of a tmux window. It prepares workspace
 // state, persists the task before agent startup, and rolls back generated
@@ -139,7 +141,7 @@ func (s *Service) startStructuredDiscordTaskQueued(project db.Project, taskID st
 	// transcript persistence and catch-up delivery recover messages after the
 	// channel sync succeeds in the background.
 	s.prepareStructuredDiscordDelivery(task, s.syncDiscordTaskNow)
-	ctx, cancel := s.backgroundTimeout(2 * time.Minute)
+	ctx, cancel := s.backgroundTimeout(structuredAgentStartupTimeout)
 	defer cancel()
 	if err := s.startStructuredDiscordTask(ctx, project, task, prompt); err != nil {
 		s.markStructuredDiscordTaskStartupFailed(task, err)

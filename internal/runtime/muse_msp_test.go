@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +11,49 @@ import (
 	agxdiscord "github.com/nashory/agx/internal/discord"
 	"github.com/nashory/agx/internal/museapp"
 )
+
+func TestEnsureMuseSharesConcurrentColdStart(t *testing.T) {
+	service := NewService("test")
+	t.Cleanup(func() { _ = service.agents.Close() })
+	fake := newFakeMuseRuntime()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	service.agents.startMuse = func(context.Context, bool) (museRuntime, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return fake, nil
+	}
+
+	results := make(chan museRuntime, 2)
+	errs := make(chan error, 2)
+	go func() {
+		client, err := service.agents.ensureMuse(context.Background(), false)
+		results <- client
+		errs <- err
+	}()
+	<-started
+	go func() {
+		client, err := service.agents.ensureMuse(context.Background(), false)
+		results <- client
+		errs <- err
+	}()
+	close(release)
+
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+		if client := <-results; client != fake {
+			t.Fatalf("client = %T, want shared fake runtime", client)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("Muse starts = %d, want 1", got)
+	}
+}
 
 type fakeMuseRuntime struct {
 	events          chan museapp.Notification

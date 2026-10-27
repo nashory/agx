@@ -299,13 +299,13 @@ func (s *Syncer) recordTaskSyncFailure(taskID string, syncErr error) error {
 	return syncErr
 }
 
-// SyncActiveTasks mirrors all active/waiting Discord tasks without deleting
+// SyncActiveTasks mirrors all non-complete Discord tasks without deleting
 // unexpected guild channels.
 func (s *Syncer) SyncActiveTasks(ctx context.Context) error {
 	return s.SyncActiveTasksWithCleanup(ctx, false)
 }
 
-// SyncActiveTasksWithCleanup mirrors all active/waiting Discord tasks. When
+// SyncActiveTasksWithCleanup mirrors all non-complete Discord tasks. When
 // cleanup is true, it also removes mapped task channels whose tasks are gone or
 // no longer mirrored, plus unexpected AGX-managed guild channels reported by the
 // Discord client.
@@ -859,7 +859,7 @@ func shouldMirrorTask(task db.Task) bool {
 	if task.Interface != db.TaskInterfaceDiscord {
 		return false
 	}
-	return task.Status == db.StatusActive || task.Status == db.StatusWaiting
+	return task.Status != db.StatusComplete
 }
 
 // FormatCategoryName returns the Discord category name for a project.
