@@ -63,13 +63,14 @@ type fakeMuseRuntime struct {
 	startIfBusy     string
 	steeredText     string
 	interruptedTurn string
+	interrupted     chan string
 	approvalChoice  string
 	questionLabel   string
 	questionAnswers []museapp.UserInputAnswer
 }
 
 func newFakeMuseRuntime() *fakeMuseRuntime {
-	return &fakeMuseRuntime{events: make(chan museapp.Notification, 16)}
+	return &fakeMuseRuntime{events: make(chan museapp.Notification, 16), interrupted: make(chan string, 4)}
 }
 
 func (f *fakeMuseRuntime) Initialize(context.Context) (museapp.InitializeResponse, error) {
@@ -125,6 +126,52 @@ func TestMuseMSPQueuesFollowUpInsteadOfSteeringFinishingTurn(t *testing.T) {
 	if fake.steeredText != "" {
 		t.Fatalf("TurnSteer received %q", fake.steeredText)
 	}
+	service.agents.mu.Lock()
+	activeTurn := service.agents.activeTurns[task.ID]
+	service.agents.mu.Unlock()
+	if activeTurn != "finishing-turn" {
+		t.Fatalf("active turn = %q, want the currently running turn until Muse starts the queue", activeTurn)
+	}
+}
+
+func TestMuseMSPInterruptsTurnBlockingQueuedFollowUp(t *testing.T) {
+	previousGracePeriod := museQueuedMessageGracePeriod
+	museQueuedMessageGracePeriod = 20 * time.Millisecond
+	t.Cleanup(func() { museQueuedMessageGracePeriod = previousGracePeriod })
+
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTaskRuntimeModeInterface(db.NewTaskID(), project.ID, "muse", nil, "muse", true, db.TaskInterfaceDiscord, db.StatusActive, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	fake := newFakeMuseRuntime()
+	service.agents.startMuse = func(context.Context, bool) (museRuntime, error) { return fake, nil }
+	service.agents.mu.Lock()
+	service.agents.activeTurns[task.ID] = "blocked-turn"
+	service.agents.mu.Unlock()
+	t.Cleanup(func() { _ = service.agents.Close() })
+
+	if err := service.agents.startMuseMSPTurn(context.Background(), task, project, "is it done?"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case interrupted := <-fake.interrupted:
+		if interrupted != "blocked-turn" {
+			t.Fatalf("interrupted turn = %q, want blocked-turn", interrupted)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Muse turn blocking the queued follow-up was not interrupted")
+	}
 }
 func (f *fakeMuseRuntime) TurnSteer(_ context.Context, _, _ string, text string) (museapp.TurnResponse, error) {
 	f.steeredText = text
@@ -132,6 +179,7 @@ func (f *fakeMuseRuntime) TurnSteer(_ context.Context, _, _ string, text string)
 }
 func (f *fakeMuseRuntime) TurnInterrupt(_ context.Context, _, turnID string) error {
 	f.interruptedTurn = turnID
+	f.interrupted <- turnID
 	return nil
 }
 func (f *fakeMuseRuntime) ApprovalDecide(_ context.Context, _, _ string, _ any, choice string) error {

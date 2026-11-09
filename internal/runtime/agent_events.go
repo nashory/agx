@@ -68,34 +68,39 @@ var errClaudeQuestionPending = errors.New("Claude is waiting for user input")
 var claudeEndTurnGracePeriod = 30 * time.Second
 var claudeTerminalExitGracePeriod = 5 * time.Second
 var claudeQuickToolTimeout = claudestream.DefaultQuickToolTimeout
+var claudeQueuedMessageGracePeriod = 30 * time.Second
+var museQueuedMessageGracePeriod = 30 * time.Second
 
 type agentEventService struct {
 	runtime *Service
 	ctx     context.Context
 	cancel  context.CancelFunc
 
-	mu            sync.Mutex
-	codex         codexRuntime
-	startCodex    func(context.Context) (codexRuntime, error)
-	muse          museRuntime
-	museAllMighty museRuntime
-	startMuse     func(context.Context, bool) (museRuntime, error)
-	museStarts    map[bool]*museStartAttempt
-	subscribers   map[string]map[*agentstream.EventQueue]struct{}
-	threadToTask  map[string]string
-	activeTurns   map[string]string
-	codexTurns    map[string]*codexTurn
-	codexLastTurn time.Time
-	turnCancels   map[string]context.CancelFunc
-	claudeQueues  map[string][]string
-	museQueues    map[string][]string
-	musePrompts   map[string][]musePendingPrompt
-	codexPrompts  map[string][]codexPendingPrompt
-	claudePrompts map[string][]claudePendingPrompt
-	museItemTurns map[string]string
-	museGapActive map[string]bool
-	museGapQueue  map[string][]museGapRange
-	museTaskHosts map[string]museRuntime
+	mu                sync.Mutex
+	codex             codexRuntime
+	startCodex        func(context.Context) (codexRuntime, error)
+	muse              museRuntime
+	museAllMighty     museRuntime
+	startMuse         func(context.Context, bool) (museRuntime, error)
+	museStarts        map[bool]*museStartAttempt
+	subscribers       map[string]map[*agentstream.EventQueue]struct{}
+	threadToTask      map[string]string
+	activeTurns       map[string]string
+	codexTurns        map[string]*codexTurn
+	codexLastTurn     time.Time
+	turnCancels       map[string]context.CancelFunc
+	claudeQueues      map[string][]string
+	claudeQueueTimers map[string]*time.Timer
+	museQueues        map[string][]string
+	museQueueTimers   map[string]*time.Timer
+	museQueuedTurns   map[string]int
+	musePrompts       map[string][]musePendingPrompt
+	codexPrompts      map[string][]codexPendingPrompt
+	claudePrompts     map[string][]claudePendingPrompt
+	museItemTurns     map[string]string
+	museGapActive     map[string]bool
+	museGapQueue      map[string][]museGapRange
+	museTaskHosts     map[string]museRuntime
 }
 
 type museStartAttempt struct {
@@ -177,24 +182,27 @@ func (t *codexTurn) isSilent() bool {
 func newAgentEventService(runtime *Service) *agentEventService {
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &agentEventService{
-		runtime:       runtime,
-		ctx:           ctx,
-		cancel:        cancel,
-		subscribers:   map[string]map[*agentstream.EventQueue]struct{}{},
-		threadToTask:  map[string]string{},
-		activeTurns:   map[string]string{},
-		codexTurns:    map[string]*codexTurn{},
-		turnCancels:   map[string]context.CancelFunc{},
-		claudeQueues:  map[string][]string{},
-		museQueues:    map[string][]string{},
-		musePrompts:   map[string][]musePendingPrompt{},
-		codexPrompts:  map[string][]codexPendingPrompt{},
-		claudePrompts: map[string][]claudePendingPrompt{},
-		museItemTurns: map[string]string{},
-		museGapActive: map[string]bool{},
-		museGapQueue:  map[string][]museGapRange{},
-		museTaskHosts: map[string]museRuntime{},
-		museStarts:    map[bool]*museStartAttempt{},
+		runtime:           runtime,
+		ctx:               ctx,
+		cancel:            cancel,
+		subscribers:       map[string]map[*agentstream.EventQueue]struct{}{},
+		threadToTask:      map[string]string{},
+		activeTurns:       map[string]string{},
+		codexTurns:        map[string]*codexTurn{},
+		turnCancels:       map[string]context.CancelFunc{},
+		claudeQueues:      map[string][]string{},
+		claudeQueueTimers: map[string]*time.Timer{},
+		museQueues:        map[string][]string{},
+		museQueueTimers:   map[string]*time.Timer{},
+		museQueuedTurns:   map[string]int{},
+		musePrompts:       map[string][]musePendingPrompt{},
+		codexPrompts:      map[string][]codexPendingPrompt{},
+		claudePrompts:     map[string][]claudePendingPrompt{},
+		museItemTurns:     map[string]string{},
+		museGapActive:     map[string]bool{},
+		museGapQueue:      map[string][]museGapRange{},
+		museTaskHosts:     map[string]museRuntime{},
+		museStarts:        map[bool]*museStartAttempt{},
 	}
 	service.startCodex = func(ctx context.Context) (codexRuntime, error) {
 		client, err := codexapp.Start(service.ctx, codexapp.Options{})
@@ -244,8 +252,17 @@ func (s *agentEventService) Close() error {
 	s.threadToTask = map[string]string{}
 	s.activeTurns = map[string]string{}
 	s.codexTurns = map[string]*codexTurn{}
+	for taskID, timer := range s.claudeQueueTimers {
+		timer.Stop()
+		delete(s.claudeQueueTimers, taskID)
+	}
+	for taskID, timer := range s.museQueueTimers {
+		timer.Stop()
+		delete(s.museQueueTimers, taskID)
+	}
 	s.claudeQueues = map[string][]string{}
 	s.museQueues = map[string][]string{}
+	s.museQueuedTurns = map[string]int{}
 	s.musePrompts = map[string][]musePendingPrompt{}
 	s.codexPrompts = map[string][]codexPendingPrompt{}
 	s.claudePrompts = map[string][]claudePendingPrompt{}
@@ -446,6 +463,7 @@ func (s *agentEventService) clearTaskContext(ctx context.Context, task db.Task, 
 func (s *agentEventService) clearClaudeTaskContext(task db.Task) error {
 	s.mu.Lock()
 	cancel := s.turnCancels[task.ID]
+	s.stopClaudeQueueTimerLocked(task.ID)
 	delete(s.activeTurns, task.ID)
 	delete(s.turnCancels, task.ID)
 	delete(s.claudeQueues, task.ID)
@@ -474,6 +492,8 @@ func (s *agentEventService) clearClaudeTaskContext(task db.Task) error {
 func (s *agentEventService) clearMuseTaskContext(ctx context.Context, task db.Task, project db.Project) error {
 	s.mu.Lock()
 	cancel := s.turnCancels[task.ID]
+	s.stopMuseQueueTimerLocked(task.ID)
+	delete(s.museQueuedTurns, task.ID)
 	delete(s.activeTurns, task.ID)
 	delete(s.turnCancels, task.ID)
 	delete(s.museQueues, task.ID)
@@ -535,6 +555,8 @@ func (s *agentEventService) InterruptTask(ctx context.Context, task db.Task) err
 	if isMuseTask(task.Agent) {
 		s.mu.Lock()
 		activeTurn := s.activeTurns[task.ID]
+		s.stopMuseQueueTimerLocked(task.ID)
+		delete(s.museQueuedTurns, task.ID)
 		s.mu.Unlock()
 		if activeTurn == "" || task.AgentThreadID == nil {
 			return nil
@@ -548,6 +570,7 @@ func (s *agentEventService) InterruptTask(ctx context.Context, task db.Task) err
 	if isClaudeTask(task.Agent) {
 		s.mu.Lock()
 		cancel := s.turnCancels[task.ID]
+		s.stopClaudeQueueTimerLocked(task.ID)
 		delete(s.activeTurns, task.ID)
 		delete(s.turnCancels, task.ID)
 		if isClaudeTask(task.Agent) {
@@ -762,6 +785,7 @@ func (s *agentEventService) startClaudeTurn(ctx context.Context, task db.Task, p
 	s.mu.Lock()
 	if s.activeTurns[task.ID] != "" {
 		s.claudeQueues[task.ID] = append(s.claudeQueues[task.ID], message)
+		s.startClaudeQueueTimerLocked(task.ID)
 		s.mu.Unlock()
 		return nil
 	}
@@ -770,6 +794,38 @@ func (s *agentEventService) startClaudeTurn(ctx context.Context, task db.Task, p
 
 	s.launchClaudeTurn(task, project, turnID, turnCtx, cancel, message)
 	return nil
+}
+
+// startClaudeQueueTimerLocked prevents a foreground command with an inherited
+// stdout handle from blocking follow-up messages forever. Claude's print mode
+// cannot accept another prompt while the current process is alive, so give a
+// healthy turn a short window to finish and then cancel only if a message is
+// still queued. runClaudeTurn will immediately launch the queued prompt.
+func (s *agentEventService) startClaudeQueueTimerLocked(taskID string) {
+	if s.claudeQueueTimers[taskID] != nil || claudeQueuedMessageGracePeriod <= 0 {
+		return
+	}
+	s.claudeQueueTimers[taskID] = time.AfterFunc(claudeQueuedMessageGracePeriod, func() {
+		s.mu.Lock()
+		delete(s.claudeQueueTimers, taskID)
+		cancel := s.turnCancels[taskID]
+		hasQueued := len(s.claudeQueues[taskID]) > 0
+		s.mu.Unlock()
+		if hasQueued && cancel != nil {
+			logRuntimeOperation("claude_stream_recovery",
+				"task", shortDiagnosticID(taskID),
+				"reason", "queued_message_blocked",
+			)
+			cancel()
+		}
+	})
+}
+
+func (s *agentEventService) stopClaudeQueueTimerLocked(taskID string) {
+	if timer := s.claudeQueueTimers[taskID]; timer != nil {
+		timer.Stop()
+		delete(s.claudeQueueTimers, taskID)
+	}
 }
 
 func (s *agentEventService) reserveClaudeTurnLocked(taskID string) (string, context.Context, context.CancelFunc) {
@@ -867,6 +923,11 @@ func (s *agentEventService) finishClaudeTurn(task db.Task, project db.Project, c
 	}
 	delete(s.activeTurns, task.ID)
 	delete(s.turnCancels, task.ID)
+	s.stopClaudeQueueTimerLocked(task.ID)
+	// A follow-up can arrive between process exit and this lock. Treat the
+	// persisted in-memory queue as authoritative here so that race cannot drop
+	// the new message on an error path.
+	startQueued = startQueued || len(s.claudeQueues[task.ID]) > 0
 	if !startQueued {
 		delete(s.claudeQueues, task.ID)
 	}
@@ -941,6 +1002,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 		return err
 	}
 	terminalSeen := false
+	assistantSeen := false
 	questionPending := false
 	failurePublished := false
 	endTurnSeen := false
@@ -979,6 +1041,9 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 		for _, event := range mapped.events {
 			toolWatchdog.Observe(event)
 			s.publish(task.ID, event)
+			if (event.Kind == agentstream.EventAssistantMessage || event.Kind == agentstream.EventAssistantDelta) && strings.TrimSpace(event.Text) != "" {
+				assistantSeen = true
+			}
 			if event.Kind == agentstream.EventTurnCompleted || event.Kind == agentstream.EventError || event.Kind == agentstream.EventInterrupted {
 				terminalSeen = true
 				terminalReceived.Store(true)
@@ -1078,6 +1143,9 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	}
 	if !terminalSeen {
 		return fmt.Errorf("Claude stream ended without a terminal result")
+	}
+	if !assistantSeen {
+		return fmt.Errorf("Claude completed the turn without an assistant response")
 	}
 	return nil
 }
@@ -1453,6 +1521,9 @@ func (s *agentEventService) forgetTask(taskID string) {
 	}
 	delete(s.activeTurns, taskID)
 	delete(s.codexTurns, taskID)
+	s.stopClaudeQueueTimerLocked(taskID)
+	s.stopMuseQueueTimerLocked(taskID)
+	delete(s.museQueuedTurns, taskID)
 	delete(s.claudeQueues, taskID)
 	delete(s.museQueues, taskID)
 	delete(s.musePrompts, taskID)

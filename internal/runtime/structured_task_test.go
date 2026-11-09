@@ -1048,6 +1048,29 @@ func TestInterruptClaudeTaskClearsActiveTurnImmediately(t *testing.T) {
 	}
 }
 
+func TestQueuedClaudeMessageCancelsBlockedTurnAfterGracePeriod(t *testing.T) {
+	previousGracePeriod := claudeQueuedMessageGracePeriod
+	claudeQueuedMessageGracePeriod = 20 * time.Millisecond
+	t.Cleanup(func() { claudeQueuedMessageGracePeriod = previousGracePeriod })
+
+	service := NewService("test")
+	t.Cleanup(func() { _ = service.agents.Close() })
+	taskID := "task-queued"
+	turnCtx, cancel := context.WithCancel(context.Background())
+	service.agents.mu.Lock()
+	service.agents.activeTurns[taskID] = "turn-1"
+	service.agents.turnCancels[taskID] = cancel
+	service.agents.claudeQueues[taskID] = []string{"is it done?"}
+	service.agents.startClaudeQueueTimerLocked(taskID)
+	service.agents.mu.Unlock()
+
+	select {
+	case <-turnCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("blocked Claude turn was not canceled for the queued follow-up")
+	}
+}
+
 func TestAgentEventServiceClearResetsCodexContext(t *testing.T) {
 	store, err := db.OpenMemory()
 	if err != nil {
@@ -1170,6 +1193,7 @@ func TestClaudeStreamRecoversTerminalResultWithoutEOF(t *testing.T) {
 	orphanPIDPath := filepath.Join(t.TempDir(), "orphan.pid")
 	t.Setenv("AGX_ORPHAN_PID", orphanPIDPath)
 	posix := `#!/bin/sh
+printf '%s\n' '{"type":"assistant","message":{"id":"msg-1","content":[{"type":"text","text":"done"}]}}'
 printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}'
 sleep 30 &
 printf '%s' "$!" > "$AGX_ORPHAN_PID"
@@ -1177,6 +1201,7 @@ exit 0
 `
 	batch := batchLines(
 		"@echo off",
+		`echo {"type":"assistant","message":{"id":"msg-1","content":[{"type":"text","text":"done"}]}}`,
 		`echo {"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}`,
 		`powershell -NoProfile -Command "$p = Start-Process -FilePath ping.exe -ArgumentList '127.0.0.1','-n','31' -NoNewWindow -PassThru; Set-Content -NoNewline -Path $env:AGX_ORPHAN_PID -Value $p.Id"`,
 		"exit /b 0",
@@ -1222,6 +1247,33 @@ exit 0
 	}
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
 		t.Fatalf("terminal stream recovery took %s, want at most 5s", elapsed)
+	}
+}
+
+func TestClaudeStreamRejectsSuccessfulTurnWithoutAssistantResponse(t *testing.T) {
+	writeStubCommandOnPath(t, "claude",
+		"#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"session-1\"}'\n",
+		batchLines("@echo off", `echo {"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}`),
+	)
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "silent claude", nil, "claude", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+
+	err = service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "report")
+	if err == nil || !strings.Contains(err.Error(), "without an assistant response") {
+		t.Fatalf("execClaudeStreamOnce() error = %v, want silent response error", err)
 	}
 }
 

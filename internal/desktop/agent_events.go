@@ -612,6 +612,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 		return err
 	}
 	terminalSeen := false
+	assistantSeen := false
 	failurePublished := false
 	endTurnSeen := false
 	var terminalReceived atomic.Bool
@@ -648,6 +649,9 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 		for _, event := range mapped.events {
 			toolWatchdog.Observe(event)
 			s.publish(task.ID, event)
+			if (event.Kind == agentstream.EventAssistantMessage || event.Kind == agentstream.EventAssistantDelta) && strings.TrimSpace(event.Text) != "" {
+				assistantSeen = true
+			}
 			if event.Kind == agentstream.EventTurnCompleted || event.Kind == agentstream.EventError || event.Kind == agentstream.EventInterrupted {
 				terminalSeen = true
 				terminalReceived.Store(true)
@@ -727,6 +731,9 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	}
 	if !terminalSeen {
 		return fmt.Errorf("Claude stream ended without a terminal result")
+	}
+	if !assistantSeen {
+		return fmt.Errorf("Claude completed the turn without an assistant response")
 	}
 	return nil
 }

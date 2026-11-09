@@ -164,6 +164,9 @@ func (s *agentEventService) startMuseMSPTurn(ctx context.Context, task db.Task, 
 	if resolved, err := s.resolveMusePrompt(ctx, client, task.ID, message, promptToken); resolved || err != nil {
 		return err
 	}
+	s.mu.Lock()
+	activeTurn := s.activeTurns[task.ID]
+	s.mu.Unlock()
 
 	// User messages are independent turns, not steering instructions. A visible
 	// assistant reply can precede Muse's terminal notification while hooks and
@@ -176,7 +179,12 @@ func (s *agentEventService) startMuseMSPTurn(ctx context.Context, task db.Task, 
 	}
 	if strings.TrimSpace(turn.TurnID) != "" {
 		s.mu.Lock()
-		s.activeTurns[task.ID] = strings.TrimSpace(turn.TurnID)
+		if activeTurn == "" {
+			s.activeTurns[task.ID] = strings.TrimSpace(turn.TurnID)
+		} else {
+			s.museQueuedTurns[task.ID]++
+			s.startMuseQueueTimerLocked(task.ID, sessionID, activeTurn, client)
+		}
 		s.mu.Unlock()
 	}
 	if err := s.runtime.store.UpdateTaskStatus(task.ID, db.StatusActive); err == nil {
@@ -184,6 +192,48 @@ func (s *agentEventService) startMuseMSPTurn(ctx context.Context, task db.Task, 
 		s.runtime.syncDiscordAsync()
 	}
 	return nil
+}
+
+// startMuseQueueTimerLocked keeps MSP's atomic server-side queueing while
+// bounding how long a stuck active turn can prevent the queued turn from
+// starting. Unlike Claude recovery, the queued prompt remains owned by Muse;
+// AGX only interrupts the turn that is blocking it.
+func (s *agentEventService) startMuseQueueTimerLocked(taskID, sessionID, activeTurn string, client museRuntime) {
+	if s.museQueueTimers[taskID] != nil || museQueuedMessageGracePeriod <= 0 {
+		return
+	}
+	s.museQueueTimers[taskID] = time.AfterFunc(museQueuedMessageGracePeriod, func() {
+		s.mu.Lock()
+		delete(s.museQueueTimers, taskID)
+		currentTurn := s.activeTurns[taskID]
+		s.mu.Unlock()
+		if currentTurn != activeTurn {
+			return
+		}
+		ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
+		defer cancel()
+		if err := client.TurnInterrupt(ctx, sessionID, activeTurn); err != nil {
+			logRuntimeOperation("muse_msp_recovery",
+				"task", shortDiagnosticID(taskID),
+				"reason", "queued_message_blocked",
+				"status", "interrupt_failed",
+				"error", err,
+			)
+			return
+		}
+		logRuntimeOperation("muse_msp_recovery",
+			"task", shortDiagnosticID(taskID),
+			"reason", "queued_message_blocked",
+			"status", "interrupted",
+		)
+	})
+}
+
+func (s *agentEventService) stopMuseQueueTimerLocked(taskID string) {
+	if timer := s.museQueueTimers[taskID]; timer != nil {
+		timer.Stop()
+		delete(s.museQueueTimers, taskID)
+	}
 }
 
 func (s *agentEventService) forwardMuseEvents(client museRuntime) {
@@ -256,6 +306,14 @@ func (s *agentEventService) forwardMuseEvents(client museRuntime) {
 				s.mu.Lock()
 				if current := s.activeTurns[taskID]; current == "" || current == event.TurnID {
 					s.activeTurns[taskID] = event.TurnID
+					if s.museQueuedTurns[taskID] > 0 {
+						s.museQueuedTurns[taskID]--
+						if s.museQueuedTurns[taskID] == 0 {
+							delete(s.museQueuedTurns, taskID)
+						} else {
+							s.startMuseQueueTimerLocked(taskID, sessionID, event.TurnID, client)
+						}
+					}
 				}
 				s.mu.Unlock()
 			}
@@ -264,6 +322,7 @@ func (s *agentEventService) forwardMuseEvents(client museRuntime) {
 				currentTurn := s.activeTurns[taskID]
 				isCurrent := event.TurnID == "" || currentTurn == "" || currentTurn == event.TurnID
 				if isCurrent {
+					s.stopMuseQueueTimerLocked(taskID)
 					delete(s.activeTurns, taskID)
 					delete(s.musePrompts, taskID)
 				}
@@ -389,6 +448,14 @@ func (s *agentEventService) replayMuseNotification(taskID string, notification m
 			s.mu.Lock()
 			if current := s.activeTurns[taskID]; current == "" || current == event.TurnID {
 				s.activeTurns[taskID] = event.TurnID
+				if s.museQueuedTurns[taskID] > 0 {
+					s.museQueuedTurns[taskID]--
+					if s.museQueuedTurns[taskID] == 0 {
+						delete(s.museQueuedTurns, taskID)
+					} else if task.AgentThreadID != nil && s.museTaskHosts[taskID] != nil {
+						s.startMuseQueueTimerLocked(taskID, strings.TrimSpace(*task.AgentThreadID), event.TurnID, s.museTaskHosts[taskID])
+					}
+				}
 			}
 			s.mu.Unlock()
 		}
@@ -397,6 +464,7 @@ func (s *agentEventService) replayMuseNotification(taskID string, notification m
 			current := s.activeTurns[taskID]
 			isCurrent := event.TurnID == "" || current == "" || current == event.TurnID
 			if isCurrent {
+				s.stopMuseQueueTimerLocked(taskID)
 				delete(s.activeTurns, taskID)
 				delete(s.musePrompts, taskID)
 			}
@@ -465,6 +533,8 @@ func (s *agentEventService) forgetMuseRuntime(client museRuntime) {
 			continue
 		}
 		delete(s.museTaskHosts, taskID)
+		s.stopMuseQueueTimerLocked(taskID)
+		delete(s.museQueuedTurns, taskID)
 		delete(s.activeTurns, taskID)
 		delete(s.musePrompts, taskID)
 		s.mu.Unlock()
