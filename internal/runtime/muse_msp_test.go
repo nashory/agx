@@ -286,7 +286,7 @@ func TestMuseMSPQueuesPendingApprovals(t *testing.T) {
 	}
 }
 
-func TestMuseMSPRejectsStalePromptToken(t *testing.T) {
+func TestMuseMSPTreatsStalePromptTokenAsFollowUp(t *testing.T) {
 	service := NewService("test")
 	t.Cleanup(func() { _ = service.agents.Close() })
 	fake := newFakeMuseRuntime()
@@ -299,8 +299,8 @@ func TestMuseMSPRejectsStalePromptToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake.approvalChoice = ""
-	if resolved, err := service.agents.resolveMusePrompt(context.Background(), fake, "task", "Allow", firstToken); !resolved || err == nil {
-		t.Fatalf("stale choice resolved=%v err=%v", resolved, err)
+	if resolved, err := service.agents.resolveMusePrompt(context.Background(), fake, "task", "Allow", firstToken); resolved || err != nil {
+		t.Fatalf("stale choice resolved=%v err=%v, want normal follow-up fallback", resolved, err)
 	}
 	if fake.approvalChoice != "" {
 		t.Fatalf("stale choice reached Muse: %q", fake.approvalChoice)

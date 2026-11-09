@@ -645,7 +645,7 @@ func (s *agentEventService) resolveMusePrompt(ctx context.Context, client museRu
 	}
 	if ok && providedToken != "" && providedToken != agxdiscord.PromptToken(identity) {
 		s.mu.Unlock()
-		return true, fmt.Errorf("this Discord choice belongs to an expired Muse prompt")
+		return false, nil
 	}
 	choice, matches := prompt.choicesByLabel[label]
 	if ok && prompt.allowFreeText {

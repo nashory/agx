@@ -154,9 +154,9 @@ func (s *agentEventService) resolveClaudePrompt(taskID, message, promptToken str
 	prompts := s.claudePrompts[taskID]
 	if len(prompts) == 0 {
 		s.mu.Unlock()
-		if strings.TrimSpace(promptToken) != "" {
-			return true, "", fmt.Errorf("this Discord choice belongs to an expired Claude prompt")
-		}
+		// Discord components can outlive the runtime process that remembered
+		// their prompt. Preserve the selected label as a normal follow-up so an
+		// old button remains useful after restart instead of expiring silently.
 		return false, "", nil
 	}
 	prompt := prompts[0]
@@ -164,7 +164,7 @@ func (s *agentEventService) resolveClaudePrompt(taskID, message, promptToken str
 	identity := prompt.id + ":" + question.id
 	if promptToken != "" && promptToken != agxdiscord.PromptToken(identity) {
 		s.mu.Unlock()
-		return true, "", fmt.Errorf("this Discord choice belongs to an expired Claude prompt")
+		return false, "", nil
 	}
 	answers, ok := promptAnswer(question, message)
 	// A normal Discord message has no prompt token. When buttons are present,
@@ -270,7 +270,7 @@ func (s *agentEventService) resolveCodexPrompt(client codexRuntime, taskID, mess
 	identity := prompt.requestID + ":" + question.id
 	if promptToken != "" && promptToken != agxdiscord.PromptToken(identity) {
 		s.mu.Unlock()
-		return true, fmt.Errorf("this Discord choice belongs to an expired Codex prompt")
+		return false, nil
 	}
 	answer, ok := promptAnswer(question, message)
 	if !ok {

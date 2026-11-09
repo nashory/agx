@@ -86,11 +86,23 @@ func TestClaudeOptionQuestionAcceptsTypedLabels(t *testing.T) {
 	}
 }
 
-func TestClaudeRejectsExpiredPromptButton(t *testing.T) {
+func TestClaudeTreatsExpiredPromptButtonAsFollowUp(t *testing.T) {
 	service := NewService("test")
 	resolved, answer, err := service.agents.resolveClaudePrompt("task", "Old choice", agxdiscord.PromptToken("old:q1"))
-	if !resolved || answer != "" || err == nil {
-		t.Fatalf("resolveClaudePrompt() = %v, %q, %v; want expired choice error", resolved, answer, err)
+	if resolved || answer != "" || err != nil {
+		t.Fatalf("resolveClaudePrompt() = %v, %q, %v; want normal follow-up fallback", resolved, answer, err)
+	}
+}
+
+func TestCodexTreatsStalePromptButtonAsFollowUp(t *testing.T) {
+	service := NewService("test")
+	service.agents.codexPrompts["task"] = []codexPendingPrompt{{
+		requestID: "new",
+		questions: []pendingQuestion{{id: "q1", prompt: "New question"}},
+	}}
+	resolved, err := service.agents.resolveCodexPrompt(newFakeCodexRuntime(), "task", "Old choice", agxdiscord.PromptToken("old:q1"))
+	if resolved || err != nil {
+		t.Fatalf("resolveCodexPrompt() = %v, %v; want normal follow-up fallback", resolved, err)
 	}
 }
 
