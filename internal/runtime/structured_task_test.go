@@ -1277,7 +1277,7 @@ func TestClaudeStreamRejectsWorkedTurnWithoutAssistantResponse(t *testing.T) {
 	}
 }
 
-func TestClaudeStreamAllowsEmptyAcknowledgementTurn(t *testing.T) {
+func TestClaudeStreamRejectsEmptyTurn(t *testing.T) {
 	writeStubCommandOnPath(t, "claude",
 		"#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"session-1\"}'\n",
 		batchLines("@echo off", `echo {"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}`),
@@ -1298,8 +1298,9 @@ func TestClaudeStreamAllowsEmptyAcknowledgementTurn(t *testing.T) {
 	service := NewService("test")
 	service.store = store
 
-	if err := service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "okay, report later"); err != nil {
-		t.Fatalf("execClaudeStreamOnce() error = %v, want empty acknowledgement accepted", err)
+	err = service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "okay, report later")
+	if !errors.Is(err, errClaudeEmptyResponse) {
+		t.Fatalf("execClaudeStreamOnce() error = %v, want errClaudeEmptyResponse", err)
 	}
 }
 

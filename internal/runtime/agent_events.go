@@ -61,6 +61,7 @@ const agentEventSubscriberBuffer = 256
 
 var errStructuredFailurePublished = errors.New("structured agent failure already published")
 var errClaudeQuestionPending = errors.New("Claude is waiting for user input")
+var errClaudeEmptyResponse = errors.New("Claude completed the turn without an assistant response")
 
 // Claude normally follows an assistant end_turn message with a result record
 // and process exit. Bound the wait so a missing result cannot block queued
@@ -965,7 +966,8 @@ func mergeQueuedClaudeMessages(messages []string) string {
 }
 
 func (s *agentEventService) execClaudeStream(ctx context.Context, task db.Task, project db.Project, turnID, message string) error {
-	if err := s.execClaudeStreamOnce(ctx, task, project, turnID, message); err != nil {
+	err := s.execClaudeStreamOnce(ctx, task, project, turnID, message)
+	if err != nil {
 		if ctx.Err() == nil && claudeSessionAlreadyInUse(err) {
 			threadID := claudeThreadID(task)
 			cursor := threadID
@@ -974,11 +976,16 @@ func (s *agentEventService) execClaudeStream(ctx context.Context, task db.Task, 
 			task.AgentThreadID = &threadID
 			task.AgentEventCursor = &cursor
 			task.AgentStreamKind = &streamKind
-			return s.execClaudeStreamOnce(ctx, task, project, turnID, message)
+			err = s.execClaudeStreamOnce(ctx, task, project, turnID, message)
 		}
-		return err
 	}
-	return nil
+	// Claude occasionally exits successfully without emitting any assistant or
+	// tool event. Retrying is safe only for that truly empty attempt: once any
+	// substantive activity occurred, repeating the prompt could duplicate work.
+	if ctx.Err() == nil && errors.Is(err, errClaudeEmptyResponse) {
+		err = s.execClaudeStreamOnce(ctx, task, project, turnID, message)
+	}
+	return err
 }
 
 func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Task, project db.Project, turnID, message string) error {
@@ -1151,8 +1158,11 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	if !terminalSeen {
 		return fmt.Errorf("Claude stream ended without a terminal result")
 	}
-	if !assistantSeen && substantiveActivitySeen {
-		return fmt.Errorf("Claude completed the turn without an assistant response")
+	if !assistantSeen {
+		if substantiveActivitySeen {
+			return fmt.Errorf("Claude completed the turn without an assistant response")
+		}
+		return errClaudeEmptyResponse
 	}
 	return nil
 }
