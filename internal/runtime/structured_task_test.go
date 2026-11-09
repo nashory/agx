@@ -1250,10 +1250,10 @@ exit 0
 	}
 }
 
-func TestClaudeStreamRejectsSuccessfulTurnWithoutAssistantResponse(t *testing.T) {
+func TestClaudeStreamRejectsWorkedTurnWithoutAssistantResponse(t *testing.T) {
 	writeStubCommandOnPath(t, "claude",
-		"#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"session-1\"}'\n",
-		batchLines("@echo off", `echo {"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}`),
+		"#!/bin/sh\nprintf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"id\":\"msg-1\",\"content\":[{\"type\":\"tool_use\",\"id\":\"tool-1\",\"name\":\"Bash\",\"input\":{\"command\":\"true\"}}]}}' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"session-1\"}'\n",
+		batchLines("@echo off", `echo {"type":"assistant","message":{"id":"msg-1","content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{"command":"ver"}}]}}`, `echo {"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}`),
 	)
 	store, err := db.OpenMemory()
 	if err != nil {
@@ -1274,6 +1274,32 @@ func TestClaudeStreamRejectsSuccessfulTurnWithoutAssistantResponse(t *testing.T)
 	err = service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "report")
 	if err == nil || !strings.Contains(err.Error(), "without an assistant response") {
 		t.Fatalf("execClaudeStreamOnce() error = %v, want silent response error", err)
+	}
+}
+
+func TestClaudeStreamAllowsEmptyAcknowledgementTurn(t *testing.T) {
+	writeStubCommandOnPath(t, "claude",
+		"#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"session-1\"}'\n",
+		batchLines("@echo off", `echo {"type":"result","subtype":"success","is_error":false,"session_id":"session-1"}`),
+	)
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "empty acknowledgement", nil, "claude", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+
+	if err := service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "okay, report later"); err != nil {
+		t.Fatalf("execClaudeStreamOnce() error = %v, want empty acknowledgement accepted", err)
 	}
 }
 
