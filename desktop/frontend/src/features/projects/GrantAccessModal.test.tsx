@@ -44,4 +44,19 @@ describe('GrantAccessModal', () => {
     expect(screen.getByRole('button', { name: 'Granting...' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
   });
+
+  it('shows the latest grant failure instead of the stale project prompt', () => {
+    render(
+      <GrantAccessModal
+        project={project}
+        granting={false}
+        error="git repository has no commits; create an initial commit before granting access"
+        onBack={vi.fn()}
+        onGrant={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('git repository has no commits');
+    expect(screen.queryByText('permission denied')).toBeNull();
+  });
 });

@@ -3,11 +3,13 @@ import type { Project } from '../../types';
 export function GrantAccessModal({
   project,
   granting,
+  error,
   onBack,
   onGrant,
 }: {
   project: Project;
   granting: boolean;
+  error?: string;
   onBack: () => void;
   onGrant: () => void;
 }) {
@@ -23,7 +25,11 @@ export function GrantAccessModal({
         <div className="access-modal-body">
           <p>AGX needs to verify that it can create and write task worktrees for this project before agents run.</p>
           <code>{project.path}</code>
-          {project.accessError && <div className="access-modal-error">{project.accessError}</div>}
+          {(error || project.accessError) && (
+            <div className="access-modal-error" role={error ? 'alert' : undefined}>
+              {error || project.accessError}
+            </div>
+          )}
         </div>
         <footer className="wizard-actions">
           <button className="text-button" disabled={granting} onClick={onBack}>

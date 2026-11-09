@@ -991,6 +991,7 @@ function TaskView({
   const [selectedTaskIDs, setSelectedTaskIDs] = useState<Set<string>>(() => new Set());
   const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const [grantingAccess, setGrantingAccess] = useState(false);
+  const [grantAccessError, setGrantAccessError] = useState('');
   const titleRef = useRef<HTMLInputElement>(null);
   const taskBoardRef = useRef<HTMLElement>(null);
   const keyboardNavigationRef = useRef(false);
@@ -1007,6 +1008,10 @@ function TaskView({
   useEffect(() => {
     setAllMighty(defaultAllMighty);
   }, [defaultAllMighty, project.id]);
+
+  useEffect(() => {
+    setGrantAccessError('');
+  }, [project.id]);
 
   useEffect(() => {
     if (visibleTasks.length === 0) {
@@ -1221,6 +1226,7 @@ function TaskView({
   async function grantAccess() {
     if (grantingAccess) return;
     setGrantingAccess(true);
+    setGrantAccessError('');
     onLog(`$ grant access "${project.name}"`);
     try {
       const updated = await api.GrantProjectAccess(project.id);
@@ -1228,6 +1234,7 @@ function TaskView({
       onLog(`[ok] grant access "${project.name}"`);
     } catch (err) {
       const message = errorMessage(err);
+      setGrantAccessError(message);
       onLog(`[error] grant access "${project.name}": ${message}`);
     } finally {
       setGrantingAccess(false);
@@ -1367,6 +1374,7 @@ function TaskView({
         <GrantAccessModal
           project={project}
           granting={grantingAccess}
+          error={grantAccessError}
           onBack={leaveToProjects}
           onGrant={() => void grantAccess()}
         />
