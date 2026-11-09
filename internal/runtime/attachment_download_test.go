@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -74,6 +75,24 @@ func TestAttachmentDownloaderStoresTextFile(t *testing.T) {
 	}
 	if string(stored) != string(content) {
 		t.Fatalf("stored text = %q, want %q", stored, content)
+	}
+}
+
+func TestAttachmentDownloaderAcceptsUTF8RuneSplitAtSniffBoundary(t *testing.T) {
+	content := append(bytes.Repeat([]byte{'a'}, 511), []byte("한글 보고서")...)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+	downloader := newAttachmentDownloader(server.Client(), map[string]bool{testServerHost(t, server.URL): true}, true, 1024)
+	finalPath := filepath.Join(t.TempDir(), "message.txt")
+	downloaded, err := downloader.download(context.Background(), server.URL+"/message.txt", finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if downloaded.ContentType != "text/plain; charset=utf-8" {
+		t.Fatalf("ContentType = %q, want UTF-8 text", downloaded.ContentType)
 	}
 }
 

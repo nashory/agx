@@ -207,5 +207,18 @@ func isTextAttachmentSample(data []byte) bool {
 	if bytes.Contains(data, []byte{0}) {
 		return false
 	}
-	return utf8.Valid(data)
+	for len(data) > 0 {
+		if !utf8.FullRune(data) {
+			// The downloader intentionally sniffs only the first 512 bytes. A
+			// multibyte UTF-8 character may straddle that sampling boundary;
+			// an incomplete final rune is therefore not evidence of binary data.
+			return true
+		}
+		r, size := utf8.DecodeRune(data)
+		if r == utf8.RuneError && size == 1 {
+			return false
+		}
+		data = data[size:]
+	}
+	return true
 }
