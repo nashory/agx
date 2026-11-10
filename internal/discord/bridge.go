@@ -33,31 +33,34 @@ type Status struct {
 // Bridge owns the Discord bot connection and coordinates channel sync, command
 // routing, and live structured-agent event forwarding for one AGX runtime.
 type Bridge struct {
-	lifecycle sync.Mutex
-	mu        sync.Mutex
-	hardSync  sync.RWMutex
-	taskSync  chan struct{}
-	maintSync chan struct{}
-	chanSync  chan struct{}
-	syncState sync.Mutex
-	active    map[string]activeSync
-	permMu    sync.Mutex
-	permRun   bool
-	permNext  bool
-	cfg       config.DiscordConfig
-	bot       *Bot
-	lock      *Lock
-	service   CommandService
-	events    AgentEventSubscriber
-	store     *db.Store
-	streams   map[string]taskStream
-	streamSeq uint64
-	delivery  chan struct{}
-	deliverer context.CancelFunc
-	ownerChan string
-	startedAt time.Time
-	lastErr   string
-	connected bool
+	lifecycle  sync.Mutex
+	mu         sync.Mutex
+	hardSync   sync.RWMutex
+	taskSync   chan struct{}
+	maintSync  chan struct{}
+	chanSync   chan struct{}
+	syncState  sync.Mutex
+	active     map[string]activeSync
+	permMu     sync.Mutex
+	permRun    bool
+	permNext   bool
+	cfg        config.DiscordConfig
+	bot        *Bot
+	lock       *Lock
+	service    CommandService
+	events     AgentEventSubscriber
+	store      *db.Store
+	streams    map[string]taskStream
+	streamSeq  uint64
+	delivery   chan struct{}
+	deliverer  context.CancelFunc
+	watcher    context.CancelFunc
+	recoverMu  sync.Mutex
+	recovering bool
+	ownerChan  string
+	startedAt  time.Time
+	lastErr    string
+	connected  bool
 }
 
 type taskStream struct {
@@ -69,6 +72,10 @@ type taskStream struct {
 const (
 	discordAssistantCatchUpLimit  = 20
 	discordAssistantCatchUpWindow = 24 * time.Hour
+	discordGatewayWatchInterval   = 5 * time.Second
+	discordWakeGapThreshold       = 20 * time.Second
+	discordGatewayUnreadyGrace    = 15 * time.Second
+	discordRecoveryRetryInterval  = 5 * time.Second
 )
 
 var ErrSyncInProgress = errors.New("discord sync is already running")
@@ -243,6 +250,8 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error
 	b.lock = lock
 	deliveryCtx, deliveryCancel := context.WithCancel(context.Background())
 	b.deliverer = deliveryCancel
+	watcherCtx, watcherCancel := context.WithCancel(context.Background())
+	b.watcher = watcherCancel
 	b.startedAt = time.Now()
 	b.connected = true
 	b.ownerChan = controlChannelID
@@ -252,7 +261,140 @@ func (b *Bridge) start(ctx context.Context, mode string, initialSync bool) error
 	if store != nil {
 		go b.runDiscordDeliveryLoop(deliveryCtx, store, bot)
 	}
+	go b.runGatewayWatchdog(watcherCtx)
 	if store != nil && initialSync {
+		go b.syncActiveTasksAfterStart(store, bot, cfg.GuildID)
+	} else {
+		b.syncTaskStreams(context.Background())
+	}
+	return nil
+}
+
+func (b *Bridge) runGatewayWatchdog(ctx context.Context) {
+	ticker := time.NewTicker(discordGatewayWatchInterval)
+	defer ticker.Stop()
+	lastTick := time.Now()
+	var unreadySince time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			woke := now.Sub(lastTick) > discordWakeGapThreshold
+			lastTick = now
+			b.mu.Lock()
+			bot := b.bot
+			connected := b.connected
+			b.mu.Unlock()
+			if !connected || bot == nil {
+				unreadySince = time.Time{}
+				continue
+			}
+			if bot.GatewayReady() {
+				unreadySince = time.Time{}
+			} else if unreadySince.IsZero() {
+				unreadySince = now
+			}
+			if gatewayRecoveryNeeded(woke, unreadySince, now) {
+				reason := "gateway_unready"
+				if woke {
+					reason = "system_wake"
+				}
+				b.startGatewayRecovery(ctx, bot, reason)
+			}
+		}
+	}
+}
+
+func gatewayRecoveryNeeded(woke bool, unreadySince, now time.Time) bool {
+	return woke || (!unreadySince.IsZero() && now.Sub(unreadySince) >= discordGatewayUnreadyGrace)
+}
+
+func (b *Bridge) startGatewayRecovery(ctx context.Context, staleBot *Bot, reason string) {
+	b.recoverMu.Lock()
+	if b.recovering {
+		b.recoverMu.Unlock()
+		return
+	}
+	b.recovering = true
+	b.recoverMu.Unlock()
+	go func() {
+		defer func() {
+			b.recoverMu.Lock()
+			b.recovering = false
+			b.recoverMu.Unlock()
+		}()
+		log.Printf("operation=%q status=%q reason=%q", "discord_gateway_recovery", "started", reason)
+		for ctx.Err() == nil {
+			if err := b.replaceStaleBot(ctx, staleBot); err == nil {
+				log.Printf("operation=%q status=%q reason=%q", "discord_gateway_recovery", "connected", reason)
+				return
+			} else {
+				log.Printf("operation=%q status=%q reason=%q error=%q", "discord_gateway_recovery", "retrying", reason, err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(discordRecoveryRetryInterval):
+			}
+		}
+	}()
+}
+
+func (b *Bridge) replaceStaleBot(ctx context.Context, staleBot *Bot) error {
+	b.mu.Lock()
+	cfg, service, store := b.cfg, b.service, b.store
+	if !b.connected || b.bot != staleBot {
+		b.mu.Unlock()
+		return nil
+	}
+	b.mu.Unlock()
+
+	bot, err := NewBot(cfg.BotToken)
+	if err != nil {
+		return err
+	}
+	if service != nil {
+		router := NewCommandRouter(cfg, service)
+		bot.AddCommandHandler(router)
+		bot.AddComponentHandler(router)
+		bot.AddPlainMessageHandler(router)
+		bot.AddReactionHandler(router)
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if err := bot.Open(connectCtx); err != nil {
+		_ = bot.Close()
+		return err
+	}
+	controlChannelID, err := bot.EnsureControlChannel(connectCtx, cfg.GuildID, controlChannelName)
+	if err != nil {
+		_ = bot.Close()
+		return err
+	}
+
+	b.lifecycle.Lock()
+	defer b.lifecycle.Unlock()
+	b.mu.Lock()
+	if !b.connected || b.bot != staleBot {
+		b.mu.Unlock()
+		_ = bot.Close()
+		return nil
+	}
+	oldDeliverer := b.deliverer
+	b.cancelTaskStreamsLocked()
+	deliveryCtx, deliveryCancel := context.WithCancel(context.Background())
+	b.bot = bot
+	b.deliverer = deliveryCancel
+	b.ownerChan = controlChannelID
+	b.lastErr = ""
+	b.mu.Unlock()
+	if oldDeliverer != nil {
+		oldDeliverer()
+	}
+	staleBot.Retire()
+	if store != nil {
+		go b.runDiscordDeliveryLoop(deliveryCtx, store, bot)
 		go b.syncActiveTasksAfterStart(store, bot, cfg.GuildID)
 	} else {
 		b.syncTaskStreams(context.Background())
@@ -300,10 +442,12 @@ func (b *Bridge) Stop() error {
 	bot := b.bot
 	lock := b.lock
 	deliverer := b.deliverer
+	watcher := b.watcher
 	b.cancelTaskStreamsLocked()
 	b.bot = nil
 	b.lock = nil
 	b.deliverer = nil
+	b.watcher = nil
 	b.ownerChan = ""
 	b.connected = false
 	b.startedAt = time.Time{}
@@ -311,6 +455,9 @@ func (b *Bridge) Stop() error {
 	b.mu.Unlock()
 	if deliverer != nil {
 		deliverer()
+	}
+	if watcher != nil {
+		watcher()
 	}
 
 	var err error

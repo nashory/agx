@@ -87,6 +87,32 @@ func (b *Bot) Close() error {
 	return b.session.Close()
 }
 
+// GatewayReady reports whether discordgo currently considers the gateway
+// websocket usable. It is intentionally separate from REST health: after a
+// laptop wakes, REST may already work while the pre-sleep websocket is stale.
+func (b *Bot) GatewayReady() bool {
+	if b == nil || b.session == nil {
+		return false
+	}
+	b.session.RLock()
+	ready := b.session.DataReady
+	b.session.RUnlock()
+	return ready
+}
+
+// Retire prevents discordgo's old reconnect loop from competing with a fresh
+// session installed by the bridge watchdog. Close may wait on a stale kernel
+// socket, so callers should not block their recovery path on it.
+func (b *Bot) Retire() {
+	if b == nil || b.session == nil {
+		return
+	}
+	b.session.Lock()
+	b.session.ShouldReconnectOnError = false
+	b.session.Unlock()
+	go func() { _ = b.Close() }()
+}
+
 // commandRegisterTimeout bounds the Discord command-endpoint calls. That
 // endpoint's rate limit can carry a retry-after of minutes, and discordgo would
 // otherwise block the whole connect on it; failing fast lets the caller proceed

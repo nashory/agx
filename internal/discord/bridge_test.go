@@ -92,6 +92,19 @@ func TestBridgeStatusMasksBotToken(t *testing.T) {
 	}
 }
 
+func TestGatewayRecoveryNeededAfterWakeOrUnreadyGrace(t *testing.T) {
+	now := time.Now()
+	if !gatewayRecoveryNeeded(true, time.Time{}, now) {
+		t.Fatal("wake gap should trigger gateway recovery")
+	}
+	if gatewayRecoveryNeeded(false, now.Add(-discordGatewayUnreadyGrace/2), now) {
+		t.Fatal("brief gateway outage should not trigger recovery")
+	}
+	if !gatewayRecoveryNeeded(false, now.Add(-discordGatewayUnreadyGrace), now) {
+		t.Fatal("sustained gateway outage should trigger recovery")
+	}
+}
+
 func TestBridgeStatusIncludesCurrentSyncStep(t *testing.T) {
 	bridge := NewBridge(config.DiscordConfig{})
 	bridge.setActiveSync(activeSync{SyncID: "sync-1", Kind: "soft", StartedAt: time.Now()})
