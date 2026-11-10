@@ -1304,6 +1304,39 @@ func TestClaudeStreamRejectsEmptyTurn(t *testing.T) {
 	}
 }
 
+func TestClaudeMessageWithContinuityUsesLatestAssistantUnlessContextCleared(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "claude continuity", nil, "claude", db.StatusWaiting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+
+	if err := store.AppendTaskTranscriptMessage(task.ID, "assistant", "B1 recommendation", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := service.agents.claudeMessageWithContinuity(task.ID, "use B1")
+	if !strings.Contains(got, "B1 recommendation") || !strings.HasSuffix(got, "use B1") {
+		t.Fatalf("claudeMessageWithContinuity() = %q", got)
+	}
+
+	if err := store.AppendTaskTranscriptMessage(task.ID, "status", "Context cleared.", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := service.agents.claudeMessageWithContinuity(task.ID, "fresh start"); got != "fresh start" {
+		t.Fatalf("message after context clear = %q, want fresh start", got)
+	}
+}
+
 func addExecutableToPath(t *testing.T, name string) {
 	t.Helper()
 	writeStubCommandOnPath(t, name, stubExitZeroPosix, stubExitZeroBatch)

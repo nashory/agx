@@ -850,7 +850,24 @@ func (s *agentEventService) launchClaudeTurn(task db.Task, project db.Project, t
 		CreatedAt: time.Now(),
 	})
 
-	go s.runClaudeTurn(turnCtx, cancel, task, project, turnID, message)
+	go s.runClaudeTurn(turnCtx, cancel, task, project, turnID, s.claudeMessageWithContinuity(task.ID, message))
+}
+
+func (s *agentEventService) claudeMessageWithContinuity(taskID, message string) string {
+	messages, err := s.runtime.store.ListTaskTranscriptMessages(taskID, 100)
+	if err != nil {
+		return message
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		entry := messages[i]
+		if entry.Role == "status" && strings.TrimSpace(entry.Body) == "Context cleared." {
+			return message
+		}
+		if entry.Role == "assistant" && strings.TrimSpace(entry.Body) != "" {
+			return claudestream.WithContinuity(message, entry.Body)
+		}
+	}
+	return message
 }
 
 func (s *agentEventService) runClaudeTurn(ctx context.Context, cancel context.CancelFunc, task db.Task, project db.Project, turnID, message string) {
