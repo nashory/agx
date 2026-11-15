@@ -387,12 +387,18 @@ func (s *agentEventService) sendTaskMessage(ctx context.Context, task db.Task, p
 	s.mu.Unlock()
 	if activeTurn != "" {
 		_, err := client.TurnSteer(ctx, threadID, activeTurn, message)
+		if agentContextTooLarge(err) {
+			return s.restartCodexContext(ctx, client, task, project, message)
+		}
 		if err == nil {
 			s.noteCodexTurn()
 		}
 		return err
 	}
 	turn, err := client.TurnStart(ctx, threadID, message, taskWorkingDir(task, project), task.AllMighty)
+	if agentContextTooLarge(err) {
+		return s.restartCodexContext(ctx, client, task, project, message)
+	}
 	if err != nil {
 		return err
 	}
@@ -405,6 +411,51 @@ func (s *agentEventService) sendTaskMessage(ctx context.Context, task db.Task, p
 		s.runtime.emitMetadataEvent(task.ProjectID)
 		s.runtime.syncDiscordAsync()
 	}
+	return nil
+}
+
+func (s *agentEventService) restartCodexContext(ctx context.Context, client codexRuntime, task db.Task, project db.Project, message string) error {
+	oldThreadID := ""
+	if task.AgentThreadID != nil {
+		oldThreadID = strings.TrimSpace(*task.AgentThreadID)
+	}
+	s.mu.Lock()
+	oldTurnID := s.activeTurns[task.ID]
+	delete(s.activeTurns, task.ID)
+	delete(s.codexTurns, task.ID)
+	if oldThreadID != "" && s.threadToTask[oldThreadID] == task.ID {
+		delete(s.threadToTask, oldThreadID)
+	}
+	s.mu.Unlock()
+	if oldThreadID != "" && oldTurnID != "" {
+		_ = client.TurnInterrupt(ctx, oldThreadID, oldTurnID)
+	}
+	thread, err := client.ThreadStart(ctx, taskWorkingDir(task, project), task.AllMighty)
+	if err != nil {
+		return fmt.Errorf("start fresh Codex context: %w", err)
+	}
+	threadID := strings.TrimSpace(thread.Thread.ID)
+	if threadID == "" {
+		return fmt.Errorf("Codex returned an empty replacement thread id")
+	}
+	streamKind := codexapp.StreamKind
+	if err := s.runtime.store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); err != nil {
+		return err
+	}
+	s.rememberThread(task.ID, threadID)
+	turn, err := client.TurnStart(ctx, threadID, s.conversationHandoff(task.ID, message), taskWorkingDir(task, project), task.AllMighty)
+	if err != nil {
+		return fmt.Errorf("start Codex turn after context handoff: %w", err)
+	}
+	s.mu.Lock()
+	s.activeTurns[task.ID] = turn.Turn.ID
+	s.codexTurns[task.ID] = &codexTurn{}
+	s.codexLastTurn = time.Now()
+	s.mu.Unlock()
+	_ = s.runtime.store.UpdateTaskStatus(task.ID, db.StatusActive)
+	s.runtime.emitMetadataEvent(task.ProjectID)
+	s.runtime.syncDiscordAsync()
+	logRuntimeOperation("agent_context_recovery", "agent", "codex", "task", shortDiagnosticID(task.ID))
 	return nil
 }
 
@@ -850,7 +901,7 @@ func (s *agentEventService) launchClaudeTurn(task db.Task, project db.Project, t
 		CreatedAt: time.Now(),
 	})
 
-	go s.runClaudeTurn(turnCtx, cancel, task, project, turnID, s.claudeMessageWithContinuity(task.ID, message))
+	go s.runClaudeTurn(turnCtx, cancel, task, project, turnID, message)
 }
 
 func (s *agentEventService) claudeMessageWithContinuity(taskID, message string) string {
@@ -983,6 +1034,9 @@ func mergeQueuedClaudeMessages(messages []string) string {
 }
 
 func (s *agentEventService) execClaudeStream(ctx context.Context, task db.Task, project db.Project, turnID, message string) error {
+	rawMessage := message
+	message = s.claudeMessageWithContinuity(task.ID, message)
+	retryMessage := message
 	err := s.execClaudeStreamOnce(ctx, task, project, turnID, message)
 	if err != nil {
 		if ctx.Err() == nil && claudeSessionAlreadyInUse(err) {
@@ -996,13 +1050,50 @@ func (s *agentEventService) execClaudeStream(ctx context.Context, task db.Task, 
 			err = s.execClaudeStreamOnce(ctx, task, project, turnID, message)
 		}
 	}
+	if ctx.Err() == nil && claudeSessionTooLarge(err) {
+		threadID := db.NewTaskID()
+		streamKind := claudeStreamKind
+		if updateErr := s.runtime.store.UpdateTaskAgentStream(task.ID, &threadID, nil, &streamKind); updateErr != nil {
+			return fmt.Errorf("rotate oversized Claude session: %w", updateErr)
+		}
+		task.AgentThreadID = &threadID
+		task.AgentEventCursor = nil
+		task.AgentStreamKind = &streamKind
+		s.rememberThread(task.ID, threadID)
+		logRuntimeOperation("claude_stream_recovery",
+			"task", shortDiagnosticID(task.ID),
+			"reason", "session_request_too_large",
+		)
+		retryMessage = s.conversationHandoff(task.ID, rawMessage)
+		err = s.execClaudeStreamOnce(ctx, task, project, turnID, retryMessage)
+	}
 	// Claude occasionally exits successfully without emitting any assistant or
 	// tool event. Retrying is safe only for that truly empty attempt: once any
 	// substantive activity occurred, repeating the prompt could duplicate work.
 	if ctx.Err() == nil && errors.Is(err, errClaudeEmptyResponse) {
-		err = s.execClaudeStreamOnce(ctx, task, project, turnID, message)
+		err = s.execClaudeStreamOnce(ctx, task, project, turnID, retryMessage)
 	}
 	return err
+}
+
+func (s *agentEventService) conversationHandoff(taskID, current string) string {
+	messages, err := s.runtime.store.ListTaskTranscriptMessages(taskID, 200)
+	if err != nil {
+		return current
+	}
+	// Delivery records the current user message after dispatch. Exclude every
+	// trailing user entry so the current request appears exactly once.
+	lastAssistant := len(messages) - 1
+	for lastAssistant >= 0 && messages[lastAssistant].Role != "assistant" {
+		lastAssistant--
+	}
+	history := make([]agentstream.ConversationMessage, 0, lastAssistant+1)
+	for _, entry := range messages[:lastAssistant+1] {
+		if entry.Role == "user" || entry.Role == "assistant" {
+			history = append(history, agentstream.ConversationMessage{Role: entry.Role, Text: entry.Body})
+		}
+	}
+	return agentstream.BuildConversationHandoff(current, history, agentstream.DefaultHandoffRunes)
 }
 
 func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Task, project db.Project, turnID, message string) error {
@@ -1030,6 +1121,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	substantiveActivitySeen := false
 	questionPending := false
 	failurePublished := false
+	var recoverableFailure error
 	endTurnSeen := false
 	var terminalReceived atomic.Bool
 	recoveryTriggered := make(chan struct{})
@@ -1065,7 +1157,12 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 		mapped := inspectClaudeStreamLine(task, turnID, line)
 		for _, event := range mapped.events {
 			toolWatchdog.Observe(event)
-			s.publish(task.ID, event)
+			oversizedSession := event.Kind == agentstream.EventError && claudeSessionTooLarge(errors.New(event.Error))
+			if oversizedSession {
+				recoverableFailure = errors.New(event.Error)
+			} else {
+				s.publish(task.ID, event)
+			}
 			if (event.Kind == agentstream.EventAssistantMessage || event.Kind == agentstream.EventAssistantDelta) && strings.TrimSpace(event.Text) != "" {
 				assistantSeen = true
 			}
@@ -1084,7 +1181,7 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 				if terminalExitTimer == nil {
 					terminalExitTimer = time.AfterFunc(claudeTerminalExitGracePeriod, triggerRecovery)
 				}
-				if event.Kind == agentstream.EventError || event.Kind == agentstream.EventInterrupted {
+				if (event.Kind == agentstream.EventError && !oversizedSession) || event.Kind == agentstream.EventInterrupted {
 					failurePublished = true
 				}
 			}
@@ -1145,6 +1242,9 @@ func (s *agentEventService) execClaudeStreamOnce(ctx context.Context, task db.Ta
 	}
 	if readErr != nil {
 		return readErr
+	}
+	if recoverableFailure != nil {
+		return recoverableFailure
 	}
 	if failurePublished {
 		return errStructuredFailurePublished
@@ -1210,6 +1310,28 @@ func claudeThreadID(task db.Task) string {
 func claudeSessionAlreadyInUse(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "session id") &&
 		strings.Contains(strings.ToLower(err.Error()), "already in use")
+}
+
+func claudeSessionTooLarge(err error) bool {
+	return agentContextTooLarge(err)
+}
+
+func agentContextTooLarge(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "message size") &&
+		strings.Contains(message, "exceeds") &&
+		strings.Contains(message, "limit") {
+		return true
+	}
+	for _, marker := range []string{"context_length_exceeded", "context window exceeded", "maximum context length", "prompt is too long", "input is too long", "request too large"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *agentEventService) rememberThread(taskID, threadID string) {
@@ -1310,6 +1432,29 @@ func (s *agentEventService) forwardCodexEvents(client codexRuntime) {
 		}
 		if event.Kind == agentstream.EventError {
 			event.Error = enrichCodexError(event.Error, client.RecentStderr())
+			if agentContextTooLarge(errors.New(event.Error)) {
+				s.mu.Lock()
+				delete(s.activeTurns, taskID)
+				delete(s.codexTurns, taskID)
+				s.mu.Unlock()
+				project, projectErr := s.runtime.store.GetProject(task.ProjectID)
+				message := ""
+				if task.LastUserPrompt != nil {
+					message = strings.TrimSpace(*task.LastUserPrompt)
+				}
+				if projectErr == nil && message != "" {
+					go func() {
+						lock := s.runtime.taskLock(task.ID)
+						lock.Lock()
+						defer lock.Unlock()
+						if recoveryErr := s.restartCodexContext(s.ctx, client, task, project, message); recoveryErr != nil {
+							event.Error = recoveryErr.Error()
+							s.publish(task.ID, event)
+						}
+					}()
+					continue
+				}
+			}
 		}
 		if event.Kind == agentstream.EventTurnStarted && event.TurnID != "" {
 			s.mu.Lock()

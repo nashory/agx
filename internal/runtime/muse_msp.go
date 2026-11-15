@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -174,6 +175,9 @@ func (s *agentEventService) startMuseMSPTurn(ctx context.Context, task db.Task, 
 	// can be accepted synchronously but later rejected as already_terminal,
 	// leaving AGX active forever. Let MSP queue the next turn atomically instead.
 	turn, err := client.TurnStart(ctx, sessionID, message, "queue")
+	if agentContextTooLarge(err) {
+		return s.restartMuseContext(ctx, client, task, project, message)
+	}
 	if err != nil {
 		return err
 	}
@@ -191,6 +195,50 @@ func (s *agentEventService) startMuseMSPTurn(ctx context.Context, task db.Task, 
 		s.runtime.emitMetadataEvent(task.ProjectID)
 		s.runtime.syncDiscordAsync()
 	}
+	return nil
+}
+
+func (s *agentEventService) restartMuseContext(ctx context.Context, client museRuntime, task db.Task, project db.Project, message string) error {
+	oldSessionID := ""
+	if task.AgentThreadID != nil {
+		oldSessionID = strings.TrimSpace(*task.AgentThreadID)
+	}
+	requestedID := museapp.NewCommandID()
+	started, err := client.SessionStart(ctx, requestedID, taskWorkingDir(task, project), task.AllMighty)
+	if err != nil {
+		return fmt.Errorf("start fresh Muse context: %w", err)
+	}
+	sessionID := strings.TrimSpace(started.Session.ID)
+	if sessionID == "" {
+		sessionID = requestedID
+	}
+	streamKind := museStreamKind
+	if err := s.runtime.store.UpdateTaskAgentStream(task.ID, &sessionID, nil, &streamKind); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if oldSessionID != "" && s.threadToTask[oldSessionID] == task.ID {
+		delete(s.threadToTask, oldSessionID)
+	}
+	s.threadToTask[sessionID] = task.ID
+	s.museTaskHosts[task.ID] = client
+	delete(s.activeTurns, task.ID)
+	delete(s.museQueuedTurns, task.ID)
+	s.stopMuseQueueTimerLocked(task.ID)
+	s.mu.Unlock()
+	turn, err := client.TurnStart(ctx, sessionID, s.conversationHandoff(task.ID, message), "queue")
+	if err != nil {
+		return fmt.Errorf("start Muse turn after context handoff: %w", err)
+	}
+	if turnID := strings.TrimSpace(turn.TurnID); turnID != "" {
+		s.mu.Lock()
+		s.activeTurns[task.ID] = turnID
+		s.mu.Unlock()
+	}
+	_ = s.runtime.store.UpdateTaskStatus(task.ID, db.StatusActive)
+	s.runtime.emitMetadataEvent(task.ProjectID)
+	s.runtime.syncDiscordAsync()
+	logRuntimeOperation("agent_context_recovery", "agent", "muse", "task", shortDiagnosticID(task.ID))
 	return nil
 }
 
@@ -292,6 +340,8 @@ func (s *agentEventService) forwardMuseEvents(client museRuntime) {
 			taskLock.Unlock()
 			continue
 		}
+		recoverContext := false
+		var contextError agentstream.Event
 		for _, event := range events {
 			if event.TurnID == "" && event.ItemID != "" {
 				s.mu.Lock()
@@ -301,6 +351,11 @@ func (s *agentEventService) forwardMuseEvents(client museRuntime) {
 			if event.Cursor != "" {
 				cursor := event.Cursor
 				_ = s.runtime.store.UpdateTaskAgentEventCursor(taskID, &cursor)
+			}
+			if event.Kind == agentstream.EventError && agentContextTooLarge(errors.New(event.Error)) {
+				recoverContext = true
+				contextError = event
+				break
 			}
 			if event.Kind == agentstream.EventTurnStarted && event.TurnID != "" {
 				s.mu.Lock()
@@ -334,6 +389,32 @@ func (s *agentEventService) forwardMuseEvents(client museRuntime) {
 				}
 			}
 			s.publish(taskID, event)
+		}
+		if recoverContext {
+			s.mu.Lock()
+			s.stopMuseQueueTimerLocked(taskID)
+			delete(s.activeTurns, taskID)
+			delete(s.museQueuedTurns, taskID)
+			s.mu.Unlock()
+			project, projectErr := s.runtime.store.GetProject(task.ProjectID)
+			message := ""
+			if task.LastUserPrompt != nil {
+				message = strings.TrimSpace(*task.LastUserPrompt)
+			}
+			taskLock.Unlock()
+			if projectErr == nil && message != "" {
+				go func() {
+					lock := s.runtime.taskLock(task.ID)
+					lock.Lock()
+					defer lock.Unlock()
+					if recoveryErr := s.restartMuseContext(s.ctx, client, task, project, message); recoveryErr != nil {
+						s.publish(task.ID, agentstream.Event{ID: agentstream.StableEventID(task.ID, agentstream.EventError, "context-recovery", recoveryErr.Error()), TaskID: task.ID, Kind: agentstream.EventError, Agent: task.Agent, Error: recoveryErr.Error(), CreatedAt: time.Now()})
+					}
+				}()
+			} else {
+				s.publish(task.ID, contextError)
+			}
+			continue
 		}
 		if notification.Method == museapp.NotifyItemCompleted {
 			var params struct {

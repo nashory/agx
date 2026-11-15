@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,6 +69,7 @@ type fakeMuseRuntime struct {
 	approvalChoice  string
 	questionLabel   string
 	questionAnswers []museapp.UserInputAnswer
+	turnStartErr    error
 }
 
 func newFakeMuseRuntime() *fakeMuseRuntime {
@@ -91,6 +94,11 @@ func (f *fakeMuseRuntime) ViewUnsubscribe(context.Context, string) error       {
 func (f *fakeMuseRuntime) TurnStart(_ context.Context, _ string, text, ifBusy string) (museapp.TurnResponse, error) {
 	f.startedText = text
 	f.startIfBusy = ifBusy
+	if f.turnStartErr != nil {
+		err := f.turnStartErr
+		f.turnStartErr = nil
+		return museapp.TurnResponse{}, err
+	}
 	return museapp.TurnResponse{TurnID: museapp.NewCommandID(), Status: "accepted"}, nil
 }
 
@@ -131,6 +139,38 @@ func TestMuseMSPQueuesFollowUpInsteadOfSteeringFinishingTurn(t *testing.T) {
 	service.agents.mu.Unlock()
 	if activeTurn != "finishing-turn" {
 		t.Fatalf("active turn = %q, want the currently running turn until Muse starts the queue", activeTurn)
+	}
+}
+
+func TestMuseOversizedContextStartsFreshSessionWithTranscriptHandoff(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "muse handoff", nil, "muse", db.StatusWaiting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendTaskTranscriptMessage(task.ID, "assistant", "keep this decision", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+	fake := newFakeMuseRuntime()
+	fake.turnStartErr = errors.New("prompt is too long")
+	service.agents.startMuse = func(context.Context, bool) (museRuntime, error) { return fake, nil }
+	t.Cleanup(func() { _ = service.agents.Close() })
+
+	if err := service.agents.startMuseMSPTurn(context.Background(), task, project, "continue"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fake.startedText, "[assistant]\nkeep this decision") || !strings.HasSuffix(fake.startedText, "[current user request]\ncontinue") {
+		t.Fatalf("handoff prompt = %q", fake.startedText)
 	}
 }
 

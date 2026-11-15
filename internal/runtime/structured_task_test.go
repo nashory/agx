@@ -29,6 +29,8 @@ type fakeCodexRuntime struct {
 	interrupted  string
 	nextThreadID string
 	nextTurnID   string
+	turnStartErr error
+	turnSteerErr error
 	threadErr    error
 	resumeErr    error
 	resumeResult codexapp.ThreadStartResponse
@@ -75,12 +77,22 @@ func (f *fakeCodexRuntime) ThreadResume(context.Context, string) (codexapp.Threa
 func (f *fakeCodexRuntime) TurnStart(_ context.Context, threadID, text, cwd string, allMighty bool) (codexapp.TurnStartResponse, error) {
 	f.startedText = text
 	f.turnCwd = cwd
+	if f.turnStartErr != nil {
+		err := f.turnStartErr
+		f.turnStartErr = nil
+		return codexapp.TurnStartResponse{}, err
+	}
 	return codexapp.TurnStartResponse{Turn: codexapp.Turn{ID: f.nextTurnID, Status: "running"}}, nil
 }
 
 func (f *fakeCodexRuntime) TurnSteer(_ context.Context, _ string, turnID, text string) (codexapp.TurnSteerResponse, error) {
 	f.steeredTurn = turnID
 	f.steeredText = text
+	if f.turnSteerErr != nil {
+		err := f.turnSteerErr
+		f.turnSteerErr = nil
+		return codexapp.TurnSteerResponse{}, err
+	}
 	return codexapp.TurnSteerResponse{TurnID: turnID}, nil
 }
 
@@ -1301,6 +1313,99 @@ func TestClaudeStreamRejectsEmptyTurn(t *testing.T) {
 	err = service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "okay, report later")
 	if !errors.Is(err, errClaudeEmptyResponse) {
 		t.Fatalf("execClaudeStreamOnce() error = %v, want errClaudeEmptyResponse", err)
+	}
+}
+
+func TestClaudeStreamReturnsOversizedSessionErrorWithoutPublishingIt(t *testing.T) {
+	message := `The message size (30108331 bytes) exceeds 30.000MB limit.`
+	writeStubCommandOnPath(t, "claude",
+		"#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"result\":\""+message+"\",\"session_id\":\"session-1\"}'\n",
+		batchLines("@echo off", `echo {"type":"result","subtype":"error_during_execution","is_error":true,"result":"`+message+`","session_id":"session-1"}`),
+	)
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "oversized claude", nil, "claude", db.StatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService("test")
+	service.store = store
+
+	err = service.agents.execClaudeStreamOnce(context.Background(), task, project, "turn-1", "continue")
+	if !claudeSessionTooLarge(err) {
+		t.Fatalf("execClaudeStreamOnce() error = %v, want oversized session error", err)
+	}
+	messages, err := store.ListTaskTranscriptMessages(task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("transcript = %#v, want recoverable error suppressed", messages)
+	}
+}
+
+func TestClaudeSessionTooLarge(t *testing.T) {
+	if !claudeSessionTooLarge(errors.New("The message size (30108331 bytes) exceeds 30.000MB limit")) {
+		t.Fatal("expected message-size error to be recoverable")
+	}
+	if claudeSessionTooLarge(errors.New("API Error: 400 bad request")) {
+		t.Fatal("generic bad request must not rotate the session")
+	}
+}
+
+func TestCodexOversizedContextStartsFreshThreadWithTranscriptHandoff(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "codex handoff", nil, "codex", db.StatusWaiting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldThread := "old-thread"
+	streamKind := codexapp.StreamKind
+	if err := store.UpdateTaskAgentStream(task.ID, &oldThread, nil, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	task, _ = store.GetTask(task.ID)
+	if err := store.AppendTaskTranscriptMessage(task.ID, "user", "original request", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendTaskTranscriptMessage(task.ID, "assistant", "important decision", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeCodexRuntime()
+	fake.resumeResult = codexapp.ThreadStartResponse{Thread: codexapp.Thread{ID: oldThread}}
+	fake.nextThreadID = "fresh-thread"
+	fake.turnStartErr = errors.New("context_length_exceeded")
+	service := NewService("test")
+	service.store = store
+	service.agents.codex = fake
+
+	if err := service.agents.sendTaskMessage(context.Background(), task, project, "continue", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fake.startedText, "[assistant]\nimportant decision") || !strings.HasSuffix(fake.startedText, "[current user request]\ncontinue") {
+		t.Fatalf("handoff prompt = %q", fake.startedText)
+	}
+	updated, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.AgentThreadID == nil || *updated.AgentThreadID != "fresh-thread" {
+		t.Fatalf("replacement thread = %v, want fresh-thread", updated.AgentThreadID)
 	}
 }
 
