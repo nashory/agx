@@ -36,6 +36,7 @@ function createStorage(): Storage {
 
 beforeEach(() => {
   vi.stubGlobal('localStorage', createStorage());
+  vi.stubGlobal('sessionStorage', createStorage());
   window.go = undefined;
   window.runtime = undefined;
 });
@@ -43,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  sessionStorage.clear();
   vi.clearAllMocks();
   vi.useRealTimers();
 });

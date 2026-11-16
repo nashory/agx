@@ -82,6 +82,38 @@ body {
   overflow: hidden;
 }
 
+.fatal-error {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: var(--bg);
+}
+
+.fatal-error-card {
+  width: min(680px, 100%);
+  padding: 28px;
+  border: 1px solid var(--danger-border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.fatal-error-card h1 {
+  margin-top: 0;
+  color: var(--text-strong);
+}
+
+.fatal-error-card pre {
+  max-height: 240px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  color: var(--danger);
+  background: var(--danger-bg);
+  white-space: pre-wrap;
+}
+
 button,
 input,
 select,
