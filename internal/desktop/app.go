@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nashory/agx/internal/agent"
@@ -35,10 +36,11 @@ import (
 // delegates stateful work to the runtime daemon; in direct test mode it owns a
 // local store/tmux controller so core behavior can be tested without Wails.
 type App struct {
-	store      *db.Store
-	tmux       session.Backend
-	ctx        context.Context
-	directMode bool
+	store             *db.Store
+	tmux              session.Backend
+	ctx               context.Context
+	directMode        bool
+	frontendHeartbeat atomic.Int64
 
 	// sharedRuntimeClient is created once and reused for the whole app lifetime so
 	// the desktop keeps a single HTTP transport (and its keep-alive connection
@@ -365,8 +367,23 @@ func NewAppWithStore(store *db.Store) *App {
 // the runtime daemon.
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
+	a.FrontendHeartbeat()
 	a.startMetadataWatcher(ctx)
 	go a.forwardRuntimeEvents(ctx)
+}
+
+// FrontendHeartbeat is called by the WebView while its JavaScript event loop is
+// healthy. The native shell uses it to recover a terminated or wedged WebView.
+func (a *App) FrontendHeartbeat() {
+	a.frontendHeartbeat.Store(time.Now().UnixNano())
+}
+
+func (a *App) FrontendHeartbeatAge(now time.Time) time.Duration {
+	last := a.frontendHeartbeat.Load()
+	if last == 0 {
+		return 0
+	}
+	return now.Sub(time.Unix(0, last))
 }
 
 func (a *App) Close() error {

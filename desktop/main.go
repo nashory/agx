@@ -18,6 +18,11 @@ import (
 //go:embed appicon.png
 var appIcon []byte
 
+const (
+	frontendWatchInterval = 15 * time.Second
+	frontendStaleAfter    = 90 * time.Second
+)
+
 func applyApplicationIcon() {
 	setApplicationIcon(appIcon)
 	time.AfterFunc(250*time.Millisecond, func() { setApplicationIcon(appIcon) })
@@ -50,6 +55,7 @@ func main() {
 			applyApplicationIcon()
 			wailsruntime.WindowSetAlwaysOnTop(ctx, false)
 			app.Startup(ctx)
+			go watchFrontend(ctx, app)
 		},
 		OnDomReady: func(ctx context.Context) {
 			applyApplicationIcon()
@@ -60,5 +66,24 @@ func main() {
 	})
 	if err != nil {
 		log.Fatal(err)
+	}
+}
+
+func watchFrontend(ctx context.Context, app *desktopapp.App) {
+	ticker := time.NewTicker(frontendWatchInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			if app.FrontendHeartbeatAge(now) < frontendStaleAfter || wailsruntime.WindowIsMinimised(ctx) {
+				continue
+			}
+			log.Printf("operation=%q status=%q stale_for=%q", "desktop_webview_recovery", "reloading", app.FrontendHeartbeatAge(now).Round(time.Second))
+			// Reset the watchdog before reloading so a failed recovery cannot spin.
+			app.FrontendHeartbeat()
+			wailsruntime.WindowReloadApp(ctx)
+		}
 	}
 }

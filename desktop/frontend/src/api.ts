@@ -18,6 +18,7 @@ export type AgentCleanupResult = {
 };
 
 export type WailsApp = {
+  FrontendHeartbeat(): Promise<void>;
   ListProjects(): Promise<Project[]>;
   SelectProjectDirectory(defaultDirectory: string): Promise<string>;
   ValidateProjectDirectory(path: string): Promise<ProjectCandidate>;
@@ -170,6 +171,9 @@ async function stopSharedLogStream(taskID: string): Promise<void> {
 }
 
 export const api: WailsApp = {
+  async FrontendHeartbeat() {
+    await app()?.FrontendHeartbeat();
+  },
   async ListProjects() {
     return app()?.ListProjects() ?? demoProjects;
   },
