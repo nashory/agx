@@ -13,6 +13,15 @@ func IsSessionNotFound(err error) bool {
 	return errors.As(err, &callErr) && callErr.Code == -32020
 }
 
+func IsCursorInvalid(err error) bool {
+	var callErr *CallError
+	if !errors.As(err, &callErr) {
+		return false
+	}
+	message := strings.ToLower(callErr.Message)
+	return callErr.Code == -32011 || (strings.Contains(message, "cursor") && strings.Contains(message, "not valid"))
+}
+
 func IsMethodNotFound(err error) bool {
 	var callErr *CallError
 	return errors.As(err, &callErr) && callErr.Code == -32601
@@ -126,7 +135,7 @@ func (c *Client) ViewUnsubscribe(ctx context.Context, sessionID string) error {
 	return c.Call(ctx, "view/unsubscribe", map[string]any{"sessionId": sessionID}, nil)
 }
 
-func (c *Client) TurnStart(ctx context.Context, sessionID, text, ifBusy string) (TurnResponse, error) {
+func (c *Client) TurnStart(ctx context.Context, sessionID, text, ifBusy, workspace string) (TurnResponse, error) {
 	params := map[string]any{
 		"commandId": NewCommandID(),
 		"sessionId": sessionID,
@@ -134,6 +143,11 @@ func (c *Client) TurnStart(ctx context.Context, sessionID, text, ifBusy string) 
 	}
 	if strings.TrimSpace(ifBusy) != "" {
 		params["ifBusy"] = ifBusy
+	}
+	if workspace = strings.TrimSpace(workspace); workspace != "" {
+		// A resumed session may have been loaded on a different Muse host. Keep
+		// its runtime workspace authority aligned with the current AGX task.
+		params["workspaceRoots"] = []string{workspace}
 	}
 	var out TurnResponse
 	err := c.Call(ctx, MethodTurnStart, params, &out)

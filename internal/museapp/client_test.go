@@ -24,6 +24,15 @@ func TestServeArgsDisableBothSandboxLayers(t *testing.T) {
 	}
 }
 
+func TestIsCursorInvalid(t *testing.T) {
+	if !IsCursorInvalid(&CallError{Code: -32011, Message: "this cursor is not valid on this host"}) {
+		t.Fatal("expected stale cursor error to be recognized")
+	}
+	if IsCursorInvalid(&CallError{Code: -32020, Message: "session not found"}) {
+		t.Fatal("session-not-found must not be treated as a stale cursor")
+	}
+}
+
 func TestServeArgsKeepSandboxByDefault(t *testing.T) {
 	if got, want := serveArgs(Options{}), []string{"serve"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("serveArgs() = %#v, want %#v", got, want)

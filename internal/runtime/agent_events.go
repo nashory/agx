@@ -44,7 +44,7 @@ type museRuntime interface {
 	ViewPage(context.Context, string, string, int) (museapp.ViewPageResponse, error)
 	ViewSubscribe(context.Context, string, string) error
 	ViewUnsubscribe(context.Context, string) error
-	TurnStart(context.Context, string, string, string) (museapp.TurnResponse, error)
+	TurnStart(context.Context, string, string, string, string) (museapp.TurnResponse, error)
 	TurnSteer(context.Context, string, string, string) (museapp.TurnResponse, error)
 	TurnInterrupt(context.Context, string, string) error
 	ApprovalDecide(context.Context, string, string, any, string) error

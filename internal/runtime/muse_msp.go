@@ -89,6 +89,21 @@ func (s *agentEventService) ensureMuseSession(ctx context.Context, client museRu
 			cursor = strings.TrimSpace(*task.AgentEventCursor)
 		}
 		resumed, err := client.SessionResume(ctx, threadID, cursor)
+		persistedCursor := task.AgentEventCursor
+		if err != nil && cursor != "" && museapp.IsCursorInvalid(err) {
+			resumed, err = client.SessionResume(ctx, threadID, "")
+			persistedCursor = nil
+			if nextCursor := strings.TrimSpace(resumed.ViewCursor); err == nil && nextCursor != "" {
+				persistedCursor = &nextCursor
+			}
+			if err == nil {
+				logRuntimeOperation("muse_msp_recovery",
+					"task", shortDiagnosticID(task.ID),
+					"reason", "stale_cursor",
+					"status", "resumed_without_cursor",
+				)
+			}
+		}
 		if err == nil {
 			s.mu.Lock()
 			if resumed.Session.ActiveTurnID != nil {
@@ -98,7 +113,7 @@ func (s *agentEventService) ensureMuseSession(ctx context.Context, client museRu
 			}
 			s.mu.Unlock()
 			streamKind := museStreamKind
-			if err := s.runtime.store.UpdateTaskAgentStream(task.ID, &threadID, task.AgentEventCursor, &streamKind); err != nil {
+			if err := s.runtime.store.UpdateTaskAgentStream(task.ID, &threadID, persistedCursor, &streamKind); err != nil {
 				return "", err
 			}
 			s.mu.Lock()
@@ -174,7 +189,7 @@ func (s *agentEventService) startMuseMSPTurn(ctx context.Context, task db.Task, 
 	// EOT gates finish. Steering during that window races the terminal state and
 	// can be accepted synchronously but later rejected as already_terminal,
 	// leaving AGX active forever. Let MSP queue the next turn atomically instead.
-	turn, err := client.TurnStart(ctx, sessionID, message, "queue")
+	turn, err := client.TurnStart(ctx, sessionID, message, "queue", taskWorkingDir(task, project))
 	if agentContextTooLarge(err) {
 		return s.restartMuseContext(ctx, client, task, project, message)
 	}
@@ -226,7 +241,7 @@ func (s *agentEventService) restartMuseContext(ctx context.Context, client museR
 	delete(s.museQueuedTurns, task.ID)
 	s.stopMuseQueueTimerLocked(task.ID)
 	s.mu.Unlock()
-	turn, err := client.TurnStart(ctx, sessionID, s.conversationHandoff(task.ID, message), "queue")
+	turn, err := client.TurnStart(ctx, sessionID, s.conversationHandoff(task.ID, message), "queue", taskWorkingDir(task, project))
 	if err != nil {
 		return fmt.Errorf("start Muse turn after context handoff: %w", err)
 	}

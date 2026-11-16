@@ -57,12 +57,54 @@ func TestEnsureMuseSharesConcurrentColdStart(t *testing.T) {
 	}
 }
 
+func TestEnsureMuseSessionRetriesWithoutStaleCursor(t *testing.T) {
+	store, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	project, err := store.EnsureProject(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(project.ID, "muse stale cursor", nil, "muse", db.StatusWaiting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID, staleCursor, streamKind := "session-1", "stale-cursor", museStreamKind
+	if err := store.UpdateTaskAgentStream(task.ID, &sessionID, &staleCursor, &streamKind); err != nil {
+		t.Fatal(err)
+	}
+	task, _ = store.GetTask(task.ID)
+	fake := newFakeMuseRuntime()
+	fake.resumeErr = &museapp.CallError{Code: -32011, Message: "this cursor is not valid on this host"}
+	fake.resumeResult = museapp.SessionResponse{Session: museapp.Session{ID: sessionID}, ViewCursor: "fresh-cursor"}
+	service := NewService("test")
+	service.store = store
+
+	got, err := service.agents.ensureMuseSession(context.Background(), fake, task, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != sessionID || len(fake.resumeCursors) != 2 || fake.resumeCursors[0] != staleCursor || fake.resumeCursors[1] != "" {
+		t.Fatalf("resume result=%q cursors=%v", got, fake.resumeCursors)
+	}
+	updated, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.AgentEventCursor == nil || *updated.AgentEventCursor != "fresh-cursor" {
+		t.Fatalf("persisted cursor = %v, want fresh-cursor", updated.AgentEventCursor)
+	}
+}
+
 type fakeMuseRuntime struct {
 	events          chan museapp.Notification
 	sessionID       string
 	workspace       string
 	startedText     string
 	startIfBusy     string
+	turnWorkspace   string
 	steeredText     string
 	interruptedTurn string
 	interrupted     chan string
@@ -70,6 +112,9 @@ type fakeMuseRuntime struct {
 	questionLabel   string
 	questionAnswers []museapp.UserInputAnswer
 	turnStartErr    error
+	resumeErr       error
+	resumeResult    museapp.SessionResponse
+	resumeCursors   []string
 }
 
 func newFakeMuseRuntime() *fakeMuseRuntime {
@@ -83,7 +128,16 @@ func (f *fakeMuseRuntime) SessionStart(_ context.Context, sessionID, workspace s
 	f.sessionID, f.workspace = sessionID, workspace
 	return museapp.SessionResponse{Session: museapp.Session{ID: sessionID}}, nil
 }
-func (f *fakeMuseRuntime) SessionResume(context.Context, string, string) (museapp.SessionResponse, error) {
+func (f *fakeMuseRuntime) SessionResume(_ context.Context, _ string, cursor string) (museapp.SessionResponse, error) {
+	f.resumeCursors = append(f.resumeCursors, cursor)
+	if f.resumeErr != nil {
+		err := f.resumeErr
+		f.resumeErr = nil
+		return museapp.SessionResponse{}, err
+	}
+	if strings.TrimSpace(f.resumeResult.Session.ID) != "" {
+		return f.resumeResult, nil
+	}
 	return museapp.SessionResponse{}, &museapp.CallError{Code: -32020, Message: "session not found"}
 }
 func (f *fakeMuseRuntime) ViewPage(context.Context, string, string, int) (museapp.ViewPageResponse, error) {
@@ -91,9 +145,10 @@ func (f *fakeMuseRuntime) ViewPage(context.Context, string, string, int) (museap
 }
 func (f *fakeMuseRuntime) ViewSubscribe(context.Context, string, string) error { return nil }
 func (f *fakeMuseRuntime) ViewUnsubscribe(context.Context, string) error       { return nil }
-func (f *fakeMuseRuntime) TurnStart(_ context.Context, _ string, text, ifBusy string) (museapp.TurnResponse, error) {
+func (f *fakeMuseRuntime) TurnStart(_ context.Context, _ string, text, ifBusy, workspace string) (museapp.TurnResponse, error) {
 	f.startedText = text
 	f.startIfBusy = ifBusy
+	f.turnWorkspace = workspace
 	if f.turnStartErr != nil {
 		err := f.turnStartErr
 		f.turnStartErr = nil
@@ -130,6 +185,9 @@ func TestMuseMSPQueuesFollowUpInsteadOfSteeringFinishingTurn(t *testing.T) {
 	}
 	if fake.startedText != "follow up" || fake.startIfBusy != "queue" {
 		t.Fatalf("TurnStart text=%q ifBusy=%q, want queued follow-up", fake.startedText, fake.startIfBusy)
+	}
+	if fake.turnWorkspace != project.Path {
+		t.Fatalf("TurnStart workspace=%q, want %q", fake.turnWorkspace, project.Path)
 	}
 	if fake.steeredText != "" {
 		t.Fatalf("TurnSteer received %q", fake.steeredText)

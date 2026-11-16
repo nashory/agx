@@ -23,11 +23,12 @@ func TestMuseServeEchoIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionID := NewCommandID()
-	started, err := client.SessionStart(ctx, sessionID, t.TempDir(), true)
+	workspace := t.TempDir()
+	started, err := client.SessionStart(ctx, sessionID, workspace, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	turn, err := client.TurnStart(ctx, sessionID, "hello from AGX", "queue")
+	turn, err := client.TurnStart(ctx, sessionID, "hello from AGX", "queue", workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
